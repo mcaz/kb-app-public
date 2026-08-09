@@ -181,8 +181,8 @@ Grok / Gemini)を繋ぐと会話の裏に自分の知識が差し込まれ、会
 ## 未決
 
 - 命名(kb-app は仮)
-- コアの実装言語(索引・MCP・API を1バイナリに寄せるか。Rust に寄せると Tauri と統合しやすい /
-  Python は資産と実績がある — 参照実装あり)
+- ~~コアの実装言語~~ → **Rust+TS に決定(2026-08-09 本人決定)**。
+  [adr/0001-core-language.md](adr/0001-core-language.md)(代替案・PoC 判定条件つき)
 - ~~frontmatter の詳細設計 — OKF 準拠+app 拡張の適合方法~~ → **適合設計 v0 起草済み**
   ([okf-conformance.md](okf-conformance.md))。残る判断: `origin`(仮)の命名(下記
   「ノート2種類の呼び分け」と同時)/ ローカルユーザーの actor ID / type 語彙の拡張タイミング
