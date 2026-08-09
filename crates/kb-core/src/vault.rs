@@ -1,0 +1,305 @@
+//! vault = 1ディレクトリ(内部は git リポ)。正本は Markdown+Git、
+//! .kb/ 以下(索引)は再構築可能な派生(原則1)。
+//! 規約(frontmatter・index.md・log.md)はアプリが生成し人間に暗記させない(原則7)。
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use git2::{Repository, Signature};
+
+use crate::frontmatter::{Frontmatter, Generated, Note, now_iso, today};
+
+pub const NOTES_DIR: &str = "notes";
+const RESERVED: &[&str] = &["index.md", "log.md"];
+
+pub struct Vault {
+    pub root: PathBuf,
+}
+
+impl Vault {
+    /// 既存 vault を開く(git リポであることを確認)。
+    pub fn open(root: impl AsRef<Path>) -> Result<Vault> {
+        let root = root.as_ref().to_path_buf();
+        if !root.join(".git").exists() {
+            bail!("{} は vault ではない(.git がない)", root.display());
+        }
+        Ok(Vault { root })
+    }
+
+    /// vault を新規作成: git init + .gitignore + index.md + notes/。
+    pub fn create(root: impl AsRef<Path>) -> Result<Vault> {
+        let root = root.as_ref().to_path_buf();
+        if root.join(".git").exists() {
+            bail!("{} には既に vault がある", root.display());
+        }
+        fs::create_dir_all(root.join(NOTES_DIR))?;
+        Repository::init(&root).context("git init")?;
+        fs::write(root.join(".gitignore"), ".kb/\n")?;
+        let vault = Vault { root };
+        vault.write_index_md()?;
+        vault.commit(&[".gitignore", "index.md"], "vault: initialize")?;
+        Ok(vault)
+    }
+
+    pub fn index_db_path(&self) -> PathBuf {
+        self.root.join(".kb").join("index.db")
+    }
+
+    /// ノート ID(パス、.md 抜き)→ 絶対パス。
+    pub fn note_path(&self, id: &str) -> PathBuf {
+        self.root.join(format!("{id}.md"))
+    }
+
+    pub fn read_note(&self, id: &str) -> Result<Note> {
+        let path = self.note_path(id);
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("ノートが読めない: {}", path.display()))?;
+        Note::parse(&content).with_context(|| format!("parse 失敗: {id}"))
+    }
+
+    /// 新規ノートを書き込む。ID(notes/<slug>)を返す。git コミットは呼び側で。
+    pub fn write_new_note(&self, title: &str, note: &Note) -> Result<String> {
+        let slug = slugify(title);
+        let mut id = format!("{NOTES_DIR}/{slug}");
+        let mut n = 1;
+        while self.note_path(&id).exists() {
+            n += 1;
+            id = format!("{NOTES_DIR}/{slug}-{n}");
+        }
+        self.write_note(&id, note)?;
+        Ok(id)
+    }
+
+    pub fn write_note(&self, id: &str, note: &Note) -> Result<()> {
+        let file = Path::new(id)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default();
+        if RESERVED.contains(&format!("{file}.md").as_str()) {
+            bail!("{file}.md は予約ファイル名(OKF §3.1)");
+        }
+        let path = self.note_path(id);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::write(&path, note.to_file_string()?)?;
+        Ok(())
+    }
+
+    /// 人間のメモを作成(origin: human、status 不在 = stable)。コミットまで行う。
+    pub fn new_human_note(&self, title: &str, body: &str, actor: &str) -> Result<String> {
+        let mut front = Frontmatter::new_note(title);
+        front.origin = Some("human".into());
+        front.generated = Some(Generated { by: actor.into(), at: now_iso() });
+        let note = Note { front, body: body.to_string() };
+        let id = self.write_new_note(title, &note)?;
+        self.append_log(&format!("**Creation**: [{title}](/{id}.md) を作成。"))?;
+        self.write_index_md()?;
+        self.commit_note_op(&id, &format!("note: add {id}"))?;
+        Ok(id)
+    }
+
+    /// AI からの下書き起票(origin: agent、status: draft)。FR-C4 propose。
+    pub fn propose(
+        &self,
+        title: &str,
+        body: &str,
+        description: Option<&str>,
+        tags: &[String],
+        client: &str,
+    ) -> Result<String> {
+        let mut front = Frontmatter::new_note(title);
+        front.origin = Some("agent".into());
+        front.status = Some(crate::frontmatter::STATUS_DRAFT.into());
+        front.description = description.map(|s| s.to_string());
+        front.tags = tags.to_vec();
+        front.generated = Some(Generated { by: client.into(), at: now_iso() });
+        front.sources = Some(serde_yaml::from_str(&format!(
+            "[{{ resource: \"conversation:{client}/{}\" }}]",
+            today()
+        ))?);
+        let note = Note { front, body: body.to_string() };
+        let id = self.write_new_note(title, &note)?;
+        self.append_log(&format!(
+            "**Proposal**: [{title}](/{id}.md) を下書き起票(via {client})。"
+        ))?;
+        self.write_index_md()?;
+        self.commit_note_op(&id, &format!("propose {id} (draft, via {client})"))?;
+        Ok(id)
+    }
+
+    /// 下書きの確定(status: stable 化+verified 追記)。人の操作のみ(FR-C5: MCP に公開しない)。
+    pub fn confirm(&self, id: &str, actor: &str) -> Result<()> {
+        let mut note = self.read_note(id)?;
+        if note.front.effective_status() != crate::frontmatter::STATUS_DRAFT {
+            bail!("{id} は draft ではない(status: {})", note.front.effective_status());
+        }
+        note.front.status = Some(crate::frontmatter::STATUS_STABLE.into());
+        note.front.append_verified(actor, &now_iso());
+        self.write_note(id, &note)?;
+        let title = note.front.title.as_deref().unwrap_or(id);
+        self.append_log(&format!("**Confirmation**: [{title}](/{id}.md) を確定。"))?;
+        self.write_index_md()?;
+        self.commit_note_op(id, &format!("confirm {id}"))?;
+        Ok(())
+    }
+
+    /// 退役(status: deprecated)。ファイルは消さない(OKF §5.4: kept for links and history)。
+    pub fn archive(&self, id: &str) -> Result<()> {
+        let mut note = self.read_note(id)?;
+        note.front.status = Some(crate::frontmatter::STATUS_DEPRECATED.into());
+        self.write_note(id, &note)?;
+        let title = note.front.title.as_deref().unwrap_or(id);
+        self.append_log(&format!("**Deprecation**: [{title}](/{id}.md) を退役。"))?;
+        self.write_index_md()?;
+        self.commit_note_op(id, &format!("archive {id}"))?;
+        Ok(())
+    }
+
+    /// 全ノートの (id, 絶対パス)。予約ファイル・.kb・.git は除外。
+    pub fn list_note_files(&self) -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        for entry in walkdir::WalkDir::new(&self.root)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                name != ".git" && name != ".kb"
+            })
+            .flatten()
+        {
+            let path = entry.path();
+            if !entry.file_type().is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if RESERVED.contains(&name.as_ref()) {
+                continue;
+            }
+            if let Ok(rel) = path.strip_prefix(&self.root) {
+                let id = rel.with_extension("");
+                out.push((id.to_string_lossy().to_string(), path.to_path_buf()));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// バンドルルート index.md を自動生成(OKF §8+§12: okf_version 宣言)。
+    pub fn write_index_md(&self) -> Result<()> {
+        let mut lines = vec![
+            "---".to_string(),
+            "okf_version: \"0.2\"".to_string(),
+            "---".to_string(),
+            String::new(),
+            "# Notes".to_string(),
+            String::new(),
+        ];
+        for (id, path) in self.list_note_files() {
+            let Ok(content) = fs::read_to_string(&path) else { continue };
+            let Ok(note) = Note::parse(&content) else { continue };
+            let title = note.front.title.as_deref().unwrap_or(&id);
+            let desc = note.front.description.as_deref().unwrap_or("");
+            let sep = if desc.is_empty() { "" } else { " - " };
+            lines.push(format!("* [{title}]({id}.md){sep}{desc}"));
+        }
+        lines.push(String::new());
+        fs::write(self.root.join("index.md"), lines.join("\n"))?;
+        Ok(())
+    }
+
+    /// log.md へ1行追記(OKF §9: 日付見出しグループ・新しい日付が先頭)。
+    pub fn append_log(&self, entry: &str) -> Result<()> {
+        let path = self.root.join("log.md");
+        let today_heading = format!("## {}", today());
+        let existing = fs::read_to_string(&path).unwrap_or_default();
+        let content = if existing.is_empty() {
+            format!("# Update Log\n\n{today_heading}\n* {entry}\n")
+        } else if let Some(pos) = existing.find(&today_heading) {
+            let insert_at = pos + today_heading.len();
+            format!("{}\n* {entry}{}", &existing[..insert_at], &existing[insert_at..])
+        } else {
+            // 新しい日付セクションをタイトル行の直後(=先頭側)へ
+            match existing.find("\n## ") {
+                Some(pos) => format!(
+                    "{}\n{today_heading}\n* {entry}\n{}",
+                    &existing[..pos],
+                    &existing[pos + 1..]
+                ),
+                None => format!("{}\n{today_heading}\n* {entry}\n", existing.trim_end()),
+            }
+        };
+        fs::write(&path, content)?;
+        Ok(())
+    }
+
+    fn commit_note_op(&self, id: &str, message: &str) -> Result<()> {
+        self.commit(&[&format!("{id}.md"), "index.md", "log.md"], message)
+    }
+
+    /// 指定パスをステージしてコミット(git 履歴 = 監査痕跡)。
+    pub fn commit(&self, rel_paths: &[&str], message: &str) -> Result<()> {
+        let repo = Repository::open(&self.root)?;
+        let mut index = repo.index()?;
+        for p in rel_paths {
+            if self.root.join(p).exists() {
+                index.add_path(Path::new(p))?;
+            }
+        }
+        index.write()?;
+        let tree = repo.find_tree(index.write_tree()?)?;
+        let sig = repo
+            .signature()
+            .or_else(|_| Signature::now("kb-app", "kb-app@localhost"))?;
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
+        Ok(())
+    }
+}
+
+/// タイトル → ファイル名 slug。日本語はそのまま残す(パス=ID、APFS/NTFS で有効)。
+pub fn slugify(title: &str) -> String {
+    let mut out = String::new();
+    for c in title.trim().chars() {
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() { "note".to_string() } else { out }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Hello World!"), "hello-world");
+        assert_eq!(slugify("認証 設計 メモ"), "認証-設計-メモ");
+        assert_eq!(slugify("!!!"), "note");
+    }
+
+    #[test]
+    fn create_note_confirm_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose("テスト起票", "本文です。", Some("説明"), &[], "test-client/model")
+            .unwrap();
+        let note = vault.read_note(&id).unwrap();
+        assert_eq!(note.front.effective_status(), "draft");
+        assert_eq!(note.front.origin.as_deref(), Some("agent"));
+        vault.confirm(&id, "human:owner").unwrap();
+        let note = vault.read_note(&id).unwrap();
+        assert_eq!(note.front.effective_status(), "stable");
+        assert!(note.front.verified.is_some());
+        // index.md / log.md が生成され、予約名はノート一覧に出ない
+        assert!(vault.root.join("index.md").exists());
+        assert!(vault.root.join("log.md").exists());
+        assert_eq!(vault.list_note_files().len(), 1);
+    }
+}
