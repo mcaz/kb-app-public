@@ -1,6 +1,7 @@
 # kb-app(仮名)
 
-AI と使う、育つナレッジベース。チャットは公式 AI アプリのまま、裏に自分の知識を差し込む。
+そのままでも使えるナレッジベース。AI を繋ぐと、会話で育つ外部記憶になる。
 
 - 要件定義: [docs/requirements.md](docs/requirements.md)
-- 状態: 要件定義 v0(2026-08-09)
+- UI たたき(5画面): [docs/ui-draft.html](docs/ui-draft.html)
+- 状態: 要件定義 v0+UI たたき v0(2026-08-09)

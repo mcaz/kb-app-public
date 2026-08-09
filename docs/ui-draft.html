@@ -1,0 +1,395 @@
+<title>kb-app UIたたき — そのままでも使えるナレッジベース</title>
+<style>
+  :root {
+    --ground:#F3F5F0; --panel:#FCFDFB; --panel-2:#EDF0E9; --ink:#232821; --muted:#6C7468;
+    --line:#D8DDD2; --chip:#FFFFFF;
+    --grow:#3E7550; --grow-soft:#E2EEE5;
+    --prop:#A97B2F; --prop-soft:#F5EAD8;
+    --sel:#E7EBE2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#141713; --panel:#1C201A; --panel-2:#232821; --ink:#E7E9E2; --muted:#98A093;
+      --line:#343B31; --chip:#262C24;
+      --grow:#7FB08D; --grow-soft:#20321F;
+      --prop:#D2A050; --prop-soft:#382B18;
+      --sel:#2A3127;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#141713; --panel:#1C201A; --panel-2:#232821; --ink:#E7E9E2; --muted:#98A093;
+    --line:#343B31; --chip:#262C24;
+    --grow:#7FB08D; --grow-soft:#20321F;
+    --prop:#D2A050; --prop-soft:#382B18;
+    --sel:#2A3127;
+  }
+  :root[data-theme="light"] {
+    --ground:#F3F5F0; --panel:#FCFDFB; --panel-2:#EDF0E9; --ink:#232821; --muted:#6C7468;
+    --line:#D8DDD2; --chip:#FFFFFF;
+    --grow:#3E7550; --grow-soft:#E2EEE5;
+    --prop:#A97B2F; --prop-soft:#F5EAD8;
+    --sel:#E7EBE2;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: "Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic","Noto Sans JP",sans-serif;
+    font-size: 15px; line-height: 1.75;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 48px 24px 80px; }
+
+  h1 { font-size: 28px; font-weight: 700; margin: 8px 0 10px; line-height: 1.4; text-wrap: balance; }
+  h2 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+  .eyebrow { font-size: 12px; letter-spacing: .14em; color: var(--muted); }
+  .premise { max-width: 44em; }
+  .premise b { color: var(--grow); }
+
+  .stages { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+  .stages span {
+    font-size: 12.5px; padding: 6px 13px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  }
+  .stages span b { color: var(--ink); font-weight: 600; }
+  .stages .s0 { border-color: var(--grow); color: var(--ink); }
+
+  .scene { margin-top: 60px; }
+  .scene-head { margin-bottom: 16px; max-width: 46em; }
+  .scene-head p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+  .scene-body { display: grid; grid-template-columns: minmax(0,1fr) 258px; gap: 24px; align-items: start; }
+  @media (max-width: 880px) { .scene-body { grid-template-columns: minmax(0,1fr); } }
+
+  .frame {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .frame-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+    font-size: 12px; color: var(--muted);
+  }
+  .frame-bar .lights { display: flex; gap: 5px; }
+  .frame-bar .lights i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: block; }
+  .frame-bar .mock-tag { margin-left: auto; font-size: 11px; letter-spacing: .08em; }
+
+  .btn {
+    display: inline-block; font-size: 13px; padding: 7px 16px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--chip); white-space: nowrap;
+  }
+  .btn.primary { background: var(--grow); border-color: var(--grow); color: #fff; }
+  .btn.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.small { font-size: 12px; padding: 4px 12px; }
+
+  /* オンボーディング */
+  .onb { padding: 56px 32px 48px; text-align: center; }
+  .onb .mark { font-size: 34px; }
+  .onb h3 { font-size: 22px; font-weight: 700; margin: 12px 0 6px; }
+  .onb p { color: var(--muted); margin: 0 0 22px; }
+  .onb .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+
+  /* メイン画面 */
+  .app { display: flex; min-height: 380px; }
+  .side {
+    width: 176px; flex: none; border-right: 1px solid var(--line); background: var(--panel-2);
+    padding: 14px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .side .nb { font-weight: 700; padding: 6px 10px; }
+  .side .nav { padding: 7px 10px; border-radius: 7px; color: var(--muted); display: flex; justify-content: space-between; }
+  .side .nav.on { background: var(--sel); color: var(--ink); }
+  .side .badge {
+    background: var(--prop); color: #fff; border-radius: 999px; font-size: 10.5px;
+    padding: 0 7px; line-height: 18px; height: 18px;
+  }
+  .side .grow-btn { margin-top: auto; }
+  @media (max-width: 560px) { .side { display: none; } }
+
+  .list {
+    width: 200px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; font-size: 13px;
+  }
+  .list .search {
+    margin: 0 10px 10px; border: 1px solid var(--line); border-radius: 7px;
+    padding: 5px 10px; color: var(--muted); font-size: 12.5px; background: var(--chip);
+  }
+  .list .item { padding: 8px 14px; border-left: 2px solid transparent; }
+  .list .item.on { background: var(--sel); border-left-color: var(--grow); }
+  .list .item .t { font-weight: 600; }
+  .list .item .d { color: var(--muted); font-size: 11.5px; }
+  @media (max-width: 700px) { .list { display: none; } }
+
+  .editor { flex: 1; min-width: 0; padding: 18px 22px; }
+  .editor .title { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .editor .meta { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .editor p { margin: 0 0 10px; }
+  .editor ul { margin: 0 0 10px; padding-left: 20px; }
+  .wikilink { color: var(--grow); text-decoration: underline; text-underline-offset: 3px; }
+
+  /* 受信箱 */
+  .inbox { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .prop-card {
+    border: 1px solid var(--line); border-left: 3px solid var(--prop); border-radius: 10px;
+    padding: 13px 16px;
+  }
+  .prop-card .from { font-size: 11.5px; color: var(--prop); font-weight: 600; letter-spacing: .04em; margin-bottom: 3px; }
+  .prop-card .what { font-weight: 600; }
+  .prop-card .ex { color: var(--muted); font-size: 13px; margin: 5px 0 10px; }
+  .prop-card .row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* 繋ぐ */
+  .connect { padding: 18px 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .con-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .con-card .name { font-weight: 700; margin-bottom: 2px; }
+  .con-card .desc { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; min-height: 3.2em; }
+  .state { font-size: 12px; margin-bottom: 10px; display: inline-block; padding: 2px 10px; border-radius: 999px; }
+  .state.ok { background: var(--grow-soft); color: var(--grow); }
+  .state.off { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+
+  /* 注釈 */
+  .notes { display: flex; flex-direction: column; gap: 13px; font-size: 13px; }
+  .note { display: flex; gap: 10px; align-items: flex-start; }
+  .note i { width: 9px; height: 9px; border-radius: 50%; background: var(--grow); flex: none; margin-top: 7px; }
+  .note.p i { background: var(--prop); }
+  .note p { margin: 0; }
+  .note .who { font-size: 11px; letter-spacing: .08em; color: var(--muted); display: block; }
+
+  .foot { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); max-width: 46em; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">kb-app(仮名) — UI たたき v0 / 2026-08-09</div>
+    <h1>そのままでも使えるナレッジベース。<br>AI を繋ぐと、会話で育つ外部記憶になる。</h1>
+    <p class="premise">
+      要件定義 v0 の4画面を、<b>ユーザーが覚える概念4つ(ノート・下書き・つながり・バックアップ)</b>だけの
+      言葉づかいで描いたモック。frontmatter・索引・埋め込み・MCP という語はどの画面にも出てこない。
+    </p>
+    <div class="stages">
+      <span class="s0"><b>段0</b> アプリだけで完結</span>
+      <span><b>段1</b> +かしこい検索(任意)</span>
+      <span><b>段2</b> +AI アプリ(任意)</span>
+      <span><b>段3</b> +バックアップ(任意)</span>
+    </div>
+  </header>
+
+  <!-- 画面A -->
+  <section class="scene">
+    <div class="scene-head">
+      <div class="eyebrow">画面 A — 初回起動</div>
+      <h2>オンボーディング: 3秒で書き始められる</h2>
+      <p>設定ウィザードを出さない。ノートブックは作成済みの状態で開き、繋ぐのは全部あとでいい。</p>
+    </div>
+    <div class="scene-body">
+      <div class="frame">
+        <div class="frame-bar"><span class="lights"><i></i><i></i><i></i></span><span>kb-app</span><span class="mock-tag">MOCK</span></div>
+        <div class="onb">
+          <div class="mark">🌱</div>
+          <h3>はじめまして。あなたのノートブックができました</h3>
+          <p>もう書き始められます。AI やバックアップは、使いたくなったときに繋げます。</p>
+          <div class="row">
+            <span class="btn primary">書いてみる</span>
+            <span class="btn">繋げるものを見る</span>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><i></i><p><span class="who">FR-A1 / NFR-2</span>初回起動で vault 自動作成。「3歩セットアップ」の1歩目がもう終わっている状態で迎える</p></div>
+        <div class="note"><i></i><p><span class="who">原則7</span>この画面に出る概念は「ノートブック」だけ。KB・AI の知識を要求しない</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 画面B -->
+  <section class="scene">
+    <div class="scene-head">
+      <div class="eyebrow">画面 B — 日常(段0)</div>
+      <h2>メイン: ノート+検索。AI がなくても完結</h2>
+      <p>左に居場所、中にノート一覧、右に本文。検索は最初から全文で効く。</p>
+    </div>
+    <div class="scene-body">
+      <div class="frame">
+        <div class="frame-bar"><span class="lights"><i></i><i></i><i></i></span><span>kb-app — わたしのノート</span><span class="mock-tag">MOCK</span></div>
+        <div class="app">
+          <nav class="side">
+            <div class="nb">わたしのノート</div>
+            <div class="nav on"><span>📄 ノート</span></div>
+            <div class="nav"><span>📥 受信箱</span><span class="badge">2</span></div>
+            <div class="nav"><span>🔗 繋ぐ</span></div>
+            <div class="nav grow-btn"><span>＋ 新しいノート</span></div>
+          </nav>
+          <div class="list">
+            <div class="search">🔍 ノートを検索</div>
+            <div class="item on"><div class="t">引っ越し手続きメモ</div><div class="d">きょう</div></div>
+            <div class="item"><div class="t">読書メモ: 昆虫の本</div><div class="d">3日前</div></div>
+            <div class="item"><div class="t">保育園の持ち物</div><div class="d">先週</div></div>
+            <div class="item"><div class="t">確定申告の準備</div><div class="d">7月</div></div>
+          </div>
+          <div class="editor">
+            <div class="title">引っ越し手続きメモ</div>
+            <div class="meta">きょう 14:20 · つながり: <span class="wikilink">確定申告の準備</span></div>
+            <p>3月末までにやること:</p>
+            <ul>
+              <li>電気・ガス・水道の解約(2週間前まで)</li>
+              <li>転出届 → 転入届(14日以内)</li>
+              <li>住所変更: 免許・銀行・<span class="wikilink">確定申告の準備</span>にも影響</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><i></i><p><span class="who">FR-A4</span>閲覧・編集・検索がアプリ単体で完結(段0 の正常形)。エディタは素朴な Markdown+プレビュー</p></div>
+        <div class="note"><i></i><p><span class="who">概念「つながり」</span>[[リンク]] は「つながり」という言葉で見せる。グラフビューは将来ここから育つ</p></div>
+        <div class="note p"><i></i><p><span class="who">FR-A3</span>受信箱のバッジが唯一の「やることの通知」。他の画面は静かに保つ</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 画面C -->
+  <section class="scene">
+    <div class="scene-head">
+      <div class="eyebrow">画面 C — 育てる(段2)</div>
+      <h2>受信箱: 提案に「はい / いいえ」で答えるだけ</h2>
+      <p>AI との会話から生まれた下書きも、アプリからのお手入れ提案も、全部ここに届く。</p>
+    </div>
+    <div class="scene-body">
+      <div class="frame">
+        <div class="frame-bar"><span class="lights"><i></i><i></i><i></i></span><span>kb-app — 受信箱</span><span class="mock-tag">MOCK</span></div>
+        <div class="inbox">
+          <div class="prop-card">
+            <div class="from">Claude との会話から</div>
+            <div class="what">下書き「沖縄旅行の持ち物リスト」を追加しますか?</div>
+            <div class="ex">日焼け止め・モバイルバッテリー・子どもの浮き輪…(会話でまとめた12項目)</div>
+            <div class="row">
+              <span class="btn primary small">追加する</span>
+              <span class="btn small">中身を見る</span>
+              <span class="btn quiet small">やめておく</span>
+            </div>
+          </div>
+          <div class="prop-card">
+            <div class="from">お手入れの気づき</div>
+            <div class="what">「読書メモ」というノートが2つ、同じ話題に見えます。つなげておきますか?</div>
+            <div class="ex">「読書メモ: 昆虫の本」(3日前)と「昆虫の本のメモ」(先月)。あなたのノートの中身は変えません — つながりを付けるだけです</div>
+            <div class="row">
+              <span class="btn primary small">つなげる</span>
+              <span class="btn small">見比べる</span>
+              <span class="btn quiet small">このまま</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note p"><i></i><p><span class="who">原則3</span>AI の書き込みは必ず下書きで止まり、この画面の承諾でだけ確定する(統治が UI になった姿)</p></div>
+        <div class="note p"><i></i><p><span class="who">FR-C7 / 原則8・9</span>お手入れはアプリが検出して提案文に変換。ただし**手書きノートは聖域** — 本文の書き換え・統合は提案せず、「つなげる・知らせる」までの非破壊に留まる</p></div>
+        <div class="note"><i></i><p><span class="who">NFR-6</span>選択肢は常に「はい・見る・いいえ」の3つまで。レビューという概念を教えない</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 画面D -->
+  <section class="scene">
+    <div class="scene-head">
+      <div class="eyebrow">画面 D — 繋ぐ(段1〜3)</div>
+      <h2>繋ぐ: 3枚のカード、全部任意</h2>
+      <p>技術の言葉を使わずに、段階的エンハンスをそのまま画面にする。</p>
+    </div>
+    <div class="scene-body">
+      <div class="frame">
+        <div class="frame-bar"><span class="lights"><i></i><i></i><i></i></span><span>kb-app — 繋ぐ</span><span class="mock-tag">MOCK</span></div>
+        <div class="connect">
+          <div class="con-card">
+            <div class="name">🤖 AI アシスタント</div>
+            <div class="desc">いつもの AI アプリが、あなたのノートを読んで答え、会話から下書きを提案するようになります。</div>
+            <div><span class="state ok">Claude — 接続済み</span></div>
+            <div><span class="state off">ChatGPT — 未接続</span></div>
+            <div style="margin-top:10px;"><span class="btn small">繋ぐ…</span></div>
+          </div>
+          <div class="con-card">
+            <div class="name">✨ かしこい検索</div>
+            <div class="desc">言葉が違っても意味で見つかるようになります。セットアップはアプリが自動で行います。</div>
+            <div><span class="state off">オフ</span></div>
+            <div style="margin-top:10px;"><span class="btn primary small">オンにする</span></div>
+          </div>
+          <div class="con-card">
+            <div class="name">☁️ バックアップ</div>
+            <div class="desc">あなただけが見られる非公開の保管場所に控えを置きます。新しいパソコンへの引っ越しにも。</div>
+            <div><span class="state off">未設定</span></div>
+            <div style="margin-top:10px;"><span class="btn small">設定する…</span></div>
+          </div>
+        </div>
+      </div>
+      <aside class="notes">
+        <div class="note"><i></i><p><span class="who">FR-A1 / 段1〜3</span>「繋ぐ」は全部あとから・全部任意。スキップしても段0 は欠けない</p></div>
+        <div class="note"><i></i><p><span class="who">原則7</span>ollama・埋め込み・MCP・GitHub という語を出さない(エンジニアは設定の詳細レイヤから実体に触れる)</p></div>
+        <div class="note"><i></i><p><span class="who">FR-A6</span>バックアップは非公開既定+明示操作のみ。「非公開の保管場所」という約束を機構(private 実確認)が裏で守る</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 画面E -->
+  <section class="scene">
+    <div class="scene-head">
+      <div class="eyebrow">画面 E — つながりの地図(将来 FR-A7)</div>
+      <h2>グラフ: 眺めるだけでなく、操作できる</h2>
+      <p>Obsidian ライクな力学グラフ。ただし点線(提案されたつながり)をその場で承諾できる点が違う。</p>
+    </div>
+    <div class="scene-body">
+      <div class="frame">
+        <div class="frame-bar"><span class="lights"><i></i><i></i><i></i></span><span>kb-app — つながり</span><span class="mock-tag">MOCK</span></div>
+        <svg viewBox="0 0 640 330" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%;background:var(--panel);" role="img" aria-label="ノートのつながりを示す力学グラフのモック">
+          <!-- エッジ(実線=確定したつながり) -->
+          <g stroke="var(--line)" stroke-width="1.5">
+            <line x1="200" y1="150" x2="330" y2="90"/>
+            <line x1="200" y1="150" x2="300" y2="230"/>
+            <line x1="330" y1="90" x2="470" y2="120"/>
+            <line x1="300" y1="230" x2="430" y2="250"/>
+            <line x1="200" y1="150" x2="90"  y2="100"/>
+            <line x1="90"  y1="100" x2="120" y2="220"/>
+          </g>
+          <!-- 提案されたつながり(点線) -->
+          <line x1="430" y1="250" x2="470" y2="120" stroke="var(--prop)" stroke-width="1.5" stroke-dasharray="5 5"/>
+          <g font-size="11" fill="var(--prop)">
+            <rect x="452" y="176" width="104" height="22" rx="11" fill="var(--prop-soft)"/>
+            <text x="462" y="191">提案: つなげる?</text>
+          </g>
+          <!-- ノード(緑=メモ / 琥珀=育つノート) -->
+          <g>
+            <circle cx="200" cy="150" r="16" fill="var(--grow)"/>
+            <circle cx="330" cy="90"  r="11" fill="var(--grow)"/>
+            <circle cx="300" cy="230" r="11" fill="var(--grow)"/>
+            <circle cx="90"  cy="100" r="9"  fill="var(--grow)"/>
+            <circle cx="120" cy="220" r="9"  fill="var(--grow)"/>
+            <circle cx="470" cy="120" r="12" fill="var(--prop)"/>
+            <circle cx="430" cy="250" r="12" fill="var(--prop)"/>
+          </g>
+          <g font-size="11.5" fill="var(--ink)" text-anchor="middle">
+            <text x="200" y="182">引っ越し手続き</text>
+            <text x="330" y="72">確定申告の準備</text>
+            <text x="300" y="262">保育園の持ち物</text>
+            <text x="90"  y="82">読書メモ: 昆虫</text>
+            <text x="120" y="252">昆虫の本のメモ</text>
+            <text x="470" y="102">沖縄旅行の持ち物</text>
+            <text x="430" y="282">旅行の予算まとめ</text>
+          </g>
+          <!-- 凡例 -->
+          <g font-size="11" fill="var(--muted)">
+            <circle cx="24" cy="306" r="6" fill="var(--grow)"/>
+            <text x="36" y="310">メモ(あなたの言葉)</text>
+            <circle cx="180" cy="306" r="6" fill="var(--prop)"/>
+            <text x="192" y="310">育つノート(AI と共同管理)</text>
+            <line x1="360" y1="306" x2="390" y2="306" stroke="var(--prop)" stroke-width="1.5" stroke-dasharray="5 5"/>
+            <text x="398" y="310">提案されたつながり</text>
+          </g>
+        </svg>
+      </div>
+      <aside class="notes">
+        <div class="note"><i></i><p><span class="who">実現性</span>つながりは索引に保存済みなので、描画層(Canvas / WebGL の力学グラフ)を被せるだけ。10^3〜10^4 ノート(NFR-3)は既存ライブラリの守備範囲</p></div>
+        <div class="note"><i></i><p><span class="who">原則9 の可視化</span>メモ=緑・育つノート=琥珀。2種類構造が地図の色としてそのまま見える</p></div>
+        <div class="note p"><i></i><p><span class="who">差別化</span>点線=お手入れが見つけた「つながりの提案」。グラフ上で承諾でき、受信箱と同じ提案がここにも現れる — 眺める絵ではなく操作面にする</p></div>
+      </aside>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <b>このたたきの前提</b> — 画面はモック。マルチ vault(ノートブックの追加)は要件上 FR-C2 にあるが、
+    初回体験では1冊から始めて「ノートブックを増やす」は後から見つかる位置に置く想定。
+    エンジニア向けの詳細(git・remote・設定ファイル)は設定の深い階層に別レイヤとして開放する。
+  </footer>
+</div>
