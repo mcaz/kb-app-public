@@ -1,0 +1,19 @@
+[package]
+name = "embed-onnx-poc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# kb-app workspace からは除外済みだが、念のため独立 workspace として明示
+[workspace]
+
+[dependencies]
+ort = { version = "=2.0.0-rc.13", features = ["download-binaries", "ndarray"] }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"] }
+ndarray = "0.17"
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+anyhow = "1"
+
+[profile.release]
+debug = false

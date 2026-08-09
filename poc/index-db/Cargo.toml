@@ -1,0 +1,9 @@
+[package]
+name = "index-db-poc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+sqlite-vec = "0.1.9"

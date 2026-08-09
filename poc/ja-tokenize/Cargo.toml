@@ -1,0 +1,9 @@
+[package]
+name = "ja-tokenize-poc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lindera = { version = "5.0.2", features = ["embed-ipadic"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }

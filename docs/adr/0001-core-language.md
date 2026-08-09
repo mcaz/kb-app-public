@@ -49,6 +49,9 @@
 
 ## 判定条件(kill criteria)
 
+**→ 判定済み(2026-08-09): 3/3 PASS。案 C 確定、sidecar 再評価は不要。**
+実測値と本実装への持ち込み事項は [poc-report.md](../poc-report.md)。
+
 着手 PoC 3本。**いずれかが落ちたら案 A(sidecar)を再評価する**:
 
 1. **埋め込み内蔵**: ort+bge-m3 int8 が品質(golden queries で旧実装同等)・速度

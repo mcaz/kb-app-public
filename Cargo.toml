@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/kb-core", "crates/kb-cli"]
+exclude = ["poc"]
 
 [workspace.package]
 version = "0.0.1"

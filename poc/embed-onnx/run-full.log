@@ -1,0 +1,66 @@
+== kb-app PoC: ort 2.0.0-rc.13 + bge-m3 int8 ==
+model inputs:  ["input_ids", "attention_mask"]
+model outputs: ["last_hidden_state"]
+
+[load] model load time: 0.43s
+[load] pooling mode: CLS pooling on 'last_hidden_state' + L2 norm
+[load] first inference (incl. warmup): 14ms, dim=1024
+
+== quality: cosine distance (1 - cos_sim), ort int8 ==
+--- related pairs ---
+  0.4267  ベクトル検索が停止していた障害の記録 <-> 埋め込みが4日間更新されず検索が劣化した
+  0.3048  ONNX Runtime で量子化した埋め込みモデルをアプリに同梱する <-> int8 量子化済みのモデルファイルをアプリ内蔵で実行する方式
+  0.3486  ナレッジベースのノートをコサイン距離で検索する仕組み <-> 意味ベクトルの近さで関連ノートを探す検索機構
+  0.1664  毎朝コーヒーを淹れてから仕事を始める <-> I brew a cup of coffee every morning before starting work.
+  0.1960  請求書の支払い期限は今月末です <-> The invoice payment is due at the end of this month.
+--- unrelated pairs ---
+  0.6922  ベクトル検索が停止していた障害の記録 <-> 週末に友人と登山へ行く計画を立てている
+  0.7116  int8 量子化モデルの推論速度を計測する <-> 猫がこたつで丸くなって眠っている
+  0.7407  データベースのマイグレーション手順書 <-> 桜の開花予想は3月下旬ごろになる見込みです
+  0.7265  埋め込みモデルの距離較正資産を移植する <-> The recipe calls for two cups of flour and three eggs.
+  0.7521  検索インデックスの再構築ジョブが失敗した <-> He plays tennis with his friends every Sunday afternoon.
+[quality] related: min 0.1664 / max 0.4267   unrelated: min 0.6922 / max 0.7521
+[quality] separation: OK (related < unrelated, no overlap) (margin 0.2655)
+
+== parity: ollama bge-m3 (F16) vs ort int8 ==
+  cos_sim(ort_int8, ollama_f16) = 0.98439  [ベクトル検索が停止していた障害の記録]
+  cos_sim(ort_int8, ollama_f16) = 0.98832  [埋め込みが4日間更新されず検索が劣化]
+  cos_sim(ort_int8, ollama_f16) = 0.98317  [ONNX Runtime で量子化し]
+  cos_sim(ort_int8, ollama_f16) = 0.98251  [int8 量子化済みのモデルファイル]
+  cos_sim(ort_int8, ollama_f16) = 0.97685  [ナレッジベースのノートをコサイン距離]
+  cos_sim(ort_int8, ollama_f16) = 0.98210  [意味ベクトルの近さで関連ノートを探す]
+  cos_sim(ort_int8, ollama_f16) = 0.98437  [毎朝コーヒーを淹れてから仕事を始める]
+  cos_sim(ort_int8, ollama_f16) = 0.98866  [I brew a cup of co]
+  cos_sim(ort_int8, ollama_f16) = 0.98609  [請求書の支払い期限は今月末です]
+  cos_sim(ort_int8, ollama_f16) = 0.98806  [The invoice paymen]
+  cos_sim(ort_int8, ollama_f16) = 0.98439  [ベクトル検索が停止していた障害の記録]
+  cos_sim(ort_int8, ollama_f16) = 0.98869  [週末に友人と登山へ行く計画を立ててい]
+  cos_sim(ort_int8, ollama_f16) = 0.98131  [int8 量子化モデルの推論速度を計]
+  cos_sim(ort_int8, ollama_f16) = 0.98391  [猫がこたつで丸くなって眠っている]
+  cos_sim(ort_int8, ollama_f16) = 0.98287  [データベースのマイグレーション手順書]
+  cos_sim(ort_int8, ollama_f16) = 0.98485  [桜の開花予想は3月下旬ごろになる見込]
+  cos_sim(ort_int8, ollama_f16) = 0.98073  [埋め込みモデルの距離較正資産を移植す]
+  cos_sim(ort_int8, ollama_f16) = 0.98595  [The recipe calls f]
+  cos_sim(ort_int8, ollama_f16) = 0.98503  [検索インデックスの再構築ジョブが失敗]
+  cos_sim(ort_int8, ollama_f16) = 0.98732  [He plays tennis wi]
+  cos_sim(ort_int8, ollama_f16) = 0.97897  [ベクトル検索の較正資産を int8 ]
+  cos_sim(ort_int8, ollama_f16) = 0.97694  [ローカルナレッジベース製品の技術検証]
+[parity] n=22 min 0.97685 / median 0.98438 / max 0.98869
+--- pair distances: ort_int8 vs ollama_f16 ---
+  [related] ort 0.4267 / ollama 0.4223 / delta +0.0044
+  [related] ort 0.3048 / ollama 0.2756 / delta +0.0291
+  [related] ort 0.3486 / ollama 0.3201 / delta +0.0285
+  [related] ort 0.1664 / ollama 0.1407 / delta +0.0257
+  [related] ort 0.1960 / ollama 0.1730 / delta +0.0230
+  [unrelated] ort 0.6922 / ollama 0.6904 / delta +0.0018
+  [unrelated] ort 0.7116 / ollama 0.6983 / delta +0.0133
+  [unrelated] ort 0.7407 / ollama 0.7373 / delta +0.0034
+  [unrelated] ort 0.7265 / ollama 0.7356 / delta -0.0091
+  [unrelated] ort 0.7521 / ollama 0.7528 / delta -0.0007
+[parity] pair-distance |delta|: median 0.0112 / max 0.0291
+
+== performance (after warmup) ==
+  short: 36 chars / 27 tokens -> median 28.2ms (min 27.6 / max 43.4, n=21)
+  long: 406 chars / 244 tokens -> median 171.6ms (min 171.0 / max 172.5, n=11)
+
+done.
