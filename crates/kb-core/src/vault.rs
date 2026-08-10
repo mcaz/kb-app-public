@@ -52,6 +52,9 @@ impl Vault {
     }
 
     pub fn read_note(&self, id: &str) -> Result<Note> {
+        if id.trim().is_empty() {
+            bail!("ノート ID が空(確定対象の draft が無い可能性。kb recent で確認)");
+        }
         let path = self.note_path(id);
         let content = fs::read_to_string(&path)
             .with_context(|| format!("ノートが読めない: {}", path.display()))?;

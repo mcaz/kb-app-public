@@ -186,6 +186,11 @@ Grok / Gemini)を繋ぐと会話の裏に自分の知識が差し込まれ、会
   確認。server instructions による自発検索の規律は3サーバー並立でも成立。
   ただしこのクエリでヒットしたのは既存 vault 側で、**kb-app 自身の「引く・育てる
   (propose → confirm)」一周は未観察** — 残る受け入れ項目
+- 2026-08-10 **v0.1 検証合格**: Desktop の実会話(株の勉強プラン策定)から propose が発火し、
+  OKF 語彙どおりの draft(generated.by=claude-desktop/claude・sources=conversation
+  descriptor・origin=agent・タグ自動付与)が起票され、CLI confirm で
+  stable+verified(human:owner)化。git に propose → confirm の監査痕跡。
+  **「引く・育てる」ループが Claude Desktop で一周成立**
 - 観察メモ: 移行期は kb-app と既存 vault が並立するため、「どちらに引きに行くか」の
   routing はモデル任せになる。本移行の段階で instructions での役割宣言(または旧側の停止)を
   検討
