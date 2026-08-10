@@ -229,6 +229,9 @@ Grok / Gemini)を繋ぐと会話の裏に自分の知識が差し込まれ、会
   ([poc-report.md](poc-report.md))。propose の競合など上位レイヤの設計は本実装で
 - タグ自動提案の挙動(自動適用して後から直せる形か、受信箱の承諾を通す形か。
   通知疲れと統治感のバランス)
+- vault コミットの著者情報(現状はグローバル git 設定/GECOS 由来を継承 — 随時 push で
+  private バックアップ先へ私用メール・ホスト名が乗る。旧 KB で実害記録のある事故型。
+  app 固定 actor に寄せるか、デバイス識別として活かして GitHub 側の秘匿設定で守るか)
 - Claude Code 接続(v0.3 後半): 接続代行は Desktop のみ実装済み。Code 側は
   「vault ディレクトリに .mcp.json を同梱し、ランチャの『Claude Code で開く』で
   そこを起動ディレクトリにする」方式(旧トラック external-app-design の設計を流用)
