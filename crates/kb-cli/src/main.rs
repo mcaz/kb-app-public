@@ -64,6 +64,12 @@ enum Command {
     Confirm { note: String },
     /// 退役(status: deprecated)
     Archive { note: String },
+    /// 既存 Markdown KB からの移植(互換レイヤ)。`<dir>` か `<dir>=<接頭辞>` を複数指定可。
+    /// リンク解決はソース横断
+    Import {
+        /// 例: ~/old-kb/vault ~/old-team/vault=team
+        sources: Vec<String>,
+    },
     /// 索引の増分 sync
     Sync,
     /// MCP サーバーを stdio で起動
@@ -169,6 +175,30 @@ fn main() -> Result<()> {
             let vault = open_vault(cli.vault.as_deref())?;
             vault.archive(&note)?;
             println!("archived: {note}");
+        }
+        Command::Import { sources } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            let parsed: Vec<kb_core::import::Source> = sources
+                .iter()
+                .map(|s| {
+                    let (dir, prefix) = match s.split_once('=') {
+                        Some((d, p)) => (d, p.to_string()),
+                        None => (s.as_str(), String::new()),
+                    };
+                    let label = if prefix.is_empty() { dir.to_string() } else { prefix.clone() };
+                    kb_core::import::Source { root: PathBuf::from(dir), label, prefix }
+                })
+                .collect();
+            let report = kb_core::import::import(&vault, &parsed)?;
+            println!("移植: {} 本", report.imported.len());
+            for s in &report.skipped {
+                println!("スキップ: {s}");
+            }
+            if !report.unresolved_links.is_empty() {
+                println!("未解決リンク({}件・原文のまま): {}", report.unresolved_links.len(), report.unresolved_links.join(", "));
+            }
+            let conn = open_db(&vault)?;
+            sync(&vault, &conn)?;
         }
         Command::Sync => {
             let vault = open_vault(cli.vault.as_deref())?;

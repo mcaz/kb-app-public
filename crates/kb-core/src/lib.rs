@@ -6,6 +6,7 @@ pub use rusqlite;
 
 pub mod connect;
 pub mod frontmatter;
+pub mod import;
 pub mod index;
 pub mod mcp;
 pub mod registry;
