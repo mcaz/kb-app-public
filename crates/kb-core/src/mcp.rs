@@ -18,12 +18,40 @@ const PROTOCOL_FALLBACK: &str = "2025-06-18";
 
 /// server instructions(FR-C5)。「まず引く・終わりに起票を提案」の規律を配る。
 /// 旧 KB の M1/M3 実測で「instructions だけでフック無し環境でも規律が成立」を確認済み。
-const INSTRUCTIONS: &str = "このサーバーはユーザーの個人ナレッジベース(vault)への取次口。\
-ユーザー個人に関する話題(嗜好・過去の決定・進行中の作業・過去に調べたこと)に触れる前に、\
-必ず search で当たりを付け、ヒットしたノートは get で全文を読んでから答えること。\
-該当が無ければその旨を添えて普通に答えてよい。\
-会話の中で恒久的に残す価値のある知見・決定・事実が新しく生まれたら、会話の終わりに \
-propose での下書き起票を提案すること(起票は下書きまで。確定はユーザーがアプリ側で行う)。";
+/// FR-C6(プロバイダ別出し分け)は保留中のため、現接続先の Claude に直接最適化した文面
+/// (2026-08-10 本人決定: Claude 最適化を先行し、後続開発はその観察に合わせる)。
+const INSTRUCTIONS: &str = "\
+このサーバーはユーザーの個人ナレッジベース(kb-app)への取次口。ここはユーザーの外部記憶で、\
+会話を通じて育つ。あなたの仕事は「引く・育てる」の両輪を回すこと。\n\
+\n\
+■ 引く(会話の前半で)\n\
+- ユーザー個人に関する話題(嗜好・判断基準・過去の決定・進行中の作業・過去に調べたこと・\
+固有名詞)に触れる前に、推測や一般論で答えず必ず search を引く\n\
+- クエリはキーワード列挙でも文まるごとでもよい(意味検索が効くので、言い回しが違っても\
+見つかる)。1回で当たらなければ語を変えてもう1回\n\
+- ヒットしたノートは get で全文を読んでから答える。要約だけで判断しない。本文中のリンク\
+(/path.md)は関連が深そうなら get で辿る\n\
+- ユーザーが「このノート」と言ったら、note 引数なしの get でアプリでいま開いているノートが\
+取れる\n\
+- 該当なしは正常。その旨を一言添えて普通に答える\n\
+- 結果に degraded(劣化情報)があれば、検索品質が落ちている — 回答にその旨を添える\n\
+\n\
+■ 育てる(会話の終わりに)\n\
+- 恒久的に残す価値のある知見・決定・事実が新しく生まれたら、会話の終わりに propose での\
+下書き起票を提案する(勝手に起票せず、一言添えて承諾を得るのが基本。ユーザーが起票を\
+指示したら即実行してよい)\n\
+- 起票は下書き(draft)まで。確定・却下はユーザーがアプリの受信箱で行う — あなたは確定を\
+促さなくてよい\n\
+- 既存ノートの内容を更新したい場合も propose で(差分や追記案を本文に書く)。ノートの\
+直接編集はできない設計\n\
+\n\
+■ 書き方(propose の質)\n\
+- title: 内容が一意に分かる具体的なもの(「メモ」「まとめ」だけは不可)\n\
+- description: 一文要約(検索スニペットと一覧に使われる)\n\
+- body: この会話を読んでいない未来の読者に向けて自己完結で。結論だけでなく、経緯・根拠・\
+出典(会話の文脈)を短く含める。関連する既存ノートがあれば markdown リンク(/path.md)で\
+つなぐ\n\
+- tags: 2〜4個。既存ノートに付いているタグに揃える";
 
 pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
     let stdin = std::io::stdin();
@@ -101,18 +129,18 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "search",
-            "description": "ナレッジベースを検索する(全文+リンク近傍)。ユーザー個人に関する話題ではまずこれを引く。結果に劣化情報(degraded)があれば検索品質が落ちている — ユーザーへの回答にその旨を添える。",
+            "description": "ナレッジベースを検索する(全文+意味+リンク近傍のハイブリッド)。ユーザー個人に関する話題ではまずこれを引く。キーワード列挙でも文まるごとでもよい(言い回しが違っても意味で当たる)。結果に劣化情報(degraded)があれば検索品質が落ちている — ユーザーへの回答にその旨を添える。",
             "inputSchema": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "検索語(空白区切りのキーワード列挙可)"},
+                "query": {"type": "string", "description": "検索語(キーワード列挙または自然文)"},
                 "limit": {"type": "integer", "description": "最大件数(既定 8)"}
             }, "required": ["query"]}
         },
         {
             "name": "get",
-            "description": "ノート ID を指定して全文(frontmatter + 本文)を取得する。search でヒットしたノートは必ずこれで全文を読んでから答える。",
+            "description": "ノートの全文(frontmatter + 本文)を取得する。search でヒットしたノートは必ずこれで全文を読んでから答える。note を省略すると、ユーザーがアプリでいま開いているノート(「このノート」)を返す。",
             "inputSchema": {"type": "object", "properties": {
-                "note": {"type": "string", "description": "ノート ID(例: notes/foo)"}
-            }, "required": ["note"]}
+                "note": {"type": "string", "description": "ノート ID(例: notes/foo)。省略時はいま開いているノート"}
+            }}
         },
         {
             "name": "recent",
@@ -123,12 +151,12 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "propose",
-            "description": "会話から得た恒久的な知見・決定を下書きノートとして起票する。起票は下書き(draft)までで、確定はユーザーがアプリ側で行う。本文は自己完結の Markdown で、出典となる会話の文脈を要約して含める。",
+            "description": "会話から得た恒久的な知見・決定を下書きノートとして起票する。起票は下書き(draft)までで、確定・却下はユーザーがアプリの受信箱で行う。本文はこの会話を読んでいない未来の読者向けに自己完結の Markdown で書き、経緯・根拠・会話出典の要約を含め、関連する既存ノートは /path.md 形式のリンクでつなぐ。既存ノートの更新提案もこれで(差分・追記案を本文に)。",
             "inputSchema": {"type": "object", "properties": {
-                "title": {"type": "string", "description": "ノートのタイトル(内容が一意に分かる具体的なもの)"},
-                "body": {"type": "string", "description": "本文(Markdown)"},
-                "description": {"type": "string", "description": "一文要約"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "分類タグ(任意)"}
+                "title": {"type": "string", "description": "内容が一意に分かる具体的なタイトル"},
+                "body": {"type": "string", "description": "本文(Markdown・自己完結)"},
+                "description": {"type": "string", "description": "一文要約(一覧・検索スニペットに使われる)"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "分類タグ 2〜4個(既存タグに揃える)"}
             }, "required": ["title", "body"]}
         }
     ])
@@ -181,12 +209,15 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             Ok(text)
         }
         "get" => {
-            let id = args
-                .get("note")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
-            let note = vault.read_note(id)?;
-            Ok(note.to_file_string()?)
+            let id = match args.get("note").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                // 引数なし =「このノート」(アプリでいま開いているノート。FR-A5 の文脈受け渡し)
+                None => crate::connect::current_note(vault).ok_or_else(|| {
+                    anyhow::anyhow!("いま開いているノートが無い(note 引数で ID を指定)")
+                })?,
+            };
+            let note = vault.read_note(&id)?;
+            Ok(format!("(note: {id})\n{}", note.to_file_string()?))
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;

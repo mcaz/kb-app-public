@@ -102,6 +102,8 @@ struct NoteView {
 fn note_get(id: String) -> CmdResult<NoteView> {
     let vault = default_vault()?;
     let note = vault.read_note(&id).map_err(err)?;
+    // 「このノート」文脈(FR-A5): 開いたノートを現在ノートとして記録(MCP の get 引数なしが返す)
+    let _ = kb_core::connect::set_current_note(&vault, &id);
     let (conn, _) = synced_conn(&vault)?;
     Ok(NoteView {
         title: note.front.title.clone().unwrap_or_else(|| id.clone()),
