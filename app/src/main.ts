@@ -1,7 +1,36 @@
 // kb-app 管理アプリ(v0.2 骨格)。画面はモック(docs/ui-draft.html)の A/B/C に対応。
 // ユーザーに見せる概念は「ノート・下書き・つながり・バックアップ」まで(原則7)。
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { marked } from "marked";
 import { api, type ConnectState, type HomeState, type NoteView } from "./ipc";
+
+const inTauri = "__TAURI_INTERNALS__" in window;
+
+function fmtSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
+}
+
+function fileToBase64(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve((r.result as string).split(",", 2)[1] ?? "");
+    r.onerror = reject;
+    r.readAsDataURL(f);
+  });
+}
+
+async function addAttachmentFile(noteId: string, file: File, rename?: string): Promise<string | null> {
+  if (file.size > 50 * 1024 * 1024) {
+    toast("50MB を超えるファイルは添付できません");
+    return null;
+  }
+  const b64 = await fileToBase64(file);
+  const [saved, warning] = await api.attachmentAdd(noteId, rename ?? file.name, b64);
+  if (warning) toast(`⚠ ${warning}`);
+  return saved;
+}
 
 const app = document.getElementById("app")!;
 
@@ -220,6 +249,12 @@ function renderEditor(box: HTMLElement) {
   const related = n.related.length
     ? `つながり: ` + n.related.map(([id, t]) => `<span class="link" data-id="${esc(id)}">${esc(t ?? id)}</span>`).join("、")
     : "";
+  const attachChips = n.attachments
+    .map(
+      ([name, size]) =>
+        `<span class="chip">📎 ${esc(name)} <i>${fmtSize(size)}</i><button class="chip-x" data-name="${esc(name)}">×</button></span>`
+    )
+    .join("");
   if (!state.editing) {
     box.replaceChildren(el(`
       <div>
@@ -229,9 +264,35 @@ function renderEditor(box: HTMLElement) {
         </div>
         <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${related}</div>
         <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
+        <div class="attach">${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
         <div class="preview">${marked.parse(n.body) as string}</div>
       </div>
     `));
+    const fileInput = box.querySelector<HTMLInputElement>("#attach-file")!;
+    box.querySelector("#attach-add")!.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", async () => {
+      for (const f of Array.from(fileInput.files ?? [])) {
+        await addAttachmentFile(n.id, f);
+      }
+      state.selected = await api.noteGet(n.id);
+      render();
+      toast("添付しました");
+    });
+    box.querySelectorAll<HTMLButtonElement>(".chip-x").forEach((b) =>
+      b.addEventListener("click", async () => {
+        await api.attachmentRemove(n.id, b.dataset.name!);
+        state.selected = await api.noteGet(n.id);
+        render();
+        toast("添付を削除しました(履歴には残ります)");
+      })
+    );
+    // 添付・vault 内画像の表示(Tauri では asset プロトコル経由)
+    box.querySelectorAll<HTMLImageElement>(".preview img").forEach((img) => {
+      const src = decodeURIComponent(img.getAttribute("src") ?? "");
+      if (src.startsWith("/") && inTauri) {
+        img.src = convertFileSrc(`${n.vault_root}${src}`);
+      }
+    });
     document.getElementById("edit")!.addEventListener("click", () => { state.editing = true; render(); });
     document.getElementById("talk")!.addEventListener("click", async () => {
       try {
@@ -255,8 +316,26 @@ function renderEditor(box: HTMLElement) {
     `));
     document.getElementById("save")!.addEventListener("click", saveNote);
     document.getElementById("cancel")!.addEventListener("click", () => { state.editing = false; render(); });
-    document.getElementById("body")!.addEventListener("keydown", (e) => {
+    const bodyEl = document.getElementById("body") as HTMLTextAreaElement;
+    bodyEl.addEventListener("keydown", (e) => {
       if ((e as KeyboardEvent).metaKey && (e as KeyboardEvent).key === "s") { e.preventDefault(); void saveNote(); }
+    });
+    // 画像ペースト → 自動添付+カーソル位置にリンク挿入(FR-C8)
+    bodyEl.addEventListener("paste", async (e) => {
+      const items = Array.from((e as ClipboardEvent).clipboardData?.items ?? []);
+      const img = items.find((i) => i.type.startsWith("image/"));
+      if (!img) return;
+      e.preventDefault();
+      const file = img.getAsFile();
+      if (!file) return;
+      const ext = img.type.split("/")[1] ?? "png";
+      const saved = await addAttachmentFile(n.id, file, `pasted-${Date.now()}.${ext}`);
+      if (!saved) return;
+      const link = `![](/${n.id}.files/${saved})`;
+      const pos = bodyEl.selectionStart;
+      bodyEl.value = bodyEl.value.slice(0, pos) + link + bodyEl.value.slice(bodyEl.selectionEnd);
+      bodyEl.selectionStart = bodyEl.selectionEnd = pos + link.length;
+      toast("画像を添付しました");
     });
   }
   // つながり・本文内リンクのクリックでノートを開く

@@ -35,7 +35,9 @@ fn scan(root: &Path) -> Vec<(String, PathBuf)> {
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            name != ".git" && name != "archive"
+            name != ".git"
+                && name != "archive"
+                && !(e.file_type().is_dir() && name.ends_with(".files"))
         })
         .flatten()
     {

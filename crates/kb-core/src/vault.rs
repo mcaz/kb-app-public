@@ -13,6 +13,10 @@ use crate::frontmatter::{Frontmatter, Generated, Note, now_iso, today};
 pub const NOTES_DIR: &str = "notes";
 const RESERVED: &[&str] = &["index.md", "log.md"];
 
+/// 添付(FR-C8)のサイズガード。GitHub 同期(単一ファイル 100MB 上限)を守る。
+pub const ATTACH_WARN_BYTES: u64 = 10 * 1024 * 1024;
+pub const ATTACH_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
 pub struct Vault {
     pub root: PathBuf,
 }
@@ -173,14 +177,104 @@ impl Vault {
         Ok(())
     }
 
-    /// 全ノートの (id, 絶対パス)。予約ファイル・.kb・.git は除外。
+    /// 添付ディレクトリ(FR-C8: `<id>.files/` サイドカー)。ノート=1ファイルの
+    /// OKF 互換を保ったまま、添付の「1ノート=1単位」管理はアプリが保証する。
+    pub fn attach_dir(&self, id: &str) -> PathBuf {
+        self.root.join(format!("{id}.files"))
+    }
+
+    /// 添付を追加。戻り値 = (保存名, サイズ警告)。
+    pub fn add_attachment(&self, id: &str, name: &str, data: &[u8]) -> Result<(String, Option<String>)> {
+        if !self.note_path(id).exists() {
+            bail!("ノートが無い: {id}");
+        }
+        let size = data.len() as u64;
+        if size > ATTACH_MAX_BYTES {
+            bail!("50MB を超えるファイルは添付できない({} MB)", size / 1024 / 1024);
+        }
+        let warning = (size > ATTACH_WARN_BYTES)
+            .then(|| format!("大きな添付({} MB)— 同期に時間がかかることがある", size / 1024 / 1024));
+        // パス潜り対策: ファイル名成分のみ使用
+        let base = Path::new(name)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let dir = self.attach_dir(id);
+        fs::create_dir_all(&dir)?;
+        let mut saved = base.clone();
+        let mut n = 1;
+        while dir.join(&saved).exists() {
+            n += 1;
+            let p = Path::new(&base);
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+            let ext = p.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+            saved = format!("{stem}-{n}{ext}");
+        }
+        fs::write(dir.join(&saved), data)?;
+        self.touch_note(id); // 添付変更を索引の mtime 検知に乗せる
+        let title = self.read_note(id).ok().and_then(|n| n.front.title).unwrap_or_else(|| id.into());
+        self.append_log(&format!("**Attachment**: [{title}](/{id}.md) に {saved} を添付。"))?;
+        self.commit(
+            &[&format!("{id}.files/{saved}"), &format!("{id}.md"), "log.md"],
+            &format!("note: attach {id} {saved}"),
+        )?;
+        crate::connect::auto_push(self);
+        Ok((saved, warning))
+    }
+
+    /// 添付一覧 (名前, バイト数)。
+    pub fn list_attachments(&self, id: &str) -> Vec<(String, u64)> {
+        let mut out = Vec::new();
+        if let Ok(entries) = fs::read_dir(self.attach_dir(id)) {
+            for e in entries.flatten() {
+                if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let size = e.metadata().map(|m| m.len()).unwrap_or(0);
+                    out.push((e.file_name().to_string_lossy().to_string(), size));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// 添付の削除(git 履歴には残る)。
+    pub fn remove_attachment(&self, id: &str, name: &str) -> Result<()> {
+        let base = Path::new(name).file_name().and_then(|f| f.to_str()).unwrap_or_default();
+        let path = self.attach_dir(id).join(base);
+        if !path.exists() {
+            bail!("添付が無い: {base}");
+        }
+        fs::remove_file(&path)?;
+        self.touch_note(id);
+        {
+            let repo = Repository::open(&self.root)?;
+            let mut index = repo.index()?;
+            index.remove_path(Path::new(&format!("{id}.files/{base}")))?;
+            index.write()?;
+        }
+        self.append_log(&format!("**Attachment**: /{id}.md の添付 {base} を削除。"))?;
+        self.commit(&[&format!("{id}.md"), "log.md"], &format!("note: detach {id} {base}"))?;
+        crate::connect::auto_push(self);
+        Ok(())
+    }
+
+    fn touch_note(&self, id: &str) {
+        if let Ok(f) = fs::File::options().write(true).open(self.note_path(id)) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+    }
+
+    /// 全ノートの (id, 絶対パス)。予約ファイル・.kb・.git・添付(*.files)は除外。
     pub fn list_note_files(&self) -> Vec<(String, PathBuf)> {
         let mut out = Vec::new();
         for entry in walkdir::WalkDir::new(&self.root)
             .into_iter()
             .filter_entry(|e| {
                 let name = e.file_name().to_string_lossy();
-                name != ".git" && name != ".kb"
+                name != ".git"
+                    && name != ".kb"
+                    && !(e.file_type().is_dir() && name.ends_with(".files"))
             })
             .flatten()
         {
@@ -300,6 +394,32 @@ mod tests {
         assert_eq!(slugify("Hello World!"), "hello-world");
         assert_eq!(slugify("認証 設計 メモ"), "認証-設計-メモ");
         assert_eq!(slugify("!!!"), "note");
+    }
+
+    #[test]
+    fn attachment_roundtrip_and_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault.new_human_note("添付テスト", "本文。", "human:o").unwrap();
+        // 追加(同名は連番)・一覧
+        let (a, warn) = vault.add_attachment(&id, "図.png", b"png-bytes").unwrap();
+        assert_eq!(a, "図.png");
+        assert!(warn.is_none());
+        let (b, _) = vault.add_attachment(&id, "図.png", b"png-bytes-2").unwrap();
+        assert_eq!(b, "図-2.png");
+        assert_eq!(vault.list_attachments(&id).len(), 2);
+        // パス潜りは basename に落ちる
+        let (c, _) = vault.add_attachment(&id, "../../etc/passwd", b"x").unwrap();
+        assert_eq!(c, "passwd");
+        // サイズ拒否
+        let big = vec![0u8; (ATTACH_MAX_BYTES + 1) as usize];
+        assert!(vault.add_attachment(&id, "big.bin", &big).is_err());
+        // 添付ディレクトリはノート走査に映らない(OKF 互換の保全)
+        std::fs::write(vault.attach_dir(&id).join("紛れ.md"), "---\ntype: Note\n---\nx").unwrap();
+        assert_eq!(vault.list_note_files().len(), 1);
+        // 削除(残り = 図.png・passwd・紛れ.md の3つ。紛れ.md は「添付」としては見える)
+        vault.remove_attachment(&id, "図-2.png").unwrap();
+        assert_eq!(vault.list_attachments(&id).len(), 3);
     }
 
     #[test]

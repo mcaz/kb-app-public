@@ -96,6 +96,8 @@ struct NoteView {
     tags: Vec<String>,
     generated_at: Option<String>,
     related: Vec<(String, Option<String>)>,
+    attachments: Vec<(String, u64)>,
+    vault_root: String,
 }
 
 #[tauri::command]
@@ -113,8 +115,27 @@ fn note_get(id: String) -> CmdResult<NoteView> {
         tags: note.front.tags.clone(),
         generated_at: note.front.generated.as_ref().map(|g| g.at.clone()),
         related: related_of(&conn, Some(&id)).unwrap_or_default(),
+        attachments: vault.list_attachments(&id),
+        vault_root: vault.root.display().to_string(),
         id,
     })
+}
+
+/// 添付の追加(FR-C8)。データは base64。戻り値 = (保存名, 警告)。
+#[tauri::command]
+fn attachment_add(id: String, name: String, data_base64: String) -> CmdResult<(String, Option<String>)> {
+    use base64::Engine;
+    let vault = default_vault()?;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(err)?;
+    vault.add_attachment(&id, &name, &data).map_err(err)
+}
+
+#[tauri::command]
+fn attachment_remove(id: String, name: String) -> CmdResult<()> {
+    let vault = default_vault()?;
+    vault.remove_attachment(&id, &name).map_err(err)
 }
 
 #[tauri::command]
@@ -271,6 +292,8 @@ pub fn run() {
             backup_now,
             backup_set_remote,
             embed_enable,
+            attachment_add,
+            attachment_remove,
             launch_ai,
         ])
         .run(tauri::generate_context!())

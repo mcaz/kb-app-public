@@ -117,11 +117,19 @@ pub fn embed_step(conn: &Connection) -> Option<String> {
 
 fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -> Result<()> {
     let f = &note.front;
+    // 添付ファイル名も検索対象に(「あの PDF どこだっけ」を引けるように。FR-C8)
+    let attach_names: String = vault
+        .list_attachments(id)
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
     let search_text = format!(
-        "{} {} {} {}",
+        "{} {} {} {} {}",
         f.title.as_deref().unwrap_or(""),
         f.description.as_deref().unwrap_or(""),
         f.tags.join(" "),
+        attach_names,
         note.body
     );
     conn.execute(

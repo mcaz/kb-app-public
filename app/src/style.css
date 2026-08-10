@@ -114,6 +114,21 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .prop-card .ex { color: var(--muted); font-size: 13px; margin: 5px 0 10px; }
 .prop-card .row { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* 添付(FR-C8) */
+.attach { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 12px; }
+.attach .chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; padding: 3px 8px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--chip);
+}
+.attach .chip i { font-style: normal; color: var(--muted); font-size: 11px; }
+.attach .chip-x {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 0 2px;
+}
+.attach .chip-x:hover { color: var(--danger); }
+.preview img { max-width: 100%; border-radius: 8px; }
+
 /* 繋ぐ */
 .connect {
   flex: 1; padding: 18px 20px; overflow-y: auto;

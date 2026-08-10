@@ -217,7 +217,16 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 })?,
             };
             let note = vault.read_note(&id)?;
-            Ok(format!("(note: {id})\n{}", note.to_file_string()?))
+            let attachments = vault.list_attachments(&id);
+            let attach_line = if attachments.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "(添付: {} — 本文からは /{id}.files/<名前> で参照)\n",
+                    attachments.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                )
+            };
+            Ok(format!("(note: {id})\n{attach_line}{}", note.to_file_string()?))
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;

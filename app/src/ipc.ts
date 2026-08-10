@@ -25,6 +25,8 @@ export interface NoteView {
   tags: string[];
   generated_at: string | null;
   related: [string, string | null][];
+  attachments: [string, number][];
+  vault_root: string;
 }
 
 export interface ConnectState {
@@ -50,16 +52,16 @@ const demoNotes: NoteView[] = [
     id: "notes/引っ越し手続きメモ", title: "引っ越し手続きメモ", status: "stable", origin: "human",
     tags: [], generated_at: "2026-08-10T05:00:00Z",
     body: "3月末までにやること:\n\n- 電気・ガス・水道の解約(2週間前まで)\n- 転出届 → 転入届(14日以内)\n- 住所変更: 免許・銀行・[確定申告の準備](/notes/確定申告の準備.md)にも影響\n",
-    related: [["notes/確定申告の準備", "確定申告の準備"]],
+    related: [["notes/確定申告の準備", "確定申告の準備"]], attachments: [["間取り図.png", 245760]], vault_root: "(demo)",
   },
   {
     id: "notes/確定申告の準備", title: "確定申告の準備", status: "stable", origin: "human",
-    tags: [], generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [],
+    tags: [], generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [], attachments: [], vault_root: "(demo)",
   },
   {
     id: "notes/沖縄旅行の持ち物リスト", title: "沖縄旅行の持ち物リスト", status: "draft", origin: "agent",
     tags: ["旅行"], generated_at: "2026-08-10T06:00:00Z",
-    body: "会話でまとめた持ち物:\n\n- 日焼け止め\n- モバイルバッテリー\n- 子どもの浮き輪\n", related: [],
+    body: "会話でまとめた持ち物:\n\n- 日焼け止め\n- モバイルバッテリー\n- 子どもの浮き輪\n", related: [], attachments: [], vault_root: "(demo)",
   },
 ];
 const demoHit = (n: NoteView): Hit => ({
@@ -108,7 +110,7 @@ export const api = {
   noteNew(title: string): Promise<string> {
     if (!inTauri) {
       const id = `notes/${title}`;
-      demoNotes.unshift({ id, title, status: "stable", origin: "human", tags: [], generated_at: new Date().toISOString(), body: "", related: [] });
+      demoNotes.unshift({ id, title, status: "stable", origin: "human", tags: [], generated_at: new Date().toISOString(), body: "", related: [], attachments: [], vault_root: "(demo)" });
       return demo(id);
     }
     return invoke("note_new", { title });
@@ -119,6 +121,22 @@ export const api = {
       return demo({ hits, related: [], degraded: [] });
     }
     return invoke("note_search", { query });
+  },
+  attachmentAdd(id: string, name: string, dataBase64: string): Promise<[string, string | null]> {
+    if (!inTauri) {
+      const n = demoNotes.find((x) => x.id === id);
+      n?.attachments.push([name, Math.round((dataBase64.length * 3) / 4)]);
+      return demo([name, null]);
+    }
+    return invoke("attachment_add", { id, name, dataBase64 });
+  },
+  attachmentRemove(id: string, name: string): Promise<void> {
+    if (!inTauri) {
+      const n = demoNotes.find((x) => x.id === id);
+      if (n) n.attachments = n.attachments.filter(([a]) => a !== name);
+      return demo(undefined);
+    }
+    return invoke("attachment_remove", { id, name });
   },
   draftConfirm(id: string): Promise<void> {
     if (!inTauri) {
