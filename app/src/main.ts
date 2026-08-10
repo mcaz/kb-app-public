@@ -1,6 +1,7 @@
 // kb-app 管理アプリ(v0.2 骨格)。画面はモック(docs/ui-draft.html)の A/B/C に対応。
 // ユーザーに見せる概念は「ノート・下書き・つながり・バックアップ」まで(原則7)。
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { marked } from "marked";
 import { api, type ConnectState, type HomeState, type NoteView } from "./ipc";
 
@@ -64,6 +65,51 @@ async function handleEditorPaste(e: ClipboardEvent, n: NoteView, bodyEl: HTMLTex
   } catch (err2) {
     toast(`ペースト添付に失敗: ${err2}`);
   }
+}
+
+// ファイルのドラッグ&ドロップ(FR-C8)。Tauri は DOM の drop にファイルを渡さず
+// 自前イベントで絶対パスをくれるため、そちらを購読して Rust 側で読み込む。
+// 編集中はカーソル位置にリンク挿入、閲覧中は添付のみ。
+if (inTauri) {
+  void getCurrentWebview().onDragDropEvent(async (event) => {
+    const kind = event.payload.type;
+    if (kind === "over" || kind === "enter") {
+      document.body.classList.add("dragover");
+      return;
+    }
+    document.body.classList.remove("dragover");
+    if (kind !== "drop") return;
+    const n = state.selected;
+    if (!n || state.view !== "notes") {
+      toast("ノートを開いてからドロップしてください");
+      return;
+    }
+    const paths: string[] = (event.payload as { paths: string[] }).paths ?? [];
+    const savedNames: string[] = [];
+    for (const p of paths) {
+      try {
+        const [saved, warning] = await api.attachmentAddFromPath(n.id, p);
+        if (warning) toast(`⚠ ${warning}`);
+        savedNames.push(saved);
+      } catch (e) {
+        toast(`添付に失敗: ${e}`);
+      }
+    }
+    if (!savedNames.length) return;
+    const bodyEl = document.getElementById("body") as HTMLTextAreaElement | null;
+    if (state.editing && bodyEl) {
+      const links = savedNames
+        .map((s) => (/(png|jpe?g|gif|webp|svg)$/i.test(s) ? `![](/${n.id}.files/${s})` : `[${s}](/${n.id}.files/${s})`))
+        .join("\n");
+      const pos = bodyEl.selectionStart;
+      bodyEl.value = bodyEl.value.slice(0, pos) + links + bodyEl.value.slice(bodyEl.selectionEnd);
+      bodyEl.selectionStart = bodyEl.selectionEnd = pos + links.length;
+    } else {
+      state.selected = await api.noteGet(n.id);
+      render();
+    }
+    toast(`添付しました(${savedNames.join(", ")})`);
+  });
 }
 
 // 閲覧モードでも、ノートを開いていればペーストで添付できる(リンク挿入はなし)

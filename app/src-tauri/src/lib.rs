@@ -138,6 +138,21 @@ fn attachment_remove(id: String, name: String) -> CmdResult<()> {
     vault.remove_attachment(&id, &name).map_err(err)
 }
 
+/// パス指定で添付(ドラッグ&ドロップ用)。Tauri はファイルドロップを DOM に渡さず
+/// 自前イベントでパスをくれるので、Rust 側で直接読む(base64 経由より大きいファイルに強い)。
+#[tauri::command]
+fn attachment_add_from_path(id: String, path: String) -> CmdResult<(String, Option<String>)> {
+    let p = std::path::Path::new(&path);
+    let size = std::fs::metadata(p).map_err(err)?.len();
+    if size > kb_core::vault::ATTACH_MAX_BYTES {
+        return Err(format!("50MB を超えるファイルは添付できない({} MB)", size / 1024 / 1024));
+    }
+    let data = std::fs::read(p).map_err(err)?;
+    let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("file");
+    let vault = default_vault()?;
+    vault.add_attachment(&id, name, &data).map_err(err)
+}
+
 /// クリップボードの画像を添付(ペーストのフォールバック)。
 /// WKWebView は DOM の paste イベントにクリップボード画像を渡さないため、
 /// Rust 側で NSPasteboard から直接読む(prompt 無効と同じ「実機でだけ落ちる」型の対策)。
@@ -321,6 +336,7 @@ pub fn run() {
             backup_set_remote,
             embed_enable,
             attachment_add,
+            attachment_add_from_path,
             attachment_remove,
             attachment_paste,
             launch_ai,

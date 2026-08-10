@@ -130,6 +130,10 @@ export const api = {
     }
     return invoke("attachment_add", { id, name, dataBase64 });
   },
+  attachmentAddFromPath(id: string, path: string): Promise<[string, string | null]> {
+    if (!inTauri) return demo([path.split("/").pop() ?? "file", null]);
+    return invoke("attachment_add_from_path", { id, path });
+  },
   attachmentPaste(id: string): Promise<[string, string | null] | null> {
     if (!inTauri) return demo(null); // ブラウザは DOM の paste 経路が動く
     return invoke("attachment_paste", { id });
