@@ -7,4 +7,4 @@
 - OKF 適合設計: [docs/okf-conformance.md](docs/okf-conformance.md)
 - 設計判断(ADR): [docs/adr/](docs/adr/) — 0001: コアは Rust、UI は TypeScript
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
-- 状態: v0.3 前半を実装(繋ぐ3カード・Desktop 接続代行・ランチャ最小・明示バックアップ。アプリ単体で MCP になる --mcp モード)。残: 段1 かしこい検索・GitHub OAuth
+- 状態: **kb-app へ一本化(2026-08-10 本人決定)** — 旧 KB から50本移植済み・Desktop は kb-app のみ・ソースは github.com/mcaz/kb-app(private)。残: 段1 かしこい検索・GitHub OAuth・Claude Code 側の旧サーバー引退

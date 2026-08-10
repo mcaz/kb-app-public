@@ -208,6 +208,15 @@ Grok / Gemini)を繋ぐと会話の裏に自分の知識が差し込まれ、会
   この穴を素通りするため、実機確認を省略しない)。受信箱(最小)もブラウザ検証済み。
   段0 の細かい使用感(エディタの物足りなさ・並び順・検索の当たり方)は運用継続で収集
 
+- 2026-08-10 **kb-app へ一本化(本人決定)**: 旧 KB(personal+team)の50本移植を受けて、
+  以後の正本は kb-app 側(~/kb/try → mcaz/private-vault 同期)。実施: Claude Desktop の
+  MCP を kb-app のみに(旧 vault / team-vault エントリを撤去、バックアップ
+  `.bak-20260810-consolidate`)、Claude Code の user スコープに kb-app を追加、
+  ソースを github.com/mcaz/kb-app(private)へ push。
+  **残**: Claude Code 側の旧 vault / team-vault サーバー引退(フック・ルーチン・
+  グローバル CLAUDE.md が旧 KB に依存しているため、kb-app 側の機能充足
+  — check / feedback / ルーチン相当 — と合わせて段階的に)
+
 ## 未決
 
 - 命名(kb-app は仮)
