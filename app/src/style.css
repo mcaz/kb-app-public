@@ -76,8 +76,18 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .list .items { overflow-y: auto; flex: 1; }
 .list .item { padding: 8px 14px; border-left: 2px solid transparent; cursor: pointer; }
 .list .item.on { background: var(--sel); border-left-color: var(--grow); }
-.list .item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.list .item .d { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .item .t {
+  font-weight: 600; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.list .item .d {
+  color: var(--muted); font-size: 11.5px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+
+/* 一覧幅のドラッグリサイズ */
+.splitter { width: 5px; flex: none; cursor: col-resize; background: transparent; }
+.splitter:hover, .splitter.active { background: var(--grow-soft); }
 .list .item .d .via { color: var(--prop); }
 .list .empty { color: var(--muted); padding: 8px 14px; font-size: 12.5px; }
 
@@ -102,6 +112,18 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .status-pill.draft { background: var(--prop-soft); color: var(--prop); }
 .status-pill.deprecated { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .status-pill.agent { background: var(--prop-soft); color: var(--prop); white-space: nowrap; }
+
+/* つながり(ノート末尾・Obsidian 風) */
+.related-section { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); max-width: 46em; }
+.related-section .head { font-size: 12px; color: var(--muted); letter-spacing: .08em; margin-bottom: 8px; }
+.related-section ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.related-section .rel {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--grow); font-size: 13px;
+}
+.related-section .rel:hover { background: var(--sel); }
+.related-section .rel .rid { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
 
 /* 受信箱 */
 .inbox { flex: 1; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }

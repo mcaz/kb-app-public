@@ -294,7 +294,27 @@ function renderNotes(pane: HTMLElement) {
       <div class="items" id="items"></div>
     </div>
   `);
-  pane.replaceChildren(list, el(`<div class="editor" id="editor"></div>`));
+  list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 230}px`;
+  const splitter = el(`<div class="splitter"></div>`);
+  splitter.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    splitter.classList.add("active");
+    const startX = (e as MouseEvent).clientX;
+    const startW = list.getBoundingClientRect().width;
+    const move = (ev: MouseEvent) => {
+      const w = Math.min(520, Math.max(160, startW + ev.clientX - startX));
+      list.style.width = `${w}px`;
+    };
+    const up = () => {
+      splitter.classList.remove("active");
+      localStorage.setItem("kb.listWidth", String(Math.round(list.getBoundingClientRect().width)));
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+  pane.replaceChildren(list, splitter, el(`<div class="editor" id="editor"></div>`));
 
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
   const showItems = (hits: { id: string; title: string | null; status: string; snippet: string; via: string }[], searchMode: boolean) => {
@@ -354,8 +374,14 @@ function renderEditor(box: HTMLElement) {
   const statusPill =
     n.status === "draft" ? `<span class="status-pill draft">下書き</span>`
     : n.status === "deprecated" ? `<span class="status-pill deprecated">しまってある</span>` : "";
-  const related = n.related.length
-    ? `つながり: ` + n.related.map(([id, t]) => `<span class="link" data-id="${esc(id)}">${esc(t ?? id)}</span>`).join("、")
+  // つながりはノート末尾のセクションで表示(Obsidian 風)
+  const relatedSection = n.related.length
+    ? `<div class="related-section"><div class="head">🔗 つながり</div><ul>${n.related
+        .map(
+          ([id, t]) =>
+            `<li><button class="rel" data-id="${esc(id)}">${esc(t ?? id)}<span class="rid">${esc(id)}</span></button></li>`
+        )
+        .join("")}</ul></div>`
     : "";
   const attachChips = n.attachments
     .map(
@@ -372,10 +398,11 @@ function renderEditor(box: HTMLElement) {
             ? `<span class="status-pill agent">🤖 AI のノート</span>${n.status !== "draft" ? `<button class="quiet small" id="make-mine">自分のメモにする</button>` : ""}`
             : `<button class="small" id="edit">編集</button><button class="quiet small" id="delete">削除</button>`}
         </div>
-        <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${related}</div>
+        <div class="meta">${fmtDate(n.generated_at)} ${statusPill}</div>
         <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
         <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
         <div class="preview">${marked.parse(n.body) as string}</div>
+        ${relatedSection}
       </div>
     `));
     const fileInput = box.querySelector<HTMLInputElement>("#attach-file")!;
@@ -448,7 +475,7 @@ function renderEditor(box: HTMLElement) {
     });
   }
   // つながり・本文内リンクのクリックでノートを開く
-  box.querySelectorAll<HTMLElement>(".link").forEach((a) =>
+  box.querySelectorAll<HTMLElement>(".rel").forEach((a) =>
     a.addEventListener("click", () => void openNote(a.dataset.id!)));
   box.querySelectorAll<HTMLAnchorElement>(".preview a").forEach((a) => {
     a.addEventListener("click", (e) => {
