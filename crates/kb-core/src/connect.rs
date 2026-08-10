@@ -159,6 +159,7 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
 
 /// いま push(随時 push の実体)。非 fast-forward なら pull --rebase して1回だけ再試行。
 pub fn push_now(vault: &Vault) -> Result<()> {
+    let _lock = sync_lock(vault)?;
     let _ = ensure_merge_config(vault);
     let out = git(vault, &["push", "-u", "origin", "HEAD"])?;
     if out.status.success() {
@@ -179,6 +180,19 @@ pub fn push_now(vault: &Vault) -> Result<()> {
     let e = format!("push 失敗(pull --rebase も失敗): {}", stderr_of(&pull));
     record_sync(vault, Some(&e));
     bail!(e);
+}
+
+/// 同期操作(pull/push)のプロセス間ロック。GUI・MCP・CLI が同時に git を叩くと
+/// FETCH_HEAD の競合で「Cannot rebase onto multiple branches」等の一過性エラーになる
+/// (実機で観測)。flock で直列化する — git 自体は取らない advisory lock なので、
+/// この3者(自アプリ群)の間でだけ効けばよい。
+fn sync_lock(vault: &Vault) -> Result<fs::File> {
+    use fs4::fs_std::FileExt;
+    let dir = vault.root.join(".kb");
+    fs::create_dir_all(&dir)?;
+    let f = fs::File::create(dir.join("sync.lock"))?;
+    f.lock_exclusive().context("同期ロック取得")?;
+    Ok(f)
 }
 
 fn has_origin(vault: &Vault) -> bool {
@@ -251,6 +265,7 @@ pub fn pull_if_stale(vault: &Vault) -> Option<String> {
 /// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復
 /// (merge=ours で相手側が勝った場合や、他デバイス追加分の反映)。
 pub fn pull_now(vault: &Vault) -> Result<()> {
+    let _lock = sync_lock(vault)?;
     let _ = ensure_merge_config(vault);
     let out = git(vault, &["pull", "--rebase", "--autostash"])?;
     if out.status.success() {
