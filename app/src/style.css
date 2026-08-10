@@ -71,6 +71,12 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .side .grow-btn { margin-top: auto; }
 
 .list { width: 230px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; font-size: 13px; display: flex; flex-direction: column; min-height: 0; }
+.list .tabs { display: flex; gap: 4px; margin: 0 10px 8px; }
+.list .tabs .tab {
+  flex: 1; font-size: 12px; padding: 4px 0; border-radius: 7px;
+  border: 1px solid transparent; background: transparent; color: var(--muted);
+}
+.list .tabs .tab.on { background: var(--sel); color: var(--ink); border-color: var(--line); }
 .list .searchbox { margin: 0 10px 10px; display: flex; }
 .list .searchbox input { flex: 1; font-size: 12.5px; }
 .list .items { overflow-y: auto; flex: 1; }

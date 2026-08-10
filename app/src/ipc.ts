@@ -12,6 +12,7 @@ export interface Hit {
   status: string;
   snippet: string;
   via: string;
+  origin: string | null;
 }
 export interface Stats { total: number; drafts: number; deprecated: number }
 export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; degraded: string[] }
@@ -66,6 +67,7 @@ const demoNotes: NoteView[] = [
 ];
 const demoHit = (n: NoteView): Hit => ({
   id: n.id, title: n.title, status: n.status, snippet: n.body.slice(0, 60).replace(/\n/g, " "), via: "recent",
+  origin: n.origin,
 });
 
 async function demo<T>(v: T): Promise<T> {

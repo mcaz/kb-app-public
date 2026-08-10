@@ -145,8 +145,10 @@ document.addEventListener("paste", (e) => {
 const app = document.getElementById("app")!;
 
 type View = "notes" | "inbox" | "connect";
+type Tab = "all" | "human" | "agent";
 const state = {
   view: "notes" as View,
+  tab: ((localStorage.getItem("kb.tab") as Tab) || "all") as Tab,
   vaultName: "わたしのノート",
   home: null as HomeState | null,
   selected: null as NoteView | null,
@@ -154,6 +156,12 @@ const state = {
   searching: false,
   query: "",
 };
+
+// タブによる所有フィルタ(origin 不明は human 扱い)
+function matchTab(origin: string | null): boolean {
+  if (state.tab === "all") return true;
+  return state.tab === "agent" ? origin === "agent" : origin !== "agent";
+}
 
 function el(html: string): HTMLElement {
   const t = document.createElement("template");
@@ -292,10 +300,22 @@ function renderNotes(pane: HTMLElement) {
   const items = state.searching ? null : home.notes;
   const list = el(`
     <div class="list">
+      <div class="tabs">
+        <button class="tab ${state.tab === "all" ? "on" : ""}" data-tab="all">すべて</button>
+        <button class="tab ${state.tab === "human" ? "on" : ""}" data-tab="human">📝 メモ</button>
+        <button class="tab ${state.tab === "agent" ? "on" : ""}" data-tab="agent">🤖 AI</button>
+      </div>
       <div class="searchbox"><input id="search" placeholder="🔍 ノートを検索" value="${esc(state.query)}" /></div>
       <div class="items" id="items"></div>
     </div>
   `);
+  list.querySelectorAll<HTMLButtonElement>(".tab").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.tab = b.dataset.tab as Tab;
+      localStorage.setItem("kb.tab", state.tab);
+      render();
+    })
+  );
   list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 230}px`;
   const splitter = el(`<div class="splitter"></div>`);
   splitter.addEventListener("mousedown", (e) => {
@@ -319,7 +339,8 @@ function renderNotes(pane: HTMLElement) {
   pane.replaceChildren(list, splitter, el(`<div class="editor" id="editor"></div>`));
 
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
-  const showItems = (hits: { id: string; title: string | null; status: string; snippet: string; via: string }[], searchMode: boolean) => {
+  const showItems = (allHits: { id: string; title: string | null; status: string; snippet: string; via: string; origin: string | null }[], searchMode: boolean) => {
+    const hits = allHits.filter((h) => matchTab(h.origin));
     itemsBox.replaceChildren();
     if (!hits.length) itemsBox.appendChild(el(`<div class="empty">${searchMode ? "見つかりませんでした" : "まだノートがありません。「＋ 新しいノート」から"}</div>`));
     for (const h of hits) {

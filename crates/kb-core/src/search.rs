@@ -18,6 +18,8 @@ pub struct Hit {
     /// 意味検索のコサイン距離(関連判定は RRF でなく生距離で — 旧 KB の実測教訓)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distance: Option<f32>,
+    /// 所有(原則9): "human" | "agent"
+    pub origin: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -83,7 +85,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     }
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
-                snippet(fts_main, 1, '[', ']', '…', 12)
+                snippet(fts_main, 1, '[', ']', '…', 12), n.origin
          FROM fts_main f JOIN notes n ON n.id = f.id
          WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
          ORDER BY rank LIMIT ?2",
@@ -96,6 +98,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
             snippet: r.get(3)?,
             via: "main",
             distance: None,
+            origin: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -114,7 +117,7 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
     let neighbors = embed::knn(conn, &qv, limit * 2)?;
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT title, status, coalesce(description, substr(body,1,80))
+        "SELECT title, status, coalesce(description, substr(body,1,80)), origin
          FROM notes WHERE id = ?1 AND status != 'deprecated'",
     )?;
     for (id, dist) in neighbors {
@@ -122,9 +125,14 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
             break; // 近い順なので以降は全て閾値外
         }
         let row = stmt.query_row([&id], |r| {
-            Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
         });
-        if let Ok((title, status, snippet)) = row {
+        if let Ok((title, status, snippet, origin)) = row {
             out.push((
                 Hit {
                     id,
@@ -133,6 +141,7 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                     snippet: snippet.replace('\n', " "),
                     via: "vec",
                     distance: Some(dist),
+                    origin,
                 },
                 dist,
             ));
@@ -193,7 +202,7 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
         }
     }
     let sql = format!(
-        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80) FROM notes n
+        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin FROM notes n
          WHERE n.status != 'deprecated' AND {} LIMIT {}",
         conds.join(" AND "),
         limit
@@ -207,6 +216,7 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
             snippet: r.get::<_, String>(3)?.replace('\n', " "),
             via: "rescue",
             distance: None,
+            origin: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -260,7 +270,7 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
 /// 直近ノート(generated_at 降順、なければ mtime 降順)。
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, status, coalesce(description, substr(body,1,80))
+        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin
          FROM notes WHERE status != 'deprecated'
          ORDER BY coalesce(generated_at, datetime(mtime,'unixepoch')) DESC LIMIT ?1",
     )?;
@@ -272,6 +282,7 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
             snippet: r.get::<_, String>(3)?.replace('\n', " "),
             via: "recent",
             distance: None,
+            origin: r.get(4)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
