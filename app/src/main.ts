@@ -15,10 +15,8 @@ const inTauri = "__TAURI_INTERNALS__" in window;
 const app = document.getElementById("app")!;
 
 type View = "home" | "notes" | "graph" | "connect";
-type Filter = { kind: "all" | "draft" | "care" };
 const state = {
   view: "notes" as View,
-  filter: { kind: "all" } as Filter,
   selectedTags: [] as string[],
   vaultName: "kb",
   home: null as HomeState | null,
@@ -221,32 +219,12 @@ function careIds(): Set<string> {
   return s;
 }
 
-function matchFilter(h: { status: string; tags: string[]; id: string }): boolean {
-  const f = state.filter;
-  const statusOk =
-    f.kind === "all" ? true
-    : f.kind === "draft" ? h.status === "draft"
-    : careIds().has(h.id);
-  return statusOk && state.selectedTags.every((t) => h.tags.includes(t));
+function matchFilter(h: { tags: string[] }): boolean {
+  return state.selectedTags.every((t) => h.tags.includes(t));
 }
 
 function renderNotes(pane: HTMLElement) {
   const home = state.home!;
-  const chips = el(`<div class="chips"></div>`);
-  const addChip = (label: string, active: boolean, onClick: () => void, klass = "") => {
-    const c = el(`<button class="chip-f ${klass} ${active ? "on" : ""}">${label}</button>`);
-    c.addEventListener("click", onClick);
-    chips.appendChild(c);
-  };
-  const f = state.filter;
-  addChip("すべて", f.kind === "all", () => { state.filter = { kind: "all" }; render(); });
-  if (home.drafts.length) {
-    addChip(`⏳ 下書き ${home.drafts.length}`, f.kind === "draft", () => { state.filter = { kind: "draft" }; render(); }, "amber");
-  }
-  if (home.care.length) {
-    addChip(`🔧 提案 ${home.care.length}`, f.kind === "care", () => { state.filter = { kind: "care" }; render(); }, "amber");
-  }
-
   const list = el(`
     <div class="list">
       <div class="searchbox"><input id="search" placeholder="🔍 ノートを検索" value="${esc(state.query)}" /></div>
@@ -254,7 +232,6 @@ function renderNotes(pane: HTMLElement) {
       <div class="items" id="items"></div>
     </div>
   `);
-  list.insertBefore(chips, list.firstChild);
   buildTagSelect(list.querySelector<HTMLElement>("#tag-select")!, home.tags.map(([t]) => t));
   list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 260}px`;
   const splitter = el(`<div class="splitter"></div>`);
@@ -558,8 +535,8 @@ function renderHome(pane: HTMLElement) {
       <div class="dash-warnings"></div>
       <div class="dash-tiles">
         <button class="tile" data-go="all"><div class="num">${s.total - s.deprecated}</div><div class="lbl">📄 ノート</div></button>
-        <button class="tile ${s.drafts ? "amber" : ""}" data-go="draft"><div class="num">${s.drafts}</div><div class="lbl">⏳ 下書き</div></button>
-        <button class="tile ${home.care.length ? "amber" : ""}" data-go="care"><div class="num">${home.care.length}</div><div class="lbl">🔧 提案</div></button>
+        <div class="tile ${s.drafts ? "amber" : ""}"><div class="num">${s.drafts}</div><div class="lbl">⏳ 下書き</div></div>
+        <div class="tile ${home.care.length ? "amber" : ""}"><div class="num">${home.care.length}</div><div class="lbl">🔧 提案</div></div>
         <div class="tile"><div class="num">${s.links}</div><div class="lbl">🔗 つながり</div></div>
         <div class="tile"><div class="num">${s.embed_enabled ? `${s.embedded}/${s.total}` : "オフ"}</div><div class="lbl">✨ かしこい検索</div></div>
         <div class="tile" id="tile-sync"><div class="num">…</div><div class="lbl">☁️ バックアップ</div></div>
@@ -579,7 +556,6 @@ function renderHome(pane: HTMLElement) {
   tiles.querySelectorAll<HTMLButtonElement>("[data-go]").forEach((t) =>
     t.addEventListener("click", () => {
       state.view = "notes";
-      state.filter = { kind: t.dataset.go as Filter["kind"] };
       state.selectedTags = [];
       render();
     })
