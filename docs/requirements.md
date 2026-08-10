@@ -216,6 +216,12 @@ Grok / Gemini)を繋ぐと会話の裏に自分の知識が差し込まれ、会
   **残**: Claude Code 側の旧 vault / team-vault サーバー引退(フック・ルーチン・
   グローバル CLAUDE.md が旧 KB に依存しているため、kb-app 側の機能充足
   — check / feedback / ルーチン相当 — と合わせて段階的に)
+- 2026-08-10 **司書運用を移植・旧ルーチン停止**: 前出しフック(kb search --any)・
+  グローバル CLAUDE.md(kb-app 前提・大減量)・kb-researcher エージェントへ切替
+  (integrations/claude-code/)。新フックの実働は本人確認済み。旧ルーチン6本
+  (scout-law / scout-tech / scout-interests / follow-up / weekly-review / maintenance)は
+  スケジューラ上で **enabled: false に**(削除せず — kb-app 側にお手入れ FR-C7 と
+  収集ルーチンを実装した時点で作り直して再開)。旧 KB への書き込み経路はこれで全停止
 
 ## 未決
 
