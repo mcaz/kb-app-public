@@ -107,6 +107,17 @@ impl Vault {
         Ok(id)
     }
 
+    /// アプリ契約1(docs/contract.md): タグは1〜4個。
+    fn validate_tags(tags: &[String]) -> Result<()> {
+        if tags.is_empty() || tags.len() > 4 {
+            bail!("契約: ノートにはタグを1〜4個付ける(いまは {} 個)。既存の語彙に揃えること", tags.len());
+        }
+        if let Some(bad) = tags.iter().find(|t| t.trim().is_empty() || t.chars().count() > 20 || t.contains(char::is_whitespace)) {
+            bail!("契約: タグは空白を含まない20文字以内の語(不正: 「{bad}」)");
+        }
+        Ok(())
+    }
+
     /// AI からの下書き起票(origin: agent、status: draft)。FR-C4 propose。
     pub fn propose(
         &self,
@@ -116,6 +127,7 @@ impl Vault {
         tags: &[String],
         client: &str,
     ) -> Result<String> {
+        Self::validate_tags(tags)?;
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("agent".into());
         front.status = Some(crate::frontmatter::STATUS_DRAFT.into());
@@ -210,6 +222,7 @@ impl Vault {
             note.front.description = Some(d.to_string());
         }
         if let Some(ts) = tags {
+            Self::validate_tags(ts)?; // 契約1: タグの全消し・過多は不可
             note.front.tags = ts.to_vec();
         }
         if let Some(b) = body {
@@ -525,7 +538,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let mine = vault.new_human_note("俺のメモ", "本文", "human:owner").unwrap();
-        let ai = vault.propose("AI の知見", "本文", None, &[], "claude/x").unwrap();
+        let ai = vault.propose("AI の知見", "本文", None, &["dev".into()], "claude/x").unwrap();
         vault.confirm(&ai, "human:owner").unwrap();
 
         // human ノート: 人間は可・AI は不可
@@ -544,7 +557,7 @@ mod tests {
         assert!(vault.agent_update_note(&ai, None, Some("もう触れない"), None, None, "claude/x").is_err());
 
         // AI は自分のノートを消せる
-        let ai2 = vault.propose("捨てる知見", "本文", None, &[], "claude/x").unwrap();
+        let ai2 = vault.propose("捨てる知見", "本文", None, &["dev".into()], "claude/x").unwrap();
         assert!(vault.agent_delete_note(&ai2, "claude/x").is_ok());
     }
 
@@ -553,7 +566,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let id = vault
-            .propose("テスト起票", "本文です。", Some("説明"), &[], "test-client/model")
+            .propose("テスト起票", "本文です。", Some("説明"), &["dev".into()], "test-client/model")
             .unwrap();
         let note = vault.read_note(&id).unwrap();
         assert_eq!(note.front.effective_status(), "draft");

@@ -100,6 +100,26 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         }
     }
 
+    // ②' タグ無し(契約1違反状態の可視化 — 修復は Claude への依頼で)
+    let untagged: Vec<(String, String)> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, coalesce(title, id) FROM notes
+             WHERE status != 'deprecated' AND (tags IS NULL OR tags = '')",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for (id, title) in untagged {
+        if added >= budget {
+            break;
+        }
+        let key = format!("untagged:{id}");
+        let detail = format!("「{title}」にタグがありません(契約: 1〜4個)。Claude に整理を頼めます。");
+        if insert_new(conn, &key, "untagged", &id, "", &detail)? {
+            added += 1;
+        }
+    }
+
     // ② リンク切れ(未執筆の知識の気づき。エラーではない — OKF §6.1)
     let broken: Vec<(String, String)> = {
         let mut stmt = conn.prepare_cached(
@@ -200,15 +220,18 @@ mod tests {
             .unwrap();
         let conn = open_db(&vault).unwrap();
         sync(&vault, &conn).unwrap();
+        // broken(リンク切れ)+ untagged(タグ無し=契約1違反状態)の2件
         let added = detect(&conn, &vault).unwrap();
-        assert_eq!(added, 1);
+        assert_eq!(added, 2);
         let open = list_open(&conn).unwrap();
-        assert_eq!(open.len(), 1);
-        assert_eq!(open[0].kind, "broken");
+        let kinds: Vec<&str> = open.iter().map(|p| p.kind.as_str()).collect();
+        assert!(kinds.contains(&"broken") && kinds.contains(&"untagged"), "{kinds:?}");
         // 再検知しても増えない
         assert_eq!(detect(&conn, &vault).unwrap(), 0);
         // 「このまま」→ 消えて、二度と出ない
-        dismiss(&conn, &open[0].key).unwrap();
+        for p in &open {
+            dismiss(&conn, &p.key).unwrap();
+        }
         assert!(list_open(&conn).unwrap().is_empty());
         assert_eq!(detect(&conn, &vault).unwrap(), 0);
     }
@@ -218,7 +241,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let a = vault.new_human_note("読書メモ 昆虫", "昆虫の本のメモ。", "human:o").unwrap();
-        let b = vault.propose("昆虫の本まとめ", "AI がまとめた昆虫の本。", None, &[], "c/x").unwrap();
+        let b = vault.propose("昆虫の本まとめ", "AI がまとめた昆虫の本。", None, &["本".into()], "c/x").unwrap();
         let conn = open_db(&vault).unwrap();
         sync(&vault, &conn).unwrap();
         init_schema(&conn).unwrap();

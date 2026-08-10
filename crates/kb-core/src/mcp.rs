@@ -24,6 +24,14 @@ const INSTRUCTIONS: &str = "\
 このサーバーはユーザーの個人ナレッジベース(kb-app)への取次口。ここはユーザーの外部記憶で、\
 会話を通じて育つ。あなたの仕事は「引く・育てる」の両輪を回すこと。\n\
 \n\
+■ このアプリの契約(不変 — 機構で強制される。正本はアプリの docs/contract.md)\n\
+- すべてのノートはタグを1〜4個持つ(propose で必須、update で全消し不可)。タグが\
+このアプリの一次の整理手段\n\
+- 新規は draft から。確定・却下は人間のみ(あなたは確定できない)\n\
+- ノートの形式はアプリが管理 — frontmatter を自分で書かない\n\
+これに対し「どのタグをどう使うか」等の運用は可変で、ユーザーと会話で合意して\
+「タグ運用」ノートに記録して育てる(下記)。契約と運用を混同しない。\n\
+\n\
 ■ 引く(会話の前半で)\n\
 - ユーザー個人に関する話題(嗜好・判断基準・過去の決定・進行中の作業・過去に調べたこと・\
 固有名詞)に触れる前に、推測や一般論で答えず必ず search を引く\n\
@@ -169,8 +177,8 @@ fn tool_definitions() -> Value {
                 "title": {"type": "string", "description": "内容が一意に分かる具体的なタイトル"},
                 "body": {"type": "string", "description": "本文(Markdown・自己完結)"},
                 "description": {"type": "string", "description": "一文要約(一覧・検索スニペットに使われる)"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "分類タグ 2〜4個(既存タグに揃える)"}
-            }, "required": ["title", "body"]}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "分類タグ 1〜4個(契約で必須。既存タグに揃える)"}
+            }, "required": ["title", "body", "tags"]}
         },
         {
             "name": "update",
