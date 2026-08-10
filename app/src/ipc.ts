@@ -14,7 +14,11 @@ export interface Hit {
   via: string;
   origin: string | null;
 }
-export interface Stats { total: number; drafts: number; deprecated: number }
+export interface Stats {
+  total: number; drafts: number; deprecated: number;
+  memos: number; agent_notes: number; links: number;
+  embed_enabled: boolean; embedded: number;
+}
 export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; degraded: string[] }
 export interface SearchOutcome { hits: Hit[]; related: [string, string | null][]; degraded: string[] }
 export interface NoteView {
@@ -91,7 +95,12 @@ export const api = {
     if (!inTauri) {
       const drafts = demoNotes.filter((n) => n.status === "draft").map(demoHit);
       return demo({
-        stats: { total: demoNotes.length, drafts: drafts.length, deprecated: 0 },
+        stats: {
+          total: demoNotes.length, drafts: drafts.length, deprecated: 0,
+          memos: demoNotes.filter((n) => n.origin !== "agent").length,
+          agent_notes: demoNotes.filter((n) => n.origin === "agent").length,
+          links: 2, embed_enabled: true, embedded: demoNotes.length,
+        },
         notes: demoNotes.map(demoHit), drafts, degraded: [],
       });
     }

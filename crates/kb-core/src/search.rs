@@ -241,6 +241,11 @@ pub struct Stats {
     pub total: usize,
     pub drafts: usize,
     pub deprecated: usize,
+    /// メモ(origin: human)/ AI ノート(origin: agent)の内訳(deprecated 除く)
+    pub memos: usize,
+    pub agent_notes: usize,
+    /// つながり(リンク)の本数
+    pub links: usize,
     /// かしこい検索(段1)が導入済みか
     pub embed_enabled: bool,
     /// 現行スタンプで埋め込み済みのノート数(欠損の可視化 — 沈黙停止の教訓)
@@ -262,6 +267,13 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
         total: count("SELECT count(*) FROM notes")?,
         drafts: count("SELECT count(*) FROM notes WHERE status='draft'")?,
         deprecated: count("SELECT count(*) FROM notes WHERE status='deprecated'")?,
+        memos: count(
+            "SELECT count(*) FROM notes WHERE status != 'deprecated' AND coalesce(origin,'human') != 'agent'",
+        )?,
+        agent_notes: count(
+            "SELECT count(*) FROM notes WHERE status != 'deprecated' AND origin = 'agent'",
+        )?,
+        links: count("SELECT count(*) FROM links")?,
         embed_enabled: crate::embed::model_installed(),
         embedded,
     })

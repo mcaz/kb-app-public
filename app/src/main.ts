@@ -144,7 +144,7 @@ document.addEventListener("paste", (e) => {
 
 const app = document.getElementById("app")!;
 
-type View = "notes" | "inbox" | "connect";
+type View = "home" | "notes" | "inbox" | "connect";
 type Tab = "all" | "human" | "agent";
 const state = {
   view: "notes" as View,
@@ -230,6 +230,7 @@ function render() {
       <div class="app">
         <nav class="side">
           <div class="nb">${esc(state.vaultName)}</div>
+          <button class="nav ${state.view === "home" ? "on" : ""}" id="nav-home"><span>🏠 ホーム</span></button>
           <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span></button>
           <button class="nav ${state.view === "inbox" ? "on" : ""}" id="nav-inbox"><span>📥 受信箱</span>${home.drafts.length ? `<span class="badge">${home.drafts.length}</span>` : ""}</button>
           <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
@@ -240,6 +241,7 @@ function render() {
     </div>
   `);
   app.replaceChildren(shell);
+  document.getElementById("nav-home")!.addEventListener("click", () => { state.view = "home"; render(); });
   document.getElementById("nav-notes")!.addEventListener("click", () => { state.view = "notes"; render(); });
   document.getElementById("nav-inbox")!.addEventListener("click", () => { state.view = "inbox"; render(); });
   document.getElementById("nav-connect")!.addEventListener("click", () => { state.view = "connect"; render(); });
@@ -248,7 +250,8 @@ function render() {
   pane.style.display = "flex";
   pane.style.flex = "1";
   pane.style.minWidth = "0";
-  if (state.view === "notes") renderNotes(pane);
+  if (state.view === "home") renderHome(pane);
+  else if (state.view === "notes") renderNotes(pane);
   else if (state.view === "inbox") renderInbox(pane);
   else renderConnect(pane);
 }
@@ -594,6 +597,85 @@ async function saveNote() {
   state.editing = false;
   render();
   toast("保存しました");
+}
+
+// ---- ホーム: ダッシュボード(FR-A2 — 健全性と全体像を一望) ----
+function renderHome(pane: HTMLElement) {
+  const home = state.home!;
+  const s = home.stats;
+  const box = el(`<div class="dash"></div>`);
+  pane.replaceChildren(box);
+
+  // 健全性の警告(劣化はここに必ず出す — 原則4)
+  const warnings = [...home.degraded];
+  const tiles = el(`
+    <div>
+      <div class="dash-warnings"></div>
+      <div class="dash-tiles">
+        <button class="tile" data-go="notes-human"><div class="num">${s.memos}</div><div class="lbl">📝 メモ</div></button>
+        <button class="tile" data-go="notes-agent"><div class="num">${s.agent_notes}</div><div class="lbl">🤖 AI のノート</div></button>
+        <button class="tile ${s.drafts ? "amber" : ""}" data-go="inbox"><div class="num">${s.drafts}</div><div class="lbl">📥 受信箱</div></button>
+        <div class="tile"><div class="num">${s.links}</div><div class="lbl">🔗 つながり</div></div>
+        <div class="tile"><div class="num">${s.embed_enabled ? `${s.embedded}/${s.total}` : "オフ"}</div><div class="lbl">✨ かしこい検索</div></div>
+        <div class="tile" id="tile-sync"><div class="num">…</div><div class="lbl">☁️ バックアップ</div></div>
+      </div>
+      <div class="dash-head">最近のノート</div>
+      <div class="dash-recent"></div>
+    </div>
+  `);
+  box.appendChild(tiles);
+
+  const warnBox = tiles.querySelector<HTMLElement>(".dash-warnings")!;
+  const renderWarnings = () => {
+    warnBox.replaceChildren(
+      ...warnings.map((w) => el(`<div class="dash-warn">⚠ ${esc(w)}</div>`))
+    );
+  };
+  renderWarnings();
+
+  tiles.querySelectorAll<HTMLButtonElement>("[data-go]").forEach((t) =>
+    t.addEventListener("click", () => {
+      const go = t.dataset.go!;
+      if (go === "inbox") state.view = "inbox";
+      else {
+        state.view = "notes";
+        state.tab = go === "notes-agent" ? "agent" : "human";
+        localStorage.setItem("kb.tab", state.tab);
+      }
+      render();
+    })
+  );
+
+  const recentBox = tiles.querySelector<HTMLElement>(".dash-recent")!;
+  for (const h of home.notes.slice(0, 6)) {
+    const row = el(`
+      <button class="dash-note">
+        <span class="t">${esc(h.title ?? h.id)}${h.status === "draft" ? " ✎" : ""}</span>
+        <span class="d">${esc(h.snippet.slice(0, 60))}</span>
+      </button>
+    `);
+    row.addEventListener("click", async () => {
+      state.view = "notes";
+      state.selected = await api.noteGet(h.id);
+      state.editing = false;
+      render();
+    });
+    recentBox.appendChild(row);
+  }
+
+  // 同期状態は connect_state から非同期で補完
+  void api.connectState().then((c) => {
+    const tile = tiles.querySelector<HTMLElement>("#tile-sync")!;
+    const num = tile.querySelector<HTMLElement>(".num")!;
+    if (!c.backup.remote) num.textContent = "未設定";
+    else if (c.backup.pending > 0) num.textContent = `残 ${c.backup.pending}`;
+    else num.textContent = "✓";
+    if (c.sync_error) {
+      warnings.push(`同期エラー: ${c.sync_error}`);
+      renderWarnings();
+      tile.classList.add("amber");
+    }
+  });
 }
 
 // ---- 画面D: 繋ぐ(3カード、全部任意) ----
