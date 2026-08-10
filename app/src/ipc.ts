@@ -31,7 +31,7 @@ export interface ConnectState {
   desktop: "not_found" | "not_connected" | "connected";
   backup: { remote: string | null; pending: number };
   sync_error: string | null;
-  smart_search: string;
+  smart_search: { state: "not_installed" | "downloading" | "enabled"; embedded: number; total: number };
 }
 
 const inTauri = "__TAURI_INTERNALS__" in window;
@@ -41,7 +41,7 @@ const demoConnect: ConnectState = {
   desktop: (new URLSearchParams(location.search).get("connect") as ConnectState["desktop"]) || "not_connected",
   backup: { remote: null, pending: 4 },
   sync_error: null,
-  smart_search: "coming",
+  smart_search: { state: "not_installed", embedded: 0, total: 3 },
 };
 
 // ---- ブラウザプレビュー用のデモデータ(Tauri 外のみ) ----
@@ -135,6 +135,13 @@ export const api = {
   connectDesktop(): Promise<void> {
     if (!inTauri) { demoConnect.desktop = "connected"; return demo(undefined); }
     return invoke("connect_desktop");
+  },
+  embedEnable(): Promise<void> {
+    if (!inTauri) {
+      demoConnect.smart_search = { state: "enabled", embedded: 3, total: 3 };
+      return demo(undefined);
+    }
+    return invoke("embed_enable");
   },
   backupSetRemote(url: string): Promise<void> {
     if (!inTauri) { demoConnect.backup.remote = url; return demo(undefined); }

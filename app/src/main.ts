@@ -300,7 +300,7 @@ function renderConnect(pane: HTMLElement) {
   void api.connectState().then((c: ConnectState) => {
     box.replaceChildren(
       connectCardAi(c),
-      connectCardSearch(),
+      connectCardSearch(c),
       connectCardBackup(c),
     );
   });
@@ -332,15 +332,33 @@ function connectCardAi(c: ConnectState): HTMLElement {
   return card;
 }
 
-function connectCardSearch(): HTMLElement {
-  return el(`
+function connectCardSearch(c: ConnectState): HTMLElement {
+  const s = c.smart_search;
+  const state_ =
+    s.state === "enabled"
+      ? `<span class="state ok">有効(${s.embedded}/${s.total} 件)</span>`
+      : s.state === "downloading"
+        ? `<span class="state off">ダウンロード中…</span>`
+        : `<span class="state off">オフ</span>`;
+  const card = el(`
     <div class="con-card">
       <div class="name">✨ かしこい検索</div>
-      <div class="desc">言い回しが違っても意味で見つかる検索。オンにするだけで、外部送信はありません。</div>
-      <span class="state off">準備中</span>
-      <div class="row"></div>
+      <div class="desc">言い回しが違っても意味で見つかる検索。オンにするだけで、外部送信はありません(初回のみ検索用データ 約560MB を取得)。</div>
+      ${state_}
+      <div class="row">${s.state === "not_installed" ? `<button class="primary small" id="con-emb">オンにする</button>` : ""}</div>
     </div>
   `);
+  card.querySelector("#con-emb")?.addEventListener("click", async () => {
+    toast("かしこい検索を準備中…(数分かかります)");
+    try {
+      await api.embedEnable();
+      toast("かしこい検索が有効になりました");
+      render();
+    } catch (e) {
+      toast(`${e}`);
+    }
+  });
+  return card;
 }
 
 function connectCardBackup(c: ConnectState): HTMLElement {

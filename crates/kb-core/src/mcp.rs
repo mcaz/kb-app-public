@@ -141,7 +141,7 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
     let conn = open_db(vault)?;
     // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
     let sync_note = match sync(vault, &conn) {
-        Ok(_) => pull_note,
+        Ok(_) => pull_note.or_else(|| crate::index::embed_step(&conn)),
         Err(e) => Some(format!("索引の更新に失敗(結果が古い可能性): {e}")),
     };
     match name {

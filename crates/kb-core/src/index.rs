@@ -12,7 +12,7 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "1";
+const SCHEMA_VERSION: &str = "2";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let path = vault.index_db_path();
@@ -48,6 +48,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
             mtime INTEGER, body TEXT
         );
         CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
+        DROP TABLE IF EXISTS note_vecs;
+        CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
         CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
         CREATE VIRTUAL TABLE fts_tri  USING fts5(id UNINDEXED, text, tokenize='trigram');
         "
@@ -94,9 +96,23 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
         conn.execute("DELETE FROM links WHERE src=?1", [gone])?;
         conn.execute("DELETE FROM fts_main WHERE id=?1", [gone])?;
         conn.execute("DELETE FROM fts_tri WHERE id=?1", [gone])?;
+        conn.execute("DELETE FROM note_vecs WHERE id=?1", [gone])?;
         updated += 1;
     }
     Ok(updated)
+}
+
+/// sync の後段: 未埋め込みノートの追い付き(1回あたり少数に制限し、残は劣化情報で見せる)。
+/// モデル未導入なら None(段0 の正常形 — 劣化ではない)。
+pub fn embed_step(conn: &Connection) -> Option<String> {
+    if !crate::embed::model_installed() {
+        return None;
+    }
+    match crate::embed::embed_pending(conn, 5) {
+        Ok(0) => None,
+        Ok(rest) => Some(format!("かしこい検索の索引が追い付き中(残り {rest} 件)")),
+        Err(e) => Some(format!("かしこい検索が一時停止(全文検索のみ): {e}")),
+    }
 }
 
 fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -> Result<()> {
@@ -125,6 +141,7 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
     )?;
     conn.execute("DELETE FROM fts_main WHERE id=?1", [id])?;
     conn.execute("DELETE FROM fts_tri WHERE id=?1", [id])?;
+    conn.execute("DELETE FROM note_vecs WHERE id=?1", [id])?; // 変更ノートは再埋め込み対象へ
     conn.execute(
         "INSERT INTO fts_main(id, text) VALUES(?1, ?2)",
         rusqlite::params![id, wakati(&search_text)],

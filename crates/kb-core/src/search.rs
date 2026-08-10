@@ -13,8 +13,11 @@ pub struct Hit {
     pub title: Option<String>,
     pub status: String,
     pub snippet: String,
-    /// "main"(分かち書き bm25)か "rescue"(trigram/LIKE)か
+    /// "main"(分かち書き bm25)/ "vec"(意味検索)/ "rescue"(trigram/LIKE)
     pub via: &'static str,
+    /// 意味検索のコサイン距離(関連判定は RRF でなく生距離で — 旧 KB の実測教訓)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f32>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -40,6 +43,14 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
     match main_search(conn, query, limit, any) {
         Ok(main_hits) => hits.extend(main_hits),
         Err(e) => degraded.push(format!("主索引が利用できない: {e}")),
+    }
+
+    // 意味検索(段1)。モデル未導入なら黙って全文のみ(段0 の正常形)。
+    // 導入済みで失敗した場合は必ず劣化として見せる(沈黙停止の教訓)。
+    match vec_search(conn, query, limit) {
+        Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
+        Ok(None) => {}
+        Err(e) => degraded.push(format!("かしこい検索が一時停止(全文検索のみ): {e}")),
     }
 
     // レスキュー経路: 主経路で拾えない部分語・未知語形(常に実行し、差分だけ足す)
@@ -84,9 +95,76 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
             status: r.get(2)?,
             snippet: r.get(3)?,
             via: "main",
+            distance: None,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// 意味検索(埋め込み KNN)。モデル未導入なら Ok(None)。
+/// 関連判定は生コサイン距離 ≤ RELATED_DISTANCE(RRF スコアでは判定しない)。
+fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec<(Hit, f32)>>> {
+    use crate::embed;
+    match embed::embedder() {
+        None => return Ok(None),
+        Some(Err(e)) => anyhow::bail!("{e}"),
+        Some(Ok(_)) => {}
+    }
+    let qv = embed::embed_text(query)?;
+    let neighbors = embed::knn(conn, &qv, limit * 2)?;
+    let mut out = Vec::new();
+    let mut stmt = conn.prepare_cached(
+        "SELECT title, status, coalesce(description, substr(body,1,80)) FROM notes WHERE id = ?1",
+    )?;
+    for (id, dist) in neighbors {
+        if dist > embed::RELATED_DISTANCE {
+            break; // 近い順なので以降は全て閾値外
+        }
+        let row = stmt.query_row([&id], |r| {
+            Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        });
+        if let Ok((title, status, snippet)) = row {
+            out.push((
+                Hit {
+                    id,
+                    title,
+                    status,
+                    snippet: snippet.replace('\n', " "),
+                    via: "vec",
+                    distance: Some(dist),
+                },
+                dist,
+            ));
+        }
+    }
+    Ok(Some(out))
+}
+
+/// FTS(bm25 順)と意味検索(距離順)を RRF で融合。距離は Hit に残す。
+fn fuse(fts: Vec<Hit>, vec_hits: Vec<(Hit, f32)>, limit: usize) -> Vec<Hit> {
+    let rrf = |rank: usize| 1.0f32 / (60.0 + rank as f32);
+    let mut score: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut byid: std::collections::HashMap<String, Hit> = std::collections::HashMap::new();
+    for (i, h) in fts.into_iter().enumerate() {
+        *score.entry(h.id.clone()).or_default() += rrf(i);
+        byid.insert(h.id.clone(), h);
+    }
+    for (j, (h, dist)) in vec_hits.into_iter().enumerate() {
+        *score.entry(h.id.clone()).or_default() += rrf(j);
+        byid.entry(h.id.clone())
+            .and_modify(|e| {
+                e.distance = Some(dist);
+                e.via = "both";
+            })
+            .or_insert(h);
+    }
+    let mut ranked: Vec<(String, f32)> = score.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    ranked
+        .into_iter()
+        .take(limit)
+        .filter_map(|(id, _)| byid.remove(&id))
+        .collect()
 }
 
 /// trigram MATCH(3文字以上の語)+ LIKE(2文字以下の語)の AND。
@@ -126,6 +204,7 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
             status: r.get(2)?,
             snippet: r.get::<_, String>(3)?.replace('\n', " "),
             via: "rescue",
+            distance: None,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -150,16 +229,29 @@ pub struct Stats {
     pub total: usize,
     pub drafts: usize,
     pub deprecated: usize,
+    /// かしこい検索(段1)が導入済みか
+    pub embed_enabled: bool,
+    /// 現行スタンプで埋め込み済みのノート数(欠損の可視化 — 沈黙停止の教訓)
+    pub embedded: usize,
 }
 
 pub fn stats(conn: &Connection) -> Result<Stats> {
     let count = |sql: &str| -> Result<usize> {
         Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as usize)
     };
+    let embedded = conn
+        .query_row(
+            "SELECT count(*) FROM note_vecs WHERE stamp = ?1",
+            [crate::embed::EMBED_STAMP],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0) as usize;
     Ok(Stats {
         total: count("SELECT count(*) FROM notes")?,
         drafts: count("SELECT count(*) FROM notes WHERE status='draft'")?,
         deprecated: count("SELECT count(*) FROM notes WHERE status='deprecated'")?,
+        embed_enabled: crate::embed::model_installed(),
+        embedded,
     })
 }
 
@@ -176,6 +268,7 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
             status: r.get(2)?,
             snippet: r.get::<_, String>(3)?.replace('\n', " "),
             via: "recent",
+            distance: None,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

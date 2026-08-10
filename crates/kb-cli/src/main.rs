@@ -75,12 +75,25 @@ enum Command {
     },
     /// 索引の増分 sync
     Sync,
+    /// かしこい検索(段1: 埋め込み内蔵)の管理
+    Embed {
+        #[command(subcommand)]
+        command: EmbedCommand,
+    },
     /// MCP サーバーを stdio で起動
     Mcp {
         /// generated.by に刻むクライアント actor(例: claude-desktop/claude-fable-5)
         #[arg(long, default_value = "mcp-client/unknown")]
         client: String,
     },
+}
+
+#[derive(Subcommand)]
+enum EmbedCommand {
+    /// モデル(bge-m3 int8、約560MB)を導入し、全ノートを埋め込む
+    Enable,
+    /// 導入状態とカバレッジ
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -208,6 +221,37 @@ fn main() -> Result<()> {
             let conn = open_db(&vault)?;
             let n = sync(&vault, &conn)?;
             println!("synced: {n} note(s) updated");
+        }
+        Command::Embed { command } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            let conn = open_db(&vault)?;
+            sync(&vault, &conn)?;
+            match command {
+                EmbedCommand::Enable => {
+                    if !kb_core::embed::model_installed() {
+                        println!("モデルをダウンロードします(約560MB)…");
+                        kb_core::embed::install_model()?;
+                    }
+                    println!("埋め込みを開始…");
+                    loop {
+                        let rest = kb_core::embed::embed_pending(&conn, 10)?;
+                        println!("  残り {rest} 件");
+                        if rest == 0 {
+                            break;
+                        }
+                    }
+                    println!("かしこい検索が有効になりました");
+                }
+                EmbedCommand::Status => {
+                    let s = kb_core::search::stats(&conn)?;
+                    println!(
+                        "モデル: {} / 埋め込み済み: {}/{}",
+                        if s.embed_enabled { "導入済み" } else { "未導入" },
+                        s.embedded,
+                        s.total
+                    );
+                }
+            }
         }
         Command::Mcp { client } => {
             let vault = open_vault(cli.vault.as_deref())?;

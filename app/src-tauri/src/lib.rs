@@ -23,7 +23,10 @@ fn default_vault() -> CmdResult<Vault> {
 fn synced_conn(vault: &Vault) -> CmdResult<(kb_core::rusqlite::Connection, Option<String>)> {
     let conn = open_db(vault).map_err(err)?;
     // 索引更新の失敗は fail-open(劣化情報として画面に出す — 原則4)
-    let degraded = sync(vault, &conn).err().map(|e| format!("索引の更新に失敗: {e}"));
+    let degraded = match sync(vault, &conn) {
+        Ok(_) => kb_core::index::embed_step(&conn),
+        Err(e) => Some(format!("索引の更新に失敗: {e}")),
+    };
     Ok((conn, degraded))
 }
 
@@ -148,12 +151,18 @@ fn draft_reject(id: String) -> CmdResult<()> {
 }
 
 #[derive(Serialize)]
+struct SmartSearchState {
+    state: &'static str, // "not_installed" | "downloading" | "enabled"
+    embedded: usize,
+    total: usize,
+}
+
+#[derive(Serialize)]
 struct ConnectState {
     desktop: kb_core::connect::DesktopStatus,
     backup: kb_core::connect::BackupStatus,
     sync_error: Option<String>,
-    /// 段1(かしこい検索)。v0.3 前半では準備中固定
-    smart_search: &'static str,
+    smart_search: SmartSearchState,
 }
 
 #[tauri::command]
@@ -162,12 +171,39 @@ fn connect_state() -> CmdResult<ConnectState> {
     let desktop = kb_core::connect::claude_desktop_config_path()
         .map(|p| kb_core::connect::desktop_status_at(&p))
         .unwrap_or(kb_core::connect::DesktopStatus::NotFound);
+    let (conn, _) = synced_conn(&vault)?;
+    let s = stats(&conn).map_err(err)?;
+    let smart_search = SmartSearchState {
+        state: if s.embed_enabled {
+            "enabled"
+        } else if kb_core::embed::downloading() {
+            "downloading"
+        } else {
+            "not_installed"
+        },
+        embedded: s.embedded,
+        total: s.total,
+    };
     Ok(ConnectState {
         desktop,
         backup: kb_core::connect::backup_status(&vault).map_err(err)?,
         sync_error: kb_core::connect::sync_state(&vault).last_error,
-        smart_search: "coming",
+        smart_search,
     })
+}
+
+/// かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
+#[tauri::command]
+async fn embed_enable() -> CmdResult<()> {
+    let vault = default_vault()?;
+    kb_core::embed::install_model().map_err(err)?;
+    let (conn, _) = synced_conn(&vault)?;
+    loop {
+        if kb_core::embed::embed_pending(&conn, 10).map_err(err)? == 0 {
+            break;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -232,6 +268,7 @@ pub fn run() {
             connect_desktop,
             backup_now,
             backup_set_remote,
+            embed_enable,
             launch_ai,
         ])
         .run(tauri::generate_context!())

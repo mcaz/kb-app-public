@@ -5,6 +5,7 @@
 pub use rusqlite;
 
 pub mod connect;
+pub mod embed;
 pub mod frontmatter;
 pub mod import;
 pub mod index;
