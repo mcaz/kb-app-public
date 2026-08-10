@@ -197,6 +197,13 @@ fn note_delete(id: String) -> CmdResult<()> {
     Ok(())
 }
 
+/// 越境(原則9): AI のノートを「自分のメモにする」(origin → human)。
+#[tauri::command]
+fn note_make_mine(id: String) -> CmdResult<()> {
+    let vault = default_vault()?;
+    vault.make_mine(&id).map_err(err)
+}
+
 #[tauri::command]
 fn note_new(title: String) -> CmdResult<String> {
     let vault = default_vault()?;
@@ -338,6 +345,7 @@ pub fn run() {
             note_save,
             note_new,
             note_delete,
+            note_make_mine,
             note_search,
             draft_confirm,
             draft_reject,

@@ -115,6 +115,14 @@ export const api = {
     }
     return invoke("note_new", { title });
   },
+  noteMakeMine(id: string): Promise<void> {
+    if (!inTauri) {
+      const n = demoNotes.find((x) => x.id === id);
+      if (n) n.origin = "human";
+      return demo(undefined);
+    }
+    return invoke("note_make_mine", { id });
+  },
   noteDelete(id: string): Promise<void> {
     if (!inTauri) {
       const i = demoNotes.findIndex((x) => x.id === id);

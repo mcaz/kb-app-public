@@ -368,8 +368,9 @@ function renderEditor(box: HTMLElement) {
       <div>
         <div class="title-row">
           <div class="title">${esc(n.title)}</div>
-          <button class="small" id="edit">編集</button>
-          <button class="quiet small" id="delete">削除</button>
+          ${n.origin === "agent"
+            ? `<span class="status-pill agent">🤖 AI のノート</span>${n.status !== "draft" ? `<button class="quiet small" id="make-mine">自分のメモにする</button>` : ""}`
+            : `<button class="small" id="edit">編集</button><button class="quiet small" id="delete">削除</button>`}
         </div>
         <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${related}</div>
         <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
@@ -402,8 +403,18 @@ function renderEditor(box: HTMLElement) {
         img.src = convertFileSrc(`${n.vault_root}${src}`);
       }
     });
-    document.getElementById("edit")!.addEventListener("click", () => { state.editing = true; render(); });
-    document.getElementById("delete")!.addEventListener("click", () => void confirmDelete(n));
+    document.getElementById("edit")?.addEventListener("click", () => { state.editing = true; render(); });
+    document.getElementById("delete")?.addEventListener("click", () => void confirmDelete(n));
+    document.getElementById("make-mine")?.addEventListener("click", async () => {
+      try {
+        await api.noteMakeMine(n.id);
+        state.selected = await api.noteGet(n.id);
+        render();
+        toast("自分のメモにしました(以後 AI は読むだけになります)");
+      } catch (e) {
+        toast(`${e}`);
+      }
+    });
     document.getElementById("talk")!.addEventListener("click", async () => {
       try {
         await api.launchAi(n.id);

@@ -101,6 +101,7 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .status-pill { font-size: 11px; padding: 1px 9px; border-radius: 999px; }
 .status-pill.draft { background: var(--prop-soft); color: var(--prop); }
 .status-pill.deprecated { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.status-pill.agent { background: var(--prop-soft); color: var(--prop); white-space: nowrap; }
 
 /* 受信箱 */
 .inbox { flex: 1; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }

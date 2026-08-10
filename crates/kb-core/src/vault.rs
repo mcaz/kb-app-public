@@ -136,10 +136,25 @@ impl Vault {
         Ok(id)
     }
 
+    /// 所有ガード(2026-08-10 改定: 所有は「生まれ」で決まる・対称)。
+    /// human ノート=人間の領分(AI は読むだけ)/ agent ノート=AI の領分(人間は読むだけ)。
+    fn require_origin(&self, id: &str, expected: &str, deny_msg: &str) -> Result<Note> {
+        let note = self.read_note(id)?;
+        let origin = note.front.origin.as_deref().unwrap_or("human");
+        if origin != expected {
+            bail!("{deny_msg}");
+        }
+        Ok(note)
+    }
+
     /// ノートの編集(GUI エディタの保存)。タイトル・本文を更新し generated を更新。
-    /// 呼び出しは常に人間側(actor = human:*)— AI の編集は propose 経由のみ(原則9)。
+    /// AI のノート(origin: agent)は人間からは編集不可 — 越境は make_mine で。
     pub fn edit_note(&self, id: &str, title: &str, body: &str, actor: &str) -> Result<()> {
-        let mut note = self.read_note(id)?;
+        let mut note = self.require_origin(
+            id,
+            "human",
+            "AI のノートは AI が管理する(編集したいときは Claude に依頼するか「自分のメモにする」で引き取る)",
+        )?;
         note.front.title = Some(title.to_string());
         note.front.generated = Some(Generated { by: actor.into(), at: now_iso() });
         note.body = body.to_string();
@@ -165,9 +180,63 @@ impl Vault {
         Ok(())
     }
 
-    /// ノートの削除(本体+添付)。git 履歴には残る(エンジニア経路で復元可能)。
-    /// MCP には公開しない — 削除は人の操作のみ。
+    /// ノートの削除(GUI/CLI = 人間側)。AI のノートは削除不可(AI 自身が remove する)。
     pub fn delete_note(&self, id: &str) -> Result<()> {
+        self.require_origin(id, "human", "AI のノートは AI が管理する(削除したいときは Claude に依頼)")?;
+        self.delete_note_inner(id, &format!("note: delete {id}"))
+    }
+
+    /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
+    pub fn agent_delete_note(&self, id: &str, client: &str) -> Result<()> {
+        self.require_origin(id, "agent", "ユーザーのメモは削除できない(読むだけ — 原則9)")?;
+        self.delete_note_inner(id, &format!("note: delete {id} (via {client})"))
+    }
+
+    /// AI 自身によるノート更新(MCP)。自分のノート(origin: agent)のみ。
+    pub fn agent_update_note(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        body: Option<&str>,
+        description: Option<&str>,
+        tags: Option<&[String]>,
+        client: &str,
+    ) -> Result<()> {
+        let mut note = self.require_origin(id, "agent", "ユーザーのメモは編集できない(読むだけ — 原則9)")?;
+        if let Some(t) = title {
+            note.front.title = Some(t.to_string());
+        }
+        if let Some(d) = description {
+            note.front.description = Some(d.to_string());
+        }
+        if let Some(ts) = tags {
+            note.front.tags = ts.to_vec();
+        }
+        if let Some(b) = body {
+            note.body = b.to_string();
+        }
+        note.front.generated = Some(Generated { by: client.into(), at: now_iso() });
+        self.write_note(id, &note)?;
+        let t = note.front.title.as_deref().unwrap_or(id);
+        self.append_log(&format!("**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"))?;
+        self.write_index_md()?;
+        self.commit_note_op(id, &format!("note: update {id} (via {client})"))?;
+        Ok(())
+    }
+
+    /// 越境(原則9): AI のノートを「自分のメモにする」— origin を human へ。
+    /// 以後は人間の領分(編集・削除可、AI は読むだけ)。
+    pub fn make_mine(&self, id: &str) -> Result<()> {
+        let mut note = self.require_origin(id, "agent", "もともとあなたのメモです")?;
+        note.front.origin = Some("human".into());
+        self.write_note(id, &note)?;
+        let t = note.front.title.clone().unwrap_or_else(|| id.to_string());
+        self.append_log(&format!("**Ownership**: [{t}](/{id}.md) を自分のメモにした。"))?;
+        self.commit_note_op(id, &format!("note: make-mine {id}"))?;
+        Ok(())
+    }
+
+    fn delete_note_inner(&self, id: &str, message: &str) -> Result<()> {
         let title = self
             .read_note(id)
             .ok()
@@ -182,7 +251,7 @@ impl Vault {
         let _ = fs::remove_dir_all(self.attach_dir(id));
         self.write_index_md()?;
         self.append_log(&format!("**Deletion**: 「{title}」({id})を削除。"))?;
-        self.commit(&["index.md", "log.md"], &format!("note: delete {id}"))?;
+        self.commit(&["index.md", "log.md"], message)?;
         crate::connect::auto_push(self);
         Ok(())
     }
@@ -442,6 +511,35 @@ mod tests {
         // 削除(残り = 図.png・passwd・紛れ.md の3つ。紛れ.md は「添付」としては見える)
         vault.remove_attachment(&id, "図-2.png").unwrap();
         assert_eq!(vault.list_attachments(&id).len(), 3);
+    }
+
+    /// 所有の対称性(2026-08-10 改定): human ノートは人間のみ・agent ノートは AI のみが編集・削除。
+    #[test]
+    fn ownership_symmetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let mine = vault.new_human_note("俺のメモ", "本文", "human:owner").unwrap();
+        let ai = vault.propose("AI の知見", "本文", None, &[], "claude/x").unwrap();
+        vault.confirm(&ai, "human:owner").unwrap();
+
+        // human ノート: 人間は可・AI は不可
+        assert!(vault.edit_note(&mine, "俺のメモ", "編集後", "human:owner").is_ok());
+        assert!(vault.agent_update_note(&mine, None, Some("侵入"), None, None, "claude/x").is_err());
+        assert!(vault.agent_delete_note(&mine, "claude/x").is_err());
+
+        // agent ノート: AI は可・人間は不可
+        assert!(vault.edit_note(&ai, "AI の知見", "人間の編集", "human:owner").is_err());
+        assert!(vault.delete_note(&ai).is_err());
+        assert!(vault.agent_update_note(&ai, Some("AI の知見 v2"), None, None, None, "claude/x").is_ok());
+
+        // 越境: 自分のメモにする → 領分が反転
+        vault.make_mine(&ai).unwrap();
+        assert!(vault.edit_note(&ai, "引き取り", "人間の編集", "human:owner").is_ok());
+        assert!(vault.agent_update_note(&ai, None, Some("もう触れない"), None, None, "claude/x").is_err());
+
+        // AI は自分のノートを消せる
+        let ai2 = vault.propose("捨てる知見", "本文", None, &[], "claude/x").unwrap();
+        assert!(vault.agent_delete_note(&ai2, "claude/x").is_ok());
     }
 
     #[test]
