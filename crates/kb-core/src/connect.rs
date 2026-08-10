@@ -102,23 +102,177 @@ pub fn backup_status(vault: &Vault) -> Result<BackupStatus> {
     Ok(BackupStatus { remote, pending })
 }
 
-/// 明示バックアップ(origin へ push)。宛先は origin 固定(FR-A6)。
+/// 同期(FR-A6 改定 2026-08-10): 随時 push・メッセージ時 pull。
 /// 認証はシステム git の資格情報(keychain / ssh-agent)に委ねる — GitHub 接続
-/// (OAuth デバイスフロー+keyring)は v0.3 後半で置き換える。
+/// (OAuth デバイスフロー+keyring)で置き換え予定。
+/// git は非対話モード強制(資格情報プロンプトで GUI/MCP をハングさせない)。
+fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
+    std::process::Command::new("git")
+        .args(args)
+        .current_dir(&vault.root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+        .output()
+        .context("git 実行")
+}
+
+fn stderr_of(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr).trim().to_string()
+}
+
+/// 生成ファイルを競合させない設定(複数デバイス同期の前提)。
+/// index.md は派生物 — 競合したら相手側を取り、pull 後に再生成で自己修復。
+/// log.md は追記ログ — union merge で両側の行を残す。
+/// merge driver の設定はリポジトリローカルなので、clone した側でも毎回冪等に張り直す。
+fn ensure_merge_config(vault: &Vault) -> Result<()> {
+    let attrs = vault.root.join(".gitattributes");
+    let want = "index.md merge=ours\nlog.md merge=union\n";
+    let current = fs::read_to_string(&attrs).unwrap_or_default();
+    if current != want {
+        fs::write(&attrs, want)?;
+        vault.commit(&[".gitattributes"], "vault: 同期用の merge 属性")?;
+    }
+    let repo = git2::Repository::open(&vault.root)?;
+    repo.config()?.set_str("merge.ours.driver", "true")?;
+    Ok(())
+}
+
+/// バックアップ先の設定(origin 固定)。GitHub リポジトリ(またはテスト用のローカルパス)のみ。
+/// 設定後に初回 push(-u で追跡を張り、以後の滞留判定を成立させる)。
+pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
+    ensure_merge_config(vault)?;
+    let url = url.trim();
+    let is_github = url.starts_with("git@github.com:") || url.starts_with("https://github.com/");
+    let is_local = url.starts_with("file://") || Path::new(url).is_absolute();
+    if !is_github && !is_local {
+        bail!("バックアップ先は GitHub リポジトリの URL を指定(git@github.com:… か https://github.com/…)");
+    }
+    let repo = git2::Repository::open(&vault.root)?;
+    match repo.find_remote("origin") {
+        Ok(_) => repo.remote_set_url("origin", url)?,
+        Err(_) => {
+            repo.remote("origin", url)?;
+        }
+    }
+    push_now(vault)
+}
+
+/// いま push(随時 push の実体)。非 fast-forward なら pull --rebase して1回だけ再試行。
+pub fn push_now(vault: &Vault) -> Result<()> {
+    let _ = ensure_merge_config(vault);
+    let out = git(vault, &["push", "-u", "origin", "HEAD"])?;
+    if out.status.success() {
+        record_sync(vault, None);
+        return Ok(());
+    }
+    let pull = git(vault, &["pull", "--rebase", "--autostash"])?;
+    if pull.status.success() {
+        let retry = git(vault, &["push", "-u", "origin", "HEAD"])?;
+        if retry.status.success() {
+            record_sync(vault, None);
+            return Ok(());
+        }
+        let e = format!("push 失敗: {}", stderr_of(&retry));
+        record_sync(vault, Some(&e));
+        bail!(e);
+    }
+    let e = format!("push 失敗(pull --rebase も失敗): {}", stderr_of(&pull));
+    record_sync(vault, Some(&e));
+    bail!(e);
+}
+
+fn has_origin(vault: &Vault) -> bool {
+    match git2::Repository::open(&vault.root) {
+        Ok(repo) => repo.find_remote("origin").is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// ノート操作の後に呼ぶ随時 push。remote 未設定なら何もしない。
+/// **失敗してもノート操作は成功のまま**(fail-open)— 失敗は sync 状態に記録され画面に出る。
+pub fn auto_push(vault: &Vault) {
+    if has_origin(vault) {
+        let _ = push_now(vault);
+    }
+}
+
+const PULL_THROTTLE_SECS: u64 = 60;
+
+fn sync_state_path(vault: &Vault) -> PathBuf {
+    vault.root.join(".kb").join("sync.json")
+}
+
+#[derive(Debug, Default, Clone, Serialize, serde::Deserialize)]
+pub struct SyncState {
+    pub last_pull_epoch: u64,
+    pub last_error: Option<String>,
+}
+
+pub fn sync_state(vault: &Vault) -> SyncState {
+    fs::read_to_string(sync_state_path(vault))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn record_sync(vault: &Vault, error: Option<&str>) {
+    let mut st = sync_state(vault);
+    st.last_error = error.map(String::from);
+    if error.is_none() {
+        st.last_pull_epoch = epoch_now();
+    }
+    let path = sync_state_path(vault);
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let _ = fs::write(path, serde_json::to_string(&st).unwrap_or_default());
+}
+
+fn epoch_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// メッセージのやり取り・画面更新の際の pull(複数デバイス同期)。
+/// 時間スロットリング付き — 全呼び出しで同期待ちしない(旧 KB のレイテンシ教訓)。
+/// 戻り値: 劣化情報(None = 正常またはスキップ)。
+pub fn pull_if_stale(vault: &Vault) -> Option<String> {
+    if !has_origin(vault) {
+        return None;
+    }
+    if epoch_now().saturating_sub(sync_state(vault).last_pull_epoch) < PULL_THROTTLE_SECS {
+        return sync_state(vault).last_error.map(|e| format!("同期エラー(前回): {e}"));
+    }
+    pull_now(vault).err().map(|e| e.to_string())
+}
+
+/// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復
+/// (merge=ours で相手側が勝った場合や、他デバイス追加分の反映)。
+pub fn pull_now(vault: &Vault) -> Result<()> {
+    let _ = ensure_merge_config(vault);
+    let out = git(vault, &["pull", "--rebase", "--autostash"])?;
+    if out.status.success() {
+        record_sync(vault, None);
+        let _ = vault.write_index_md();
+        Ok(())
+    } else {
+        let e = format!("pull 失敗: {}", stderr_of(&out));
+        record_sync(vault, Some(&e));
+        bail!(e)
+    }
+}
+
+/// 明示同期(pull → push)。「今すぐバックアップ」ボタンの実体。
 pub fn backup_push(vault: &Vault) -> Result<String> {
     let status = backup_status(vault)?;
     if status.remote.is_none() {
-        bail!("バックアップ先が未設定(エンジニア向け: git remote add origin <url> で紐付け可能)");
+        bail!("バックアップ先が未設定(繋ぐ画面で GitHub リポジトリの URL を設定)");
     }
-    let out = std::process::Command::new("git")
-        .args(["push", "origin", "HEAD"])
-        .current_dir(&vault.root)
-        .output()
-        .context("git 実行")?;
-    if !out.status.success() {
-        bail!("push 失敗: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(format!("バックアップ完了({} 件)", status.pending))
+    pull_now(vault)?;
+    push_now(vault)?;
+    Ok(format!("同期完了({} 件を送信)", status.pending))
 }
 
 /// FR-A5 最小: 「いま見ているノート」をコアの状態として記録(将来 MCP 側から参照)。
@@ -163,6 +317,42 @@ mod tests {
         let st = backup_status(&vault).unwrap();
         assert!(st.remote.is_none());
         assert!(st.pending >= 2); // initialize + note
+    }
+
+    /// 複数デバイス同期の一周: A が書く → 随時 push → B がメッセージ時 pull で受け取る
+    #[test]
+    fn multi_device_sync_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("backup.git");
+        let run = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(cwd).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
+
+        // デバイス A: vault 作成 → バックアップ先設定(初回 push)→ ノート追加(随時 push)
+        let a = Vault::create(dir.path().join("a")).unwrap();
+        set_backup_remote(&a, bare.to_str().unwrap()).unwrap();
+        a.new_human_note("同期テスト", "デバイス A で書いた。", "human:o").unwrap();
+        assert_eq!(backup_status(&a).unwrap().pending, 0, "随時 push 済みなら滞留ゼロ");
+
+        // bare の HEAD を A のブランチ名に合わせる(git2 と system git の
+        // 既定ブランチ名差で clone が空チェックアウトになるのを防ぐ)
+        let branch = git2::Repository::open(&a.root).unwrap().head().unwrap().shorthand().unwrap().to_string();
+        run(&bare, &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")]);
+
+        // デバイス B: clone で復元 → 会話(pull)で A の変化を受け取る
+        run(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
+        let b = Vault::open(dir.path().join("b")).unwrap();
+        assert_eq!(b.list_note_files().len(), 1);
+        a.new_human_note("追加分", "A の2本目。", "human:o").unwrap();
+        pull_now(&b).unwrap();
+        assert_eq!(b.list_note_files().len(), 2, "B が pull で A の追加分を受け取る");
+
+        // B 側で書いても push が通る(非 fast-forward 時の rebase 再試行経路)
+        a.new_human_note("三本目", "A の3本目(B の pull 後)。", "human:o").unwrap();
+        b.new_human_note("B のメモ", "デバイス B で書いた。", "human:o").unwrap();
+        assert_eq!(backup_status(&b).unwrap().pending, 0, "rebase 再試行で push が通る");
     }
 
     #[test]

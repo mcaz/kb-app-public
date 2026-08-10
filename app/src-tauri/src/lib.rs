@@ -69,7 +69,10 @@ struct HomeState {
 #[tauri::command]
 fn home_state() -> CmdResult<HomeState> {
     let vault = default_vault()?;
+    // 画面更新の際にも他デバイスの変化を取り込む(スロットリング付き・fail-open)
+    let pull_degraded = kb_core::connect::pull_if_stale(&vault);
     let (conn, degraded) = synced_conn(&vault)?;
+    let degraded = degraded.or(pull_degraded);
     let notes = recent(&conn, 500).map_err(err)?;
     let drafts = notes.iter().filter(|h| h.status == "draft").cloned().collect();
     Ok(HomeState {
@@ -148,6 +151,7 @@ fn draft_reject(id: String) -> CmdResult<()> {
 struct ConnectState {
     desktop: kb_core::connect::DesktopStatus,
     backup: kb_core::connect::BackupStatus,
+    sync_error: Option<String>,
     /// 段1(かしこい検索)。v0.3 前半では準備中固定
     smart_search: &'static str,
 }
@@ -161,8 +165,15 @@ fn connect_state() -> CmdResult<ConnectState> {
     Ok(ConnectState {
         desktop,
         backup: kb_core::connect::backup_status(&vault).map_err(err)?,
+        sync_error: kb_core::connect::sync_state(&vault).last_error,
         smart_search: "coming",
     })
+}
+
+#[tauri::command]
+fn backup_set_remote(url: String) -> CmdResult<()> {
+    let vault = default_vault()?;
+    kb_core::connect::set_backup_remote(&vault, &url).map_err(err)
 }
 
 #[tauri::command]
@@ -220,6 +231,7 @@ pub fn run() {
             connect_state,
             connect_desktop,
             backup_now,
+            backup_set_remote,
             launch_ai,
         ])
         .run(tauri::generate_context!())

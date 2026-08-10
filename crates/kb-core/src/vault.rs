@@ -250,7 +250,10 @@ impl Vault {
     }
 
     fn commit_note_op(&self, id: &str, message: &str) -> Result<()> {
-        self.commit(&[&format!("{id}.md"), "index.md", "log.md"], message)
+        self.commit(&[&format!("{id}.md"), "index.md", "log.md"], message)?;
+        // 随時 push(FR-A6 改定)。remote 未設定なら no-op、失敗しても操作は成功のまま
+        crate::connect::auto_push(self);
+        Ok(())
     }
 
     /// 指定パスをステージしてコミット(git 履歴 = 監査痕跡)。

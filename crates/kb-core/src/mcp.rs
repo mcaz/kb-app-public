@@ -135,10 +135,13 @@ fn tool_definitions() -> Value {
 }
 
 fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<String> {
+    // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
+    // スロットリング付き・失敗は劣化情報(fail-open)
+    let pull_note = crate::connect::pull_if_stale(vault);
     let conn = open_db(vault)?;
     // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
     let sync_note = match sync(vault, &conn) {
-        Ok(_) => None,
+        Ok(_) => pull_note,
         Err(e) => Some(format!("索引の更新に失敗(結果が古い可能性): {e}")),
     };
     match name {

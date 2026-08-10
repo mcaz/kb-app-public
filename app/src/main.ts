@@ -349,19 +349,38 @@ function connectCardBackup(c: ConnectState): HTMLElement {
     ? `<span class="state ok">接続済み</span>`
     : `<span class="state off">未設定</span>`;
   const pending = has && c.backup.pending > 0
-    ? `<div class="desc">まだバックアップしていない変更が ${c.backup.pending} 件あります。</div>` : "";
+    ? `<div class="desc">まだ送れていない変更が ${c.backup.pending} 件あります。</div>` : "";
+  const error = c.sync_error
+    ? `<div class="desc" style="color: var(--danger)">⚠ ${esc(c.sync_error)}</div>` : "";
+  const setup = has ? "" : `
+    <input id="con-bk-url" placeholder="GitHub リポジトリの URL(git@github.com:…)" style="width:100%;font-size:12px;margin-bottom:8px" />`;
   const card = el(`
     <div class="con-card">
       <div class="name">☁️ バックアップ</div>
-      <div class="desc">ノートを非公開の保管場所へ控えておきます。押したときだけ送ります。</div>
+      <div class="desc">ノートは変わるたびに自動で控えられ、他の端末で書いた分も取り込まれます。非公開のまま、対象はノートだけです。</div>
       ${state_}
       ${pending}
-      <div class="row">${has ? `<button class="primary small" id="con-bk">今すぐバックアップ</button>` : ""}</div>
+      ${error}
+      ${setup}
+      <div class="row">${has
+        ? `<button class="primary small" id="con-bk">今すぐ同期</button>`
+        : `<button class="primary small" id="con-bk-set">接続する</button>`}</div>
     </div>
   `);
   card.querySelector("#con-bk")?.addEventListener("click", async () => {
     try {
       toast(await api.backupNow());
+      render();
+    } catch (e) {
+      toast(`${e}`);
+    }
+  });
+  card.querySelector("#con-bk-set")?.addEventListener("click", async () => {
+    const url = (card.querySelector<HTMLInputElement>("#con-bk-url")!).value.trim();
+    if (!url) { toast("リポジトリの URL を入れてください"); return; }
+    try {
+      await api.backupSetRemote(url);
+      toast("バックアップ先を設定し、初回の控えを送りました");
       render();
     } catch (e) {
       toast(`${e}`);

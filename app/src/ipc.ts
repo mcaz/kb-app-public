@@ -30,6 +30,7 @@ export interface NoteView {
 export interface ConnectState {
   desktop: "not_found" | "not_connected" | "connected";
   backup: { remote: string | null; pending: number };
+  sync_error: string | null;
   smart_search: string;
 }
 
@@ -39,6 +40,7 @@ const inTauri = "__TAURI_INTERNALS__" in window;
 const demoConnect: ConnectState = {
   desktop: (new URLSearchParams(location.search).get("connect") as ConnectState["desktop"]) || "not_connected",
   backup: { remote: null, pending: 4 },
+  sync_error: null,
   smart_search: "coming",
 };
 
@@ -133,6 +135,10 @@ export const api = {
   connectDesktop(): Promise<void> {
     if (!inTauri) { demoConnect.desktop = "connected"; return demo(undefined); }
     return invoke("connect_desktop");
+  },
+  backupSetRemote(url: string): Promise<void> {
+    if (!inTauri) { demoConnect.backup.remote = url; return demo(undefined); }
+    return invoke("backup_set_remote", { url });
   },
   backupNow(): Promise<string> {
     if (!inTauri) {
