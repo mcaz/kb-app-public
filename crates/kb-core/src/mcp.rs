@@ -77,13 +77,24 @@ fn handle(vault: &Vault, client: &str, method: &str, params: Option<&Value>) -> 
                 .unwrap_or(PROTOCOL_FALLBACK);
             Ok(Some(json!({
                 "protocolVersion": requested,
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "prompts": {}},
                 "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
                 "instructions": INSTRUCTIONS,
             })))
         }
         "ping" => Ok(Some(json!({}))),
         "tools/list" => Ok(Some(json!({"tools": tool_definitions()}))),
+        // MCP prompts — 定型操作の入口(常駐コンテキストを増やさず、正しい挙動を
+        // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
+        "prompts/list" => Ok(Some(json!({"prompts": prompt_definitions()}))),
+        "prompts/get" => {
+            let name = params.and_then(|p| p.get("name")).and_then(|v| v.as_str()).unwrap_or("");
+            let text = prompt_text(name)
+                .ok_or_else(|| anyhow::anyhow!("unknown prompt: {name}"))?;
+            Ok(Some(json!({
+                "messages": [{"role": "user", "content": {"type": "text", "text": text}}]
+            })))
+        }
         "tools/call" => {
             let name = params
                 .and_then(|p| p.get("name"))
@@ -104,6 +115,36 @@ fn handle(vault: &Vault, client: &str, method: &str, params: Option<&Value>) -> 
             }
         }
         _ => Ok(None),
+    }
+}
+
+fn prompt_definitions() -> Value {
+    json!([
+        {"name": "タグの整理", "description": "タグ体系を見直し、AI 裁量の範囲で統合・整理する"},
+        {"name": "会話を起票", "description": "この会話の知見・決定を下書きノートとして起票する"},
+        {"name": "下書きレビュー", "description": "未確定の下書きを一緒にレビューする(確定はあなたの操作)"}
+    ])
+}
+
+fn prompt_text(name: &str) -> Option<&'static str> {
+    match name {
+        "タグの整理" => Some(
+            "kb-app の全タグの現状を把握して(recent と search を使う)、タグ体系を見直して。\
+「タグ運用」ノートに合意があればそれに従い、合意のないタグはあなたの裁量で統合・改名・整理\
+してよい(update で実行)。ユーザーの合意が要ると感じた変更は提案に留めて。\
+終わったら、実行した整理と提案を一覧で報告して。",
+        ),
+        "会話を起票" => Some(
+            "ここまでの会話から、恒久的に残す価値のある知見・決定・事実を洗い出して。\
+それぞれについて一言で要約を見せて、私が選んだものを propose で起票して\
+(タグ1〜4個・本文は未来の読者向けに自己完結・関連ノートへリンク)。",
+        ),
+        "下書きレビュー" => Some(
+            "kb-app の未確定の下書き(recent で status が draft のもの)を一つずつ、\
+「要約・価値・気になる点」の形で見せて。確定・却下は私がアプリ側で行うので、\
+判断材料の提示に徹して。内容に手を入れた方がよいものは update で直してから見せて。",
+        ),
+        _ => None,
     }
 }
 
@@ -261,8 +302,24 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
                 .unwrap_or_default();
             let id = vault.propose(title, body, description, &tags, client)?;
+            // 語彙合わせは文章への期待でなく機構で: 新出タグを検出して既存語彙を機械的に提示
+            let vocab: Vec<String> = crate::search::tag_counts(&conn, 100)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect();
+            let new_tags: Vec<&String> = tags.iter().filter(|t| !vocab.contains(t)).collect();
+            let vocab_note = if new_tags.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n注意: 新しいタグ {} を導入した。既存語彙: {}。統合できるなら update で揃えること。",
+                    new_tags.iter().map(|t| format!("「{t}」")).collect::<Vec<_>>().join("、"),
+                    vocab.iter().take(20).cloned().collect::<Vec<_>>().join(" / ")
+                )
+            };
             Ok(format!(
-                "下書きを起票した: {id}(status: draft)。確定はユーザーがアプリ側で行う。"
+                "下書きを起票した: {id}(status: draft)。確定はユーザーがアプリ側で行う。{vocab_note}"
             ))
         }
         "update" => {
