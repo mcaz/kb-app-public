@@ -116,6 +116,7 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 
 /* 添付(FR-C8) */
 .attach { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 12px; }
+.attach .attach-label { font-size: 12px; color: var(--muted); }
 .attach .chip {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 12px; padding: 3px 8px; border-radius: 999px;

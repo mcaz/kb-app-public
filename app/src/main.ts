@@ -33,6 +33,17 @@ async function addAttachmentFile(noteId: string, file: File, rename?: string): P
   return saved;
 }
 
+/// 本文に挿入する添付 URL。空白・日本語を含むファイル名でも markdown が壊れないよう
+/// パーセントエンコードする(プレビュー側は decodeURIComponent で実パスへ戻す)。
+function attachUrl(noteId: string, saved: string): string {
+  return encodeURI(`/${noteId}.files/${saved}`);
+}
+
+function attachLink(noteId: string, saved: string): string {
+  const url = attachUrl(noteId, saved);
+  return /(png|jpe?g|gif|webp|svg)$/i.test(saved) ? `![](${url})` : `[${saved}](${url})`;
+}
+
 /// ペーストから画像添付を試みる。DOM 経路 → ダメなら Rust クリップボード読み。
 /// 戻り値 = 保存名(画像が無ければ null)。
 async function pasteImage(e: ClipboardEvent, noteId: string): Promise<string | null> {
@@ -57,7 +68,7 @@ async function handleEditorPaste(e: ClipboardEvent, n: NoteView, bodyEl: HTMLTex
   try {
     const saved = await pasteImage(e, n.id);
     if (!saved) return;
-    const link = `![](/${n.id}.files/${saved})`;
+    const link = attachLink(n.id, saved);
     const pos = bodyEl.selectionStart;
     bodyEl.value = bodyEl.value.slice(0, pos) + link + bodyEl.value.slice(bodyEl.selectionEnd);
     bodyEl.selectionStart = bodyEl.selectionEnd = pos + link.length;
@@ -98,9 +109,7 @@ if (inTauri) {
     if (!savedNames.length) return;
     const bodyEl = document.getElementById("body") as HTMLTextAreaElement | null;
     if (state.editing && bodyEl) {
-      const links = savedNames
-        .map((s) => (/(png|jpe?g|gif|webp|svg)$/i.test(s) ? `![](/${n.id}.files/${s})` : `[${s}](/${n.id}.files/${s})`))
-        .join("\n");
+      const links = savedNames.map((s) => attachLink(n.id, s)).join("\n");
       const pos = bodyEl.selectionStart;
       bodyEl.value = bodyEl.value.slice(0, pos) + links + bodyEl.value.slice(bodyEl.selectionEnd);
       bodyEl.selectionStart = bodyEl.selectionEnd = pos + links.length;
@@ -363,7 +372,7 @@ function renderEditor(box: HTMLElement) {
         </div>
         <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${related}</div>
         <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
-        <div class="attach">${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
+        <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
         <div class="preview">${marked.parse(n.body) as string}</div>
       </div>
     `));
@@ -451,7 +460,12 @@ async function saveNote() {
   const n = state.selected!;
   const title = (document.getElementById("title") as HTMLInputElement).value.trim() || n.title;
   const body = (document.getElementById("body") as HTMLTextAreaElement).value;
-  await api.noteSave(n.id, title, body);
+  try {
+    await api.noteSave(n.id, title, body);
+  } catch (e) {
+    toast(`保存に失敗: ${e}`);
+    return;
+  }
   await refreshHome();
   state.selected = await api.noteGet(n.id);
   state.editing = false;
