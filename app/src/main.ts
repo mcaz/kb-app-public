@@ -103,10 +103,40 @@ function render() {
   else renderInbox(pane);
 }
 
+// window.prompt/alert/confirm は Tauri(WKWebView)では無効(黙って null)。
+// ダイアログは必ずアプリ内モーダルで実装する。
+function askTitle(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = el(`
+      <div class="modal-overlay">
+        <div class="modal">
+          <div class="modal-title">新しいノート</div>
+          <input id="modal-input" placeholder="タイトル" />
+          <div class="modal-row">
+            <button class="primary" id="modal-ok">作成</button>
+            <button class="quiet" id="modal-cancel">やめる</button>
+          </div>
+        </div>
+      </div>
+    `);
+    const input = overlay.querySelector<HTMLInputElement>("#modal-input")!;
+    const done = (v: string | null) => { overlay.remove(); resolve(v); };
+    overlay.querySelector("#modal-ok")!.addEventListener("click", () => done(input.value.trim() || null));
+    overlay.querySelector("#modal-cancel")!.addEventListener("click", () => done(null));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(null); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") done(input.value.trim() || null);
+      if (e.key === "Escape") done(null);
+    });
+    document.body.appendChild(overlay);
+    input.focus();
+  });
+}
+
 async function newNote() {
-  const title = prompt("ノートのタイトル");
-  if (!title?.trim()) return;
-  const id = await api.noteNew(title.trim());
+  const title = await askTitle();
+  if (!title) return;
+  const id = await api.noteNew(title);
   await refreshHome();
   state.view = "notes";
   state.selected = await api.noteGet(id);
