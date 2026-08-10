@@ -7,4 +7,4 @@
 - OKF 適合設計: [docs/okf-conformance.md](docs/okf-conformance.md)
 - 設計判断(ADR): [docs/adr/](docs/adr/) — 0001: コアは Rust、UI は TypeScript
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
-- 状態: **kb-app へ一本化(2026-08-10 本人決定)** — 旧 KB から50本移植済み・Desktop は kb-app のみ・ソースは github.com/mcaz/kb-app(private)。残: 段1 かしこい検索・GitHub OAuth・Claude Code 側の旧サーバー引退
+- 状態: **段1 まで完成(2026-08-10)** — 一本化完了(Desktop/Code とも kb-app のみ・旧サーバー引退・ollama 停止)+かしこい検索が有効(53/53 埋め込み済み)。残: GitHub OAuth・Stop 安全網の再設計・お手入れ FR-C7

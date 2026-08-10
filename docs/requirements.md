@@ -222,6 +222,12 @@ Grok / Gemini)を繋ぐと会話の裏に自分の知識が差し込まれ、会
   (scout-law / scout-tech / scout-interests / follow-up / weekly-review / maintenance)は
   スケジューラ上で **enabled: false に**(削除せず — kb-app 側にお手入れ FR-C7 と
   収集ルーチンを実装した時点で作り直して再開)。旧 KB への書き込み経路はこれで全停止
+- 2026-08-10 **段1(かしこい検索)実装・引退完了**: ort+bge-m3 int8 内蔵、FTS×ベクトル
+  RRF 融合(関連判定は生距離 0.95)、53/53 埋め込み(34秒)。意味クエリで事故ノートが
+  最短距離ヒット — 前出し品質が旧システム同等に復帰。ベクトル索引は BLOB+Rust 総当たり
+  (個人規模判断。sqlite-vec は PoC 実証済みの規模対策として温存)。
+  同日、Claude Code の旧 vault / team-vault サーバーを撤去し ollama を停止 —
+  **旧システムの可動部はゼロになり、一本化が完了**
 
 ## 未決
 
