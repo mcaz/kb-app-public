@@ -27,11 +27,17 @@ pub struct SearchOutcome {
 }
 
 pub fn search(conn: &Connection, query: &str, limit: usize) -> SearchOutcome {
+    search_mode(conn, query, limit, false)
+}
+
+/// `any = true` で語を OR 結合(フックの前出しなど、文まるごとを投げる用途。
+/// bm25 が多く当たった文書を上位に出す)。false は従来どおり AND。
+pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> SearchOutcome {
     let mut hits: Vec<Hit> = Vec::new();
     let mut degraded = Vec::new();
 
     // 主経路: lindera 分かち書き + bm25
-    match main_search(conn, query, limit) {
+    match main_search(conn, query, limit, any) {
         Ok(main_hits) => hits.extend(main_hits),
         Err(e) => degraded.push(format!("主索引が利用できない: {e}")),
     }
@@ -55,8 +61,12 @@ pub fn search(conn: &Connection, query: &str, limit: usize) -> SearchOutcome {
     SearchOutcome { hits, related, degraded }
 }
 
-fn main_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit>> {
-    let expr = match_expr(query);
+fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Result<Vec<Hit>> {
+    let expr = if any {
+        crate::tokenize::match_expr_any(query)
+    } else {
+        match_expr(query)
+    };
     if expr.is_empty() {
         return Ok(Vec::new());
     }

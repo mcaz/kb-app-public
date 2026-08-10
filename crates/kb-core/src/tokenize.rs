@@ -40,6 +40,18 @@ pub fn match_expr(query: &str) -> String {
         .join(" ")
 }
 
+/// 文まるごと用の OR 結合 MATCH 式。分かち書きした内容語(2文字以上または英数)を
+/// OR で並べる。助詞・記号は落とし、重複は除く。
+pub fn match_expr_any(query: &str) -> String {
+    let mut seen = std::collections::BTreeSet::new();
+    wakati(query)
+        .split(' ')
+        .filter(|t| t.chars().count() >= 2 && seen.insert(t.to_string()))
+        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

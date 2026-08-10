@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
-use kb_core::search::{recent, search};
+use kb_core::search::recent;
 use kb_core::vault::Vault;
 use kb_core::OWNER_ACTOR;
 
@@ -39,6 +39,9 @@ enum Command {
         query: Vec<String>,
         #[arg(long, default_value_t = 8)]
         limit: usize,
+        /// 語を OR 結合(文まるごとの前出し用)
+        #[arg(long)]
+        any: bool,
     },
     /// ノート全文を表示
     Get { note: String },
@@ -141,11 +144,11 @@ fn main() -> Result<()> {
             sync(&vault, &conn)?;
             println!("{id}");
         }
-        Command::Search { query, limit } => {
+        Command::Search { query, limit, any } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
-            let out = search(&conn, &query.join(" "), limit);
+            let out = kb_core::search::search_mode(&conn, &query.join(" "), limit, any);
             println!("{}", serde_json::to_string_pretty(&out)?);
         }
         Command::Get { note } => {
