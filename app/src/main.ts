@@ -729,13 +729,13 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
   size();
   new ResizeObserver(() => { size(); draw(); }).observe(wrap);
 
-  const radius = (n: GNode) => 5 + Math.min(9, n.degree * 1.5);
+  const radius = (n: GNode) => 3.5 + Math.min(6, Math.sqrt(n.degree) * 1.6);
 
   const sim = forceSimulation(nodes)
     .force("link", forceLink<GNode, SimulationLinkDatum<GNode>>(links).id((d) => d.id).distance(70).strength(0.5))
-    .force("charge", forceManyBody().strength(-170))
+    .force("charge", forceManyBody().strength(-130))
     .force("center", forceCenter(wrap.clientWidth / 2, wrap.clientHeight / 2))
-    .force("collide", forceCollide<GNode>().radius((d) => radius(d) + 4))
+    .force("collide", forceCollide<GNode>().radius((d) => radius(d) + 3))
     .on("tick", () => draw());
   graphSim = sim as Simulation<GNode, SimulationLinkDatum<GNode>>;
 
@@ -746,7 +746,7 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
     ctx.scale(t.k, t.k);
     ctx.strokeStyle = colLine;
     ctx.lineWidth = 1 / t.k;
-    ctx.globalAlpha = 0.7;
+    ctx.globalAlpha = 0.35;
     for (const l of links) {
       const s = l.source as GNode;
       const d = l.target as GNode;
@@ -768,9 +768,9 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
         ctx.lineWidth = 2 / t.k;
         ctx.stroke();
       }
-      if (t.k > 0.75 || n === hovered) {
+      if (t.k > 1.05 || n === hovered) {
         ctx.fillStyle = colInk;
-        ctx.font = `${11 / t.k}px sans-serif`;
+        ctx.font = `${10.5 / t.k}px sans-serif`;
         const label = n.title.length > 16 ? `${n.title.slice(0, 16)}…` : n.title;
         ctx.fillText(label, n.x! + radius(n) + 3 / t.k, n.y! + 4 / t.k);
       }
