@@ -72,6 +72,7 @@ async function handleEditorPaste(e: ClipboardEvent, n: NoteView, bodyEl: HTMLTex
     const pos = bodyEl.selectionStart;
     bodyEl.value = bodyEl.value.slice(0, pos) + link + bodyEl.value.slice(bodyEl.selectionEnd);
     bodyEl.selectionStart = bodyEl.selectionEnd = pos + link.length;
+    bodyEl.dispatchEvent(new Event("input")); // ライブプレビューへ反映
     toast("画像を添付しました");
   } catch (err2) {
     toast(`ペースト添付に失敗: ${err2}`);
@@ -113,6 +114,7 @@ if (inTauri) {
       const pos = bodyEl.selectionStart;
       bodyEl.value = bodyEl.value.slice(0, pos) + links + bodyEl.value.slice(bodyEl.selectionEnd);
       bodyEl.selectionStart = bodyEl.selectionEnd = pos + links.length;
+      bodyEl.dispatchEvent(new Event("input")); // ライブプレビューへ反映
     } else {
       state.selected = await api.noteGet(n.id);
       render();
@@ -423,13 +425,7 @@ function renderEditor(box: HTMLElement) {
         toast("添付を削除しました(履歴には残ります)");
       })
     );
-    // 添付・vault 内画像の表示(Tauri では asset プロトコル経由)
-    box.querySelectorAll<HTMLImageElement>(".preview img").forEach((img) => {
-      const src = decodeURIComponent(img.getAttribute("src") ?? "");
-      if (src.startsWith("/") && inTauri) {
-        img.src = convertFileSrc(`${n.vault_root}${src}`);
-      }
-    });
+    hydratePreview(box.querySelector<HTMLElement>(".preview")!, n, true);
     document.getElementById("edit")?.addEventListener("click", () => { state.editing = true; render(); });
     document.getElementById("delete")?.addEventListener("click", () => void confirmDelete(n));
     document.getElementById("make-mine")?.addEventListener("click", async () => {
@@ -459,9 +455,27 @@ function renderEditor(box: HTMLElement) {
           <button class="quiet small" id="cancel">やめる</button>
         </div>
         <div class="meta">${fmtDate(n.generated_at)} ${statusPill}</div>
-        <textarea class="body" id="body">${esc(n.body)}</textarea>
+        <div class="edit-split">
+          <textarea class="body" id="body">${esc(n.body)}</textarea>
+          <div class="preview live" id="live-preview"></div>
+        </div>
       </div>
     `));
+    // ライブプレビュー(左=編集/右=表示)
+    {
+      const bodyEl0 = box.querySelector<HTMLTextAreaElement>("#body")!;
+      const live = box.querySelector<HTMLElement>("#live-preview")!;
+      let timer: number | undefined;
+      const renderLive = () => {
+        live.innerHTML = marked.parse(bodyEl0.value) as string;
+        hydratePreview(live, n, false);
+      };
+      renderLive();
+      bodyEl0.addEventListener("input", () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(renderLive, 150);
+      });
+    }
     document.getElementById("save")!.addEventListener("click", saveNote);
     document.getElementById("cancel")!.addEventListener("click", () => { state.editing = false; render(); });
     const bodyEl = document.getElementById("body") as HTMLTextAreaElement;
@@ -474,12 +488,24 @@ function renderEditor(box: HTMLElement) {
       void handleEditorPaste(e as ClipboardEvent, n, bodyEl);
     });
   }
-  // つながり・本文内リンクのクリックでノートを開く
+  // つながり(末尾セクション)のクリックでノートを開く
   box.querySelectorAll<HTMLElement>(".rel").forEach((a) =>
     a.addEventListener("click", () => void openNote(a.dataset.id!)));
-  box.querySelectorAll<HTMLAnchorElement>(".preview a").forEach((a) => {
+}
+
+/// プレビュー要素の後処理: vault 内画像を asset プロトコルで表示し、リンクを制御する。
+/// navigable=false(編集中のライブプレビュー)はリンク遷移させない(編集内容を失わないため)。
+function hydratePreview(root: HTMLElement, n: NoteView, navigable: boolean) {
+  root.querySelectorAll<HTMLImageElement>("img").forEach((img) => {
+    const src = decodeURIComponent(img.getAttribute("src") ?? "");
+    if (src.startsWith("/") && inTauri) {
+      img.src = convertFileSrc(`${n.vault_root}${src}`);
+    }
+  });
+  root.querySelectorAll<HTMLAnchorElement>("a").forEach((a) => {
     a.addEventListener("click", (e) => {
       e.preventDefault();
+      if (!navigable) return;
       const href = decodeURIComponent(a.getAttribute("href") ?? "");
       if (href.endsWith(".md")) void openNote(href.replace(/^\//, "").replace(/\.md$/, ""));
     });
