@@ -20,6 +20,8 @@ pub struct Hit {
     pub distance: Option<f32>,
     /// 所有(原則9): "human" | "agent"
     pub origin: Option<String>,
+    /// 分類タグ(空白区切りを分解済み)
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -85,7 +87,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     }
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
-                snippet(fts_main, 1, '[', ']', '…', 12), n.origin
+                snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags
          FROM fts_main f JOIN notes n ON n.id = f.id
          WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
          ORDER BY rank LIMIT ?2",
@@ -99,6 +101,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
             via: "main",
             distance: None,
             origin: r.get(4)?,
+            tags: split_tags(r.get::<_, Option<String>>(5)?),
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -117,7 +120,7 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
     let neighbors = embed::knn(conn, &qv, limit * 2)?;
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT title, status, coalesce(description, substr(body,1,80)), origin
+        "SELECT title, status, coalesce(description, substr(body,1,80)), origin, tags
          FROM notes WHERE id = ?1 AND status != 'deprecated'",
     )?;
     for (id, dist) in neighbors {
@@ -130,9 +133,10 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         });
-        if let Ok((title, status, snippet, origin)) = row {
+        if let Ok((title, status, snippet, origin, tags)) = row {
             out.push((
                 Hit {
                     id,
@@ -142,6 +146,7 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                     via: "vec",
                     distance: Some(dist),
                     origin,
+                    tags: split_tags(tags),
                 },
                 dist,
             ));
@@ -202,7 +207,7 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
         }
     }
     let sql = format!(
-        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin FROM notes n
+        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin, n.tags FROM notes n
          WHERE n.status != 'deprecated' AND {} LIMIT {}",
         conds.join(" AND "),
         limit
@@ -217,9 +222,30 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
             via: "rescue",
             distance: None,
             origin: r.get(4)?,
+            tags: split_tags(r.get::<_, Option<String>>(5)?),
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+fn split_tags(t: Option<String>) -> Vec<String> {
+    t.unwrap_or_default().split_whitespace().map(String::from).collect()
+}
+
+/// タグの使用数(deprecated 除く・多い順)。一覧のフィルタチップ用。
+pub fn tag_counts(conn: &Connection, limit: usize) -> Result<Vec<(String, usize)>> {
+    let mut stmt = conn.prepare_cached("SELECT tags FROM notes WHERE status != 'deprecated'")?;
+    let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for row in rows {
+        for t in split_tags(row?) {
+            *counts.entry(t).or_default() += 1;
+        }
+    }
+    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    v.truncate(limit);
+    Ok(v)
 }
 
 /// 指定ノートの「つながり」(リンク先+被リンク、最大5件)。
@@ -282,7 +308,7 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
 /// 直近ノート(generated_at 降順、なければ mtime 降順)。
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin
+        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin, tags
          FROM notes WHERE status != 'deprecated'
          ORDER BY coalesce(generated_at, datetime(mtime,'unixepoch')) DESC LIMIT ?1",
     )?;
@@ -295,6 +321,7 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
             via: "recent",
             distance: None,
             origin: r.get(4)?,
+            tags: split_tags(r.get::<_, Option<String>>(5)?),
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

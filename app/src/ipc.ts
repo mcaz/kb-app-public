@@ -13,6 +13,7 @@ export interface Hit {
   snippet: string;
   via: string;
   origin: string | null;
+  tags: string[];
 }
 export interface Stats {
   total: number; drafts: number; deprecated: number;
@@ -20,7 +21,7 @@ export interface Stats {
   embed_enabled: boolean; embedded: number;
 }
 export interface CareProposal { key: string; kind: string; a: string; b: string; detail: string }
-export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; care: CareProposal[]; degraded: string[] }
+export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; care: CareProposal[]; tags: [string, number][]; degraded: string[] }
 export interface SearchOutcome { hits: Hit[]; related: [string, string | null][]; degraded: string[] }
 export interface NoteView {
   id: string;
@@ -60,14 +61,14 @@ const demoConnect: ConnectState = {
 // ---- ブラウザプレビュー用のデモデータ(Tauri 外のみ) ----
 const demoNotes: NoteView[] = [
   {
-    id: "notes/引っ越し手続きメモ", title: "引っ越し手続きメモ", status: "stable", origin: "human",
-    tags: [], generated_at: "2026-08-10T05:00:00Z",
+    id: "notes/引っ越し手続きメモ", title: "引っ越し手続きメモ", status: "stable", origin: "agent",
+    tags: ["手続き"], generated_at: "2026-08-10T05:00:00Z",
     body: "3月末までにやること:\n\n- 電気・ガス・水道の解約(2週間前まで)\n- 転出届 → 転入届(14日以内)\n- 住所変更: 免許・銀行・[確定申告の準備](/notes/確定申告の準備.md)にも影響\n",
     related: [["notes/確定申告の準備", "確定申告の準備"]], attachments: [["間取り図.png", 245760]], vault_root: "(demo)",
   },
   {
-    id: "notes/確定申告の準備", title: "確定申告の準備", status: "stable", origin: "human",
-    tags: [], generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [], attachments: [], vault_root: "(demo)",
+    id: "notes/確定申告の準備", title: "確定申告の準備", status: "stable", origin: "agent",
+    tags: ["手続き", "税金"], generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [], attachments: [], vault_root: "(demo)",
   },
   {
     id: "notes/沖縄旅行の持ち物リスト", title: "沖縄旅行の持ち物リスト", status: "draft", origin: "agent",
@@ -77,7 +78,7 @@ const demoNotes: NoteView[] = [
 ];
 const demoHit = (n: NoteView): Hit => ({
   id: n.id, title: n.title, status: n.status, snippet: n.body.slice(0, 60).replace(/\n/g, " "), via: "recent",
-  origin: n.origin,
+  origin: n.origin, tags: n.tags,
 });
 
 async function demo<T>(v: T): Promise<T> {
@@ -124,7 +125,8 @@ export const api = {
           agent_notes: demoNotes.filter((n) => n.origin === "agent").length,
           links: 2, embed_enabled: true, embedded: demoNotes.length,
         },
-        notes: demoNotes.map(demoHit), drafts, care: demoCare, degraded: [],
+        notes: demoNotes.map(demoHit), drafts, care: demoCare,
+        tags: [["手続き", 2], ["旅行", 1], ["税金", 1]], degraded: [],
       });
     }
     return invoke("home_state");

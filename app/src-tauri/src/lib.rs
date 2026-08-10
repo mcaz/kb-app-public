@@ -67,6 +67,7 @@ struct HomeState {
     notes: Vec<Hit>,
     drafts: Vec<Hit>,
     care: Vec<kb_core::care::CareProposal>,
+    tags: Vec<(String, usize)>,
     degraded: Vec<String>,
 }
 
@@ -82,11 +83,13 @@ fn home_state() -> CmdResult<HomeState> {
     // お手入れの検知(FR-C7 最小形)。失敗しても画面は出す(fail-open)
     let _ = kb_core::care::detect(&conn, &vault);
     let care = kb_core::care::list_open(&conn).unwrap_or_default();
+    let tags = kb_core::search::tag_counts(&conn, 30).unwrap_or_default();
     Ok(HomeState {
         stats: stats(&conn).map_err(err)?,
         notes,
         drafts,
         care,
+        tags,
         degraded: degraded.into_iter().collect(),
     })
 }
