@@ -15,10 +15,11 @@ const inTauri = "__TAURI_INTERNALS__" in window;
 const app = document.getElementById("app")!;
 
 type View = "home" | "notes" | "graph" | "connect";
-type Filter = { kind: "all" | "draft" | "care" | "tag"; tag?: string };
+type Filter = { kind: "all" | "draft" | "care" };
 const state = {
   view: "notes" as View,
   filter: { kind: "all" } as Filter,
+  selectedTags: [] as string[],
   vaultName: "kb",
   home: null as HomeState | null,
   selected: null as NoteView | null,
@@ -222,10 +223,11 @@ function careIds(): Set<string> {
 
 function matchFilter(h: { status: string; tags: string[]; id: string }): boolean {
   const f = state.filter;
-  if (f.kind === "all") return true;
-  if (f.kind === "draft") return h.status === "draft";
-  if (f.kind === "care") return careIds().has(h.id);
-  return h.tags.includes(f.tag!);
+  const statusOk =
+    f.kind === "all" ? true
+    : f.kind === "draft" ? h.status === "draft"
+    : careIds().has(h.id);
+  return statusOk && state.selectedTags.every((t) => h.tags.includes(t));
 }
 
 function renderNotes(pane: HTMLElement) {
@@ -244,20 +246,16 @@ function renderNotes(pane: HTMLElement) {
   if (home.care.length) {
     addChip(`🔧 提案 ${home.care.length}`, f.kind === "care", () => { state.filter = { kind: "care" }; render(); }, "amber");
   }
-  for (const [tag, count] of home.tags.slice(0, 12)) {
-    addChip(`${esc(tag)} ${count}`, f.kind === "tag" && f.tag === tag, () => {
-      state.filter = { kind: "tag", tag };
-      render();
-    });
-  }
 
   const list = el(`
     <div class="list">
       <div class="searchbox"><input id="search" placeholder="🔍 ノートを検索" value="${esc(state.query)}" /></div>
+      <div class="tag-select" id="tag-select"></div>
       <div class="items" id="items"></div>
     </div>
   `);
   list.insertBefore(chips, list.firstChild);
+  buildTagSelect(list.querySelector<HTMLElement>("#tag-select")!, home.tags.map(([t]) => t));
   list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 260}px`;
   const splitter = el(`<div class="splitter"></div>`);
   splitter.addEventListener("mousedown", (e) => {
@@ -328,6 +326,61 @@ function renderNotes(pane: HTMLElement) {
   }
 
   renderNoteView(document.getElementById("editor")!);
+}
+
+/// タグのオートコンプリート複数選択(検索フィールドの下)。
+/// 選択タグは AND で絞り込み。Enter=先頭候補、空欄で Backspace=末尾を外す。
+function buildTagSelect(box: HTMLElement, allTags: string[]) {
+  const selectedChips = state.selectedTags
+    .map((t) => `<span class="tsel-chip">${esc(t)}<button class="chip-x" data-tag="${esc(t)}">×</button></span>`)
+    .join("");
+  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>`;
+  const input = box.querySelector<HTMLInputElement>("#tag-input")!;
+  const dd = box.querySelector<HTMLElement>("#tag-dd")!;
+
+  const addTag = (t: string) => {
+    if (!state.selectedTags.includes(t)) state.selectedTags.push(t);
+    render();
+  };
+  box.querySelectorAll<HTMLButtonElement>(".chip-x").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.selectedTags = state.selectedTags.filter((t) => t !== b.dataset.tag);
+      render();
+    })
+  );
+
+  let candidates: string[] = [];
+  const refreshDd = () => {
+    const q = input.value.trim().toLowerCase();
+    candidates = allTags
+      .filter((t) => !state.selectedTags.includes(t))
+      .filter((t) => !q || t.toLowerCase().includes(q))
+      .slice(0, 8);
+    if (!candidates.length || document.activeElement !== input) {
+      dd.hidden = true;
+      return;
+    }
+    dd.innerHTML = candidates.map((t) => `<button class="tag-dd-item" data-tag="${esc(t)}">${esc(t)}</button>`).join("");
+    dd.hidden = false;
+    dd.querySelectorAll<HTMLButtonElement>(".tag-dd-item").forEach((b) =>
+      // mousedown: input の blur より先に発火させる
+      b.addEventListener("mousedown", (e) => { e.preventDefault(); addTag(b.dataset.tag!); })
+    );
+  };
+  input.addEventListener("input", refreshDd);
+  input.addEventListener("focus", refreshDd);
+  input.addEventListener("blur", () => setTimeout(() => { dd.hidden = true; }, 150));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && candidates.length) {
+      e.preventDefault();
+      addTag(candidates[0]);
+    } else if (e.key === "Backspace" && !input.value && state.selectedTags.length) {
+      state.selectedTags.pop();
+      render();
+    } else if (e.key === "Escape") {
+      dd.hidden = true;
+    }
+  });
 }
 
 function renderNoteView(box: HTMLElement) {
@@ -431,7 +484,7 @@ function renderNoteView(box: HTMLElement) {
   );
   box.querySelectorAll<HTMLButtonElement>(".tag-chip").forEach((b) =>
     b.addEventListener("click", () => {
-      state.filter = { kind: "tag", tag: b.dataset.tag! };
+      if (!state.selectedTags.includes(b.dataset.tag!)) state.selectedTags.push(b.dataset.tag!);
       render();
     })
   );
@@ -527,6 +580,7 @@ function renderHome(pane: HTMLElement) {
     t.addEventListener("click", () => {
       state.view = "notes";
       state.filter = { kind: t.dataset.go as Filter["kind"] };
+      state.selectedTags = [];
       render();
     })
   );
