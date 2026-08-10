@@ -434,6 +434,12 @@ impl Vault {
         Ok(())
     }
 
+    /// お手入れ(care)の承諾操作のコミット口(同 crate 内限定)。
+    pub(crate) fn commit_care(&self, id: &str, message: &str) -> Result<()> {
+        self.write_index_md()?;
+        self.commit_note_op(id, message)
+    }
+
     fn commit_note_op(&self, id: &str, message: &str) -> Result<()> {
         self.commit(&[&format!("{id}.md"), "index.md", "log.md"], message)?;
         // 随時 push(FR-A6 改定)。remote 未設定なら no-op、失敗しても操作は成功のまま

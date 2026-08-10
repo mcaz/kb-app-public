@@ -66,6 +66,7 @@ struct HomeState {
     stats: Stats,
     notes: Vec<Hit>,
     drafts: Vec<Hit>,
+    care: Vec<kb_core::care::CareProposal>,
     degraded: Vec<String>,
 }
 
@@ -78,12 +79,30 @@ fn home_state() -> CmdResult<HomeState> {
     let degraded = degraded.or(pull_degraded);
     let notes = recent(&conn, 500).map_err(err)?;
     let drafts = notes.iter().filter(|h| h.status == "draft").cloned().collect();
+    // お手入れの検知(FR-C7 最小形)。失敗しても画面は出す(fail-open)
+    let _ = kb_core::care::detect(&conn, &vault);
+    let care = kb_core::care::list_open(&conn).unwrap_or_default();
     Ok(HomeState {
         stats: stats(&conn).map_err(err)?,
         notes,
         drafts,
+        care,
         degraded: degraded.into_iter().collect(),
     })
+}
+
+#[tauri::command]
+fn care_accept(key: String) -> CmdResult<()> {
+    let vault = default_vault()?;
+    let (conn, _) = synced_conn(&vault)?;
+    kb_core::care::accept_connect(&conn, &vault, &key).map_err(err)
+}
+
+#[tauri::command]
+fn care_dismiss(key: String) -> CmdResult<()> {
+    let vault = default_vault()?;
+    let conn = open_db(&vault).map_err(err)?;
+    kb_core::care::dismiss(&conn, &key).map_err(err)
 }
 
 #[derive(Serialize)]
@@ -402,6 +421,8 @@ pub fn run() {
             note_search,
             draft_confirm,
             draft_reject,
+            care_accept,
+            care_dismiss,
             graph_data,
             connect_state,
             connect_desktop,

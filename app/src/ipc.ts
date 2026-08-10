@@ -19,7 +19,8 @@ export interface Stats {
   memos: number; agent_notes: number; links: number;
   embed_enabled: boolean; embedded: number;
 }
-export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; degraded: string[] }
+export interface CareProposal { key: string; kind: string; a: string; b: string; detail: string }
+export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; care: CareProposal[]; degraded: string[] }
 export interface SearchOutcome { hits: Hit[]; related: [string, string | null][]; degraded: string[] }
 export interface NoteView {
   id: string;
@@ -83,6 +84,23 @@ async function demo<T>(v: T): Promise<T> {
   return new Promise((r) => setTimeout(() => r(v), 30));
 }
 
+const demoCare: CareProposal[] = [
+  {
+    key: "connect:notes/引っ越し手続きメモ:notes/確定申告の準備",
+    kind: "connect",
+    a: "notes/引っ越し手続きメモ",
+    b: "notes/確定申告の準備",
+    detail: "「引っ越し手続きメモ」と「確定申告の準備」が同じ話題に見えます(近さ 0.38)。",
+  },
+  {
+    key: "broken:notes/引っ越し手続きメモ:notes/新居の契約",
+    kind: "broken",
+    a: "notes/引っ越し手続きメモ",
+    b: "notes/新居の契約",
+    detail: "「引っ越し手続きメモ」の中のリンク先「notes/新居の契約」がまだありません(未執筆の知識かも)。",
+  },
+];
+
 // ---- API ----
 export const api = {
   setupState(): Promise<SetupState> {
@@ -106,7 +124,7 @@ export const api = {
           agent_notes: demoNotes.filter((n) => n.origin === "agent").length,
           links: 2, embed_enabled: true, embedded: demoNotes.length,
         },
-        notes: demoNotes.map(demoHit), drafts, degraded: [],
+        notes: demoNotes.map(demoHit), drafts, care: demoCare, degraded: [],
       });
     }
     return invoke("home_state");
@@ -177,6 +195,22 @@ export const api = {
       return demo(undefined);
     }
     return invoke("attachment_remove", { id, name });
+  },
+  careAccept(key: string): Promise<void> {
+    if (!inTauri) {
+      const i = demoCare.findIndex((c) => c.key === key);
+      if (i >= 0) demoCare.splice(i, 1);
+      return demo(undefined);
+    }
+    return invoke("care_accept", { key });
+  },
+  careDismiss(key: string): Promise<void> {
+    if (!inTauri) {
+      const i = demoCare.findIndex((c) => c.key === key);
+      if (i >= 0) demoCare.splice(i, 1);
+      return demo(undefined);
+    }
+    return invoke("care_dismiss", { key });
   },
   draftConfirm(id: string): Promise<void> {
     if (!inTauri) {

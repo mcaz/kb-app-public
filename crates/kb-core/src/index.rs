@@ -75,11 +75,12 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (id, path) in files {
         seen.insert(id.clone());
+        // ナノ秒精度 — 秒精度だと同一秒内の連続保存が再索引されない(実測で露呈)
         let mtime = fs::metadata(&path)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
+            .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
         if known.get(&id) == Some(&mtime) {
             continue;
@@ -132,6 +133,10 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
         attach_names,
         note.body
     );
+    // 旧本文は notes を上書きする前に取っておく(埋め込み保持判定に使う)
+    let old_body: Option<String> = conn
+        .query_row("SELECT body FROM notes WHERE id=?1", [id], |r| r.get(0))
+        .ok();
     conn.execute(
         "INSERT OR REPLACE INTO notes(id, title, description, status, origin, generated_by, generated_at, mtime, body)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
@@ -149,7 +154,11 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
     )?;
     conn.execute("DELETE FROM fts_main WHERE id=?1", [id])?;
     conn.execute("DELETE FROM fts_tri WHERE id=?1", [id])?;
-    conn.execute("DELETE FROM note_vecs WHERE id=?1", [id])?; // 変更ノートは再埋め込み対象へ
+    // 本文が実際に変わったときだけ埋め込みを捨てる(メタ変更や mtime 精度移行で
+    // 全ノート再埋め込みの嵐を起こさない)
+    if old_body.as_deref() != Some(note.body.as_str()) {
+        conn.execute("DELETE FROM note_vecs WHERE id=?1", [id])?;
+    }
     conn.execute(
         "INSERT INTO fts_main(id, text) VALUES(?1, ?2)",
         rusqlite::params![id, wakati(&search_text)],

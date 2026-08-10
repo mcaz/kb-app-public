@@ -236,7 +236,7 @@ function render() {
           <div class="nb">${esc(state.vaultName)}</div>
           <button class="nav ${state.view === "home" ? "on" : ""}" id="nav-home"><span>🏠 ホーム</span></button>
           <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span></button>
-          <button class="nav ${state.view === "inbox" ? "on" : ""}" id="nav-inbox"><span>📥 受信箱</span>${home.drafts.length ? `<span class="badge">${home.drafts.length}</span>` : ""}</button>
+          <button class="nav ${state.view === "inbox" ? "on" : ""}" id="nav-inbox"><span>📥 受信箱</span>${home.drafts.length + home.care.length ? `<span class="badge">${home.drafts.length + home.care.length}</span>` : ""}</button>
           <button class="nav ${state.view === "graph" ? "on" : ""}" id="nav-graph"><span>🕸️ グラフ</span></button>
           <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
           <button class="nav grow-btn" id="nav-new"><span>＋ 新しいノート</span></button>
@@ -622,7 +622,7 @@ function renderHome(pane: HTMLElement) {
       <div class="dash-tiles">
         <button class="tile" data-go="notes-human"><div class="num">${s.memos}</div><div class="lbl">📝 メモ</div></button>
         <button class="tile" data-go="notes-agent"><div class="num">${s.agent_notes}</div><div class="lbl">🤖 AI のノート</div></button>
-        <button class="tile ${s.drafts ? "amber" : ""}" data-go="inbox"><div class="num">${s.drafts}</div><div class="lbl">📥 受信箱</div></button>
+        <button class="tile ${s.drafts + home.care.length ? "amber" : ""}" data-go="inbox"><div class="num">${s.drafts + home.care.length}</div><div class="lbl">📥 受信箱</div></button>
         <div class="tile"><div class="num">${s.links}</div><div class="lbl">🔗 つながり</div></div>
         <div class="tile"><div class="num">${s.embed_enabled ? `${s.embedded}/${s.total}` : "オフ"}</div><div class="lbl">✨ かしこい検索</div></div>
         <div class="tile" id="tile-sync"><div class="num">…</div><div class="lbl">☁️ バックアップ</div></div>
@@ -966,11 +966,47 @@ function connectCardBackup(c: ConnectState): HTMLElement {
 // ---- 画面C: 受信箱(最小) ----
 function renderInbox(pane: HTMLElement) {
   const drafts = state.home!.drafts;
+  const care = state.home!.care;
   const box = el(`<div class="inbox"></div>`);
   pane.replaceChildren(box);
-  if (!drafts.length) {
-    box.appendChild(el(`<div class="none">いまは何も届いていません。AI との会話から下書きが届くと、ここに並びます。</div>`));
+  if (!drafts.length && !care.length) {
+    box.appendChild(el(`<div class="none">いまは何も届いていません。AI との会話から下書きが届いたり、お手入れの気づきが見つかると、ここに並びます。</div>`));
     return;
+  }
+  // お手入れの気づき(FR-C7)
+  for (const c of care) {
+    const isConnect = c.kind === "connect";
+    const card = el(`
+      <div class="prop-card">
+        <div class="from">お手入れの気づき</div>
+        <div class="what">${esc(c.detail)}</div>
+        <div class="row">
+          ${isConnect
+            ? `<button class="primary small" data-act="accept">つなげる</button>
+               <button class="small" data-act="view">見比べる</button>
+               <button class="quiet small" data-act="dismiss">このまま</button>`
+            : `<button class="quiet small" data-act="dismiss">確認した</button>`}
+        </div>
+      </div>
+    `);
+    card.querySelector('[data-act="accept"]')?.addEventListener("click", async () => {
+      try {
+        await api.careAccept(c.key);
+        await refreshHome();
+        render();
+        toast("つなげました");
+      } catch (e) {
+        toast(`${e}`);
+      }
+    });
+    card.querySelector('[data-act="view"]')?.addEventListener("click", () => void openNote(c.a));
+    card.querySelector('[data-act="dismiss"]')?.addEventListener("click", async () => {
+      await api.careDismiss(c.key);
+      await refreshHome();
+      render();
+      toast("了解、そのままにします(同じ提案は出ません)");
+    });
+    box.appendChild(card);
   }
   for (const d of drafts) {
     const card = el(`
