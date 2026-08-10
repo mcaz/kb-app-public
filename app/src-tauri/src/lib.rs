@@ -138,6 +138,34 @@ fn attachment_remove(id: String, name: String) -> CmdResult<()> {
     vault.remove_attachment(&id, &name).map_err(err)
 }
 
+/// クリップボードの画像を添付(ペーストのフォールバック)。
+/// WKWebView は DOM の paste イベントにクリップボード画像を渡さないため、
+/// Rust 側で NSPasteboard から直接読む(prompt 無効と同じ「実機でだけ落ちる」型の対策)。
+/// 画像が無ければ Ok(None)(テキストペーストの邪魔をしない)。
+#[tauri::command]
+fn attachment_paste(id: String) -> CmdResult<Option<(String, Option<String>)>> {
+    let mut cb = arboard::Clipboard::new().map_err(err)?;
+    let img = match cb.get_image() {
+        Ok(i) => i,
+        Err(_) => return Ok(None),
+    };
+    let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+        .ok_or("クリップボード画像の変換に失敗")?;
+    let mut png: Vec<u8> = Vec::new();
+    image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(err)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let vault = default_vault()?;
+    vault
+        .add_attachment(&id, &format!("pasted-{ts}.png"), &png)
+        .map(Some)
+        .map_err(err)
+}
+
 #[tauri::command]
 fn note_save(id: String, title: String, body: String) -> CmdResult<()> {
     let vault = default_vault()?;
@@ -294,6 +322,7 @@ pub fn run() {
             embed_enable,
             attachment_add,
             attachment_remove,
+            attachment_paste,
             launch_ai,
         ])
         .run(tauri::generate_context!())

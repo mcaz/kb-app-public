@@ -32,6 +32,59 @@ async function addAttachmentFile(noteId: string, file: File, rename?: string): P
   return saved;
 }
 
+/// ペーストから画像添付を試みる。DOM 経路 → ダメなら Rust クリップボード読み。
+/// 戻り値 = 保存名(画像が無ければ null)。
+async function pasteImage(e: ClipboardEvent, noteId: string): Promise<string | null> {
+  const items = Array.from(e.clipboardData?.items ?? []);
+  const img = items.find((i) => i.type.startsWith("image/"));
+  if (img) {
+    e.preventDefault();
+    const file = img.getAsFile();
+    if (!file) return null;
+    const ext = img.type.split("/")[1] ?? "png";
+    return addAttachmentFile(noteId, file, `pasted-${Date.now()}.${ext}`);
+  }
+  if (items.some((i) => i.kind === "string")) return null; // 通常のテキストペースト
+  // DOM に何も来ない = WKWebView の画像ペースト → Rust 側でクリップボードを直接読む
+  const res = await api.attachmentPaste(noteId);
+  if (!res) return null;
+  if (res[1]) toast(`⚠ ${res[1]}`);
+  return res[0];
+}
+
+async function handleEditorPaste(e: ClipboardEvent, n: NoteView, bodyEl: HTMLTextAreaElement) {
+  try {
+    const saved = await pasteImage(e, n.id);
+    if (!saved) return;
+    const link = `![](/${n.id}.files/${saved})`;
+    const pos = bodyEl.selectionStart;
+    bodyEl.value = bodyEl.value.slice(0, pos) + link + bodyEl.value.slice(bodyEl.selectionEnd);
+    bodyEl.selectionStart = bodyEl.selectionEnd = pos + link.length;
+    toast("画像を添付しました");
+  } catch (err2) {
+    toast(`ペースト添付に失敗: ${err2}`);
+  }
+}
+
+// 閲覧モードでも、ノートを開いていればペーストで添付できる(リンク挿入はなし)
+document.addEventListener("paste", (e) => {
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return; // エディタ側が処理
+  const n = state.selected;
+  if (!n || state.editing || state.view !== "notes") return;
+  void (async () => {
+    try {
+      const saved = await pasteImage(e as ClipboardEvent, n.id);
+      if (!saved) return;
+      state.selected = await api.noteGet(n.id);
+      render();
+      toast(`画像を添付しました(${saved})`);
+    } catch (err2) {
+      toast(`ペースト添付に失敗: ${err2}`);
+    }
+  })();
+});
+
 const app = document.getElementById("app")!;
 
 type View = "notes" | "inbox" | "connect";
@@ -320,22 +373,10 @@ function renderEditor(box: HTMLElement) {
     bodyEl.addEventListener("keydown", (e) => {
       if ((e as KeyboardEvent).metaKey && (e as KeyboardEvent).key === "s") { e.preventDefault(); void saveNote(); }
     });
-    // 画像ペースト → 自動添付+カーソル位置にリンク挿入(FR-C8)
-    bodyEl.addEventListener("paste", async (e) => {
-      const items = Array.from((e as ClipboardEvent).clipboardData?.items ?? []);
-      const img = items.find((i) => i.type.startsWith("image/"));
-      if (!img) return;
-      e.preventDefault();
-      const file = img.getAsFile();
-      if (!file) return;
-      const ext = img.type.split("/")[1] ?? "png";
-      const saved = await addAttachmentFile(n.id, file, `pasted-${Date.now()}.${ext}`);
-      if (!saved) return;
-      const link = `![](/${n.id}.files/${saved})`;
-      const pos = bodyEl.selectionStart;
-      bodyEl.value = bodyEl.value.slice(0, pos) + link + bodyEl.value.slice(bodyEl.selectionEnd);
-      bodyEl.selectionStart = bodyEl.selectionEnd = pos + link.length;
-      toast("画像を添付しました");
+    // 画像ペースト → 自動添付+カーソル位置にリンク挿入(FR-C8)。
+    // DOM 経路(ブラウザ・一部形式)→ ダメなら Rust クリップボード読み(WKWebView 対策)
+    bodyEl.addEventListener("paste", (e) => {
+      void handleEditorPaste(e as ClipboardEvent, n, bodyEl);
     });
   }
   // つながり・本文内リンクのクリックでノートを開く

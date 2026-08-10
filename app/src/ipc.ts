@@ -130,6 +130,10 @@ export const api = {
     }
     return invoke("attachment_add", { id, name, dataBase64 });
   },
+  attachmentPaste(id: string): Promise<[string, string | null] | null> {
+    if (!inTauri) return demo(null); // ブラウザは DOM の paste 経路が動く
+    return invoke("attachment_paste", { id });
+  },
   attachmentRemove(id: string, name: string): Promise<void> {
     if (!inTauri) {
       const n = demoNotes.find((x) => x.id === id);
