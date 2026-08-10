@@ -7,4 +7,4 @@
 - OKF 適合設計: [docs/okf-conformance.md](docs/okf-conformance.md)
 - 設計判断(ADR): [docs/adr/](docs/adr/) — 0001: コアは Rust、UI は TypeScript
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
-- 状態: v0.1 合格+v0.2 基本合格(2026-08-10 — 段0 の作成・閲覧・編集・検索を実機確認)。次: v0.3(繋ぐ・ランチャ・GitHub バックアップ)
+- 状態: v0.3 前半を実装(繋ぐ3カード・Desktop 接続代行・ランチャ最小・明示バックアップ。アプリ単体で MCP になる --mcp モード)。残: 段1 かしこい検索・GitHub OAuth

@@ -144,6 +144,67 @@ fn draft_reject(id: String) -> CmdResult<()> {
     vault.archive(&id).map_err(err)
 }
 
+#[derive(Serialize)]
+struct ConnectState {
+    desktop: kb_core::connect::DesktopStatus,
+    backup: kb_core::connect::BackupStatus,
+    /// 段1(かしこい検索)。v0.3 前半では準備中固定
+    smart_search: &'static str,
+}
+
+#[tauri::command]
+fn connect_state() -> CmdResult<ConnectState> {
+    let vault = default_vault()?;
+    let desktop = kb_core::connect::claude_desktop_config_path()
+        .map(|p| kb_core::connect::desktop_status_at(&p))
+        .unwrap_or(kb_core::connect::DesktopStatus::NotFound);
+    Ok(ConnectState {
+        desktop,
+        backup: kb_core::connect::backup_status(&vault).map_err(err)?,
+        smart_search: "coming",
+    })
+}
+
+#[tauri::command]
+fn connect_desktop() -> CmdResult<()> {
+    let reg = Registry::load().map_err(err)?;
+    let path = reg.resolve(None).map_err(err)?;
+    let name = reg
+        .vaults
+        .iter()
+        .find(|v| v.path == path)
+        .map(|v| v.name.clone())
+        .ok_or("vault 名が特定できない")?;
+    let cfg = kb_core::connect::claude_desktop_config_path()
+        .ok_or("設定ディレクトリが特定できない")?;
+    let exe = std::env::current_exe().map_err(err)?;
+    kb_core::connect::connect_desktop_at(&cfg, &exe, &name).map_err(err)
+}
+
+#[tauri::command]
+fn backup_now() -> CmdResult<String> {
+    let vault = default_vault()?;
+    kb_core::connect::backup_push(&vault).map_err(err)
+}
+
+/// FR-A5 最小: 現在ノートを記録して Claude Desktop を前面に。
+#[tauri::command]
+fn launch_ai(note: Option<String>) -> CmdResult<()> {
+    let vault = default_vault()?;
+    if let Some(id) = note {
+        kb_core::connect::set_current_note(&vault, &id).map_err(err)?;
+    }
+    let ok = std::process::Command::new("open")
+        .args(["-a", "Claude"])
+        .status()
+        .map_err(err)?
+        .success();
+    if !ok {
+        return Err("Claude Desktop を起動できなかった(インストール確認を)".into());
+    }
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -156,6 +217,10 @@ pub fn run() {
             note_search,
             draft_confirm,
             draft_reject,
+            connect_state,
+            connect_desktop,
+            backup_now,
+            launch_ai,
         ])
         .run(tauri::generate_context!())
         .expect("tauri run");

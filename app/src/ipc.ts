@@ -27,7 +27,20 @@ export interface NoteView {
   related: [string, string | null][];
 }
 
+export interface ConnectState {
+  desktop: "not_found" | "not_connected" | "connected";
+  backup: { remote: string | null; pending: number };
+  smart_search: string;
+}
+
 const inTauri = "__TAURI_INTERNALS__" in window;
+
+// ブラウザプレビュー用の繋ぐ状態(?connect=... で切替可)
+const demoConnect: ConnectState = {
+  desktop: (new URLSearchParams(location.search).get("connect") as ConnectState["desktop"]) || "not_connected",
+  backup: { remote: null, pending: 4 },
+  smart_search: "coming",
+};
 
 // ---- ブラウザプレビュー用のデモデータ(Tauri 外のみ) ----
 const demoNotes: NoteView[] = [
@@ -112,6 +125,26 @@ export const api = {
       return demo(undefined);
     }
     return invoke("draft_confirm", { id });
+  },
+  connectState(): Promise<ConnectState> {
+    if (!inTauri) return demo(demoConnect);
+    return invoke("connect_state");
+  },
+  connectDesktop(): Promise<void> {
+    if (!inTauri) { demoConnect.desktop = "connected"; return demo(undefined); }
+    return invoke("connect_desktop");
+  },
+  backupNow(): Promise<string> {
+    if (!inTauri) {
+      const n = demoConnect.backup.pending;
+      demoConnect.backup.pending = 0;
+      return demo(`バックアップ完了(${n} 件)`);
+    }
+    return invoke("backup_now");
+  },
+  launchAi(note: string | null): Promise<void> {
+    if (!inTauri) return demo(undefined);
+    return invoke("launch_ai", { note });
   },
   draftReject(id: string): Promise<void> {
     if (!inTauri) {

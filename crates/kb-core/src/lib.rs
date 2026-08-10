@@ -4,6 +4,7 @@
 
 pub use rusqlite;
 
+pub mod connect;
 pub mod frontmatter;
 pub mod index;
 pub mod mcp;

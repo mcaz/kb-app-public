@@ -1,11 +1,11 @@
 // kb-app 管理アプリ(v0.2 骨格)。画面はモック(docs/ui-draft.html)の A/B/C に対応。
 // ユーザーに見せる概念は「ノート・下書き・つながり・バックアップ」まで(原則7)。
 import { marked } from "marked";
-import { api, type HomeState, type NoteView } from "./ipc";
+import { api, type ConnectState, type HomeState, type NoteView } from "./ipc";
 
 const app = document.getElementById("app")!;
 
-type View = "notes" | "inbox";
+type View = "notes" | "inbox" | "connect";
 const state = {
   view: "notes" as View,
   vaultName: "わたしのノート",
@@ -85,6 +85,7 @@ function render() {
           <div class="nb">${esc(state.vaultName)}</div>
           <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span></button>
           <button class="nav ${state.view === "inbox" ? "on" : ""}" id="nav-inbox"><span>📥 受信箱</span>${home.drafts.length ? `<span class="badge">${home.drafts.length}</span>` : ""}</button>
+          <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
           <button class="nav grow-btn" id="nav-new"><span>＋ 新しいノート</span></button>
         </nav>
         <div id="pane"></div>
@@ -94,13 +95,15 @@ function render() {
   app.replaceChildren(shell);
   document.getElementById("nav-notes")!.addEventListener("click", () => { state.view = "notes"; render(); });
   document.getElementById("nav-inbox")!.addEventListener("click", () => { state.view = "inbox"; render(); });
+  document.getElementById("nav-connect")!.addEventListener("click", () => { state.view = "connect"; render(); });
   document.getElementById("nav-new")!.addEventListener("click", newNote);
   const pane = document.getElementById("pane")!;
   pane.style.display = "flex";
   pane.style.flex = "1";
   pane.style.minWidth = "0";
   if (state.view === "notes") renderNotes(pane);
-  else renderInbox(pane);
+  else if (state.view === "inbox") renderInbox(pane);
+  else renderConnect(pane);
 }
 
 // window.prompt/alert/confirm は Tauri(WKWebView)では無効(黙って null)。
@@ -225,10 +228,19 @@ function renderEditor(box: HTMLElement) {
           <button class="small" id="edit">編集</button>
         </div>
         <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${related}</div>
+        <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
         <div class="preview">${marked.parse(n.body) as string}</div>
       </div>
     `));
     document.getElementById("edit")!.addEventListener("click", () => { state.editing = true; render(); });
+    document.getElementById("talk")!.addEventListener("click", async () => {
+      try {
+        await api.launchAi(n.id);
+        toast("Claude を開きました");
+      } catch (e) {
+        toast(`${e}`);
+      }
+    });
   } else {
     box.replaceChildren(el(`
       <div style="display:flex;flex-direction:column;flex:1;min-height:0">
@@ -279,6 +291,83 @@ async function saveNote() {
   state.editing = false;
   render();
   toast("保存しました");
+}
+
+// ---- 画面D: 繋ぐ(3カード、全部任意) ----
+function renderConnect(pane: HTMLElement) {
+  const box = el(`<div class="connect"><div class="loading">確認中…</div></div>`);
+  pane.replaceChildren(box);
+  void api.connectState().then((c: ConnectState) => {
+    box.replaceChildren(
+      connectCardAi(c),
+      connectCardSearch(),
+      connectCardBackup(c),
+    );
+  });
+}
+
+function connectCardAi(c: ConnectState): HTMLElement {
+  const state_ =
+    c.desktop === "connected" ? `<span class="state ok">接続済み</span>`
+    : c.desktop === "not_found" ? `<span class="state off">Claude Desktop が見つかりません</span>`
+    : `<span class="state off">未接続</span>`;
+  const card = el(`
+    <div class="con-card">
+      <div class="name">🤖 AI アプリ(Claude)</div>
+      <div class="desc">会話の中からあなたのノートが引かれ、会話で得た知見が下書きとして受信箱に届くようになります。</div>
+      ${state_}
+      <div class="row">${c.desktop === "not_connected" ? `<button class="primary small" id="con-ai">接続する</button>` : ""}</div>
+    </div>
+  `);
+  card.querySelector("#con-ai")?.addEventListener("click", async () => {
+    try {
+      await api.connectDesktop();
+      toast("接続しました。Claude Desktop を再起動すると使えます");
+      state.view = "connect";
+      render();
+    } catch (e) {
+      toast(`接続できませんでした: ${e}`);
+    }
+  });
+  return card;
+}
+
+function connectCardSearch(): HTMLElement {
+  return el(`
+    <div class="con-card">
+      <div class="name">✨ かしこい検索</div>
+      <div class="desc">言い回しが違っても意味で見つかる検索。オンにするだけで、外部送信はありません。</div>
+      <span class="state off">準備中</span>
+      <div class="row"></div>
+    </div>
+  `);
+}
+
+function connectCardBackup(c: ConnectState): HTMLElement {
+  const has = !!c.backup.remote;
+  const state_ = has
+    ? `<span class="state ok">接続済み</span>`
+    : `<span class="state off">未設定</span>`;
+  const pending = has && c.backup.pending > 0
+    ? `<div class="desc">まだバックアップしていない変更が ${c.backup.pending} 件あります。</div>` : "";
+  const card = el(`
+    <div class="con-card">
+      <div class="name">☁️ バックアップ</div>
+      <div class="desc">ノートを非公開の保管場所へ控えておきます。押したときだけ送ります。</div>
+      ${state_}
+      ${pending}
+      <div class="row">${has ? `<button class="primary small" id="con-bk">今すぐバックアップ</button>` : ""}</div>
+    </div>
+  `);
+  card.querySelector("#con-bk")?.addEventListener("click", async () => {
+    try {
+      toast(await api.backupNow());
+      render();
+    } catch (e) {
+      toast(`${e}`);
+    }
+  });
+  return card;
 }
 
 // ---- 画面C: 受信箱(最小) ----
