@@ -1,0 +1,123 @@
+/* UI たたき v0(docs/ui-draft.html)のデザイン言語を実装に移植 */
+:root {
+  --ground:#F3F5F0; --panel:#FCFDFB; --panel-2:#EDF0E9; --ink:#232821; --muted:#6C7468;
+  --line:#D8DDD2; --chip:#FFFFFF;
+  --grow:#3E7550; --grow-soft:#E2EEE5;
+  --prop:#A97B2F; --prop-soft:#F5EAD8;
+  --sel:#E7EBE2; --danger:#A94A2F;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:#141713; --panel:#1C201A; --panel-2:#232821; --ink:#E7E9E2; --muted:#98A093;
+    --line:#343B31; --chip:#262C24;
+    --grow:#7FB08D; --grow-soft:#20321F;
+    --prop:#D2A050; --prop-soft:#382B18;
+    --sel:#2A3127; --danger:#D2755A;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font-family: "Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic","Noto Sans JP",sans-serif;
+  font-size: 14px; line-height: 1.7;
+}
+button {
+  font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--chip); color: var(--ink); cursor: pointer;
+}
+button.primary { background: var(--grow); border-color: var(--grow); color: #fff; }
+button.quiet { border-color: transparent; background: transparent; color: var(--muted); }
+button.small { font-size: 12px; padding: 3px 10px; }
+input, textarea {
+  font: inherit; color: var(--ink); background: var(--chip);
+  border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px;
+}
+input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color: var(--grow); }
+
+/* 劣化バナー(原則4: 壊れたら見える) */
+.degraded {
+  background: var(--prop-soft); color: var(--prop); font-size: 12.5px;
+  padding: 6px 14px; border-bottom: 1px solid var(--line);
+}
+
+/* オンボーディング */
+.onb {
+  height: 100%; display: flex; flex-direction: column; gap: 6px;
+  align-items: center; justify-content: center; text-align: center; padding: 24px;
+}
+.onb .mark { font-size: 40px; }
+.onb h1 { font-size: 22px; margin: 6px 0 2px; }
+.onb p { color: var(--muted); margin: 0 0 18px; }
+
+/* 3ペイン */
+.shell { display: flex; flex-direction: column; height: 100%; }
+.app { display: flex; flex: 1; min-height: 0; }
+.side {
+  width: 176px; flex: none; border-right: 1px solid var(--line); background: var(--panel-2);
+  padding: 14px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 2px;
+}
+.side .nb { font-weight: 700; padding: 6px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.side .nav {
+  padding: 7px 10px; border-radius: 7px; color: var(--muted); display: flex;
+  justify-content: space-between; align-items: center; cursor: pointer; border: none; background: none; text-align: left; font-size: 13px;
+}
+.side .nav.on { background: var(--sel); color: var(--ink); }
+.side .badge {
+  background: var(--prop); color: #fff; border-radius: 999px; font-size: 10.5px;
+  padding: 0 7px; line-height: 18px; height: 18px;
+}
+.side .grow-btn { margin-top: auto; }
+
+.list { width: 230px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; font-size: 13px; display: flex; flex-direction: column; min-height: 0; }
+.list .searchbox { margin: 0 10px 10px; display: flex; }
+.list .searchbox input { flex: 1; font-size: 12.5px; }
+.list .items { overflow-y: auto; flex: 1; }
+.list .item { padding: 8px 14px; border-left: 2px solid transparent; cursor: pointer; }
+.list .item.on { background: var(--sel); border-left-color: var(--grow); }
+.list .item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .item .d { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .item .d .via { color: var(--prop); }
+.list .empty { color: var(--muted); padding: 8px 14px; font-size: 12.5px; }
+
+/* エディタ/ビュー */
+.editor { flex: 1; min-width: 0; padding: 18px 22px; overflow-y: auto; display: flex; flex-direction: column; }
+.editor .title-row { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+.editor .title { font-size: 18px; font-weight: 700; flex: 1; min-width: 0; }
+.editor input.title { border: none; background: transparent; padding: 0; }
+.editor .meta { font-size: 12px; color: var(--muted); margin-bottom: 14px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.editor .meta .link { color: var(--grow); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.editor textarea.body {
+  flex: 1; width: 100%; resize: none; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px; line-height: 1.7; min-height: 200px;
+}
+.editor .preview { max-width: 46em; }
+.editor .preview h1 { font-size: 20px; } .editor .preview h2 { font-size: 17px; }
+.editor .preview a { color: var(--grow); }
+.editor .preview code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.editor .preview pre { background: var(--panel-2); padding: 10px 14px; border-radius: 8px; overflow-x: auto; }
+.editor .placeholder { color: var(--muted); }
+.status-pill { font-size: 11px; padding: 1px 9px; border-radius: 999px; }
+.status-pill.draft { background: var(--prop-soft); color: var(--prop); }
+.status-pill.deprecated { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+
+/* 受信箱 */
+.inbox { flex: 1; padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+.inbox .none { color: var(--muted); }
+.prop-card {
+  border: 1px solid var(--line); border-left: 3px solid var(--prop); border-radius: 10px;
+  padding: 13px 16px; background: var(--panel);
+}
+.prop-card .from { font-size: 11.5px; color: var(--prop); font-weight: 600; letter-spacing: .04em; margin-bottom: 3px; }
+.prop-card .what { font-weight: 600; }
+.prop-card .ex { color: var(--muted); font-size: 13px; margin: 5px 0 10px; }
+.prop-card .row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  background: var(--ink); color: var(--ground); font-size: 13px;
+  padding: 8px 18px; border-radius: 999px; opacity: 0; transition: opacity .25s;
+  pointer-events: none;
+}
+.toast.show { opacity: .92; }

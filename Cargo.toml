@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kb-core", "crates/kb-cli"]
+members = ["crates/kb-core", "crates/kb-cli", "app/src-tauri"]
 exclude = ["poc"]
 
 [workspace.package]

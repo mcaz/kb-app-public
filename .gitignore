@@ -1,3 +1,5 @@
 /target
 poc/*/target
 poc/embed-onnx/models/
+node_modules/
+app/dist/

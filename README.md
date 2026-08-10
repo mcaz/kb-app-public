@@ -7,4 +7,4 @@
 - OKF 適合設計: [docs/okf-conformance.md](docs/okf-conformance.md)
 - 設計判断(ADR): [docs/adr/](docs/adr/) — 0001: コアは Rust、UI は TypeScript
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
-- 状態: v0.1 合格 — Claude Desktop で「引く・育てる」ループ一周を実測(2026-08-10)。次: v0.2 管理アプリ骨格
+- 状態: v0.1 合格(2026-08-10)+ v0.2 管理アプリ骨格を実装(Tauri v2+TS。オンボーディング・3ペイン・エディタ・検索・受信箱最小)。受け入れ=段0 完結の本人検証待ち

@@ -121,7 +121,8 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
-fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Option<String>)>> {
+/// 指定ノートの「つながり」(リンク先+被リンク、最大5件)。
+pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Option<String>)>> {
     let Some(id) = id else { return Ok(Vec::new()) };
     let mut stmt = conn.prepare_cached(
         "SELECT DISTINCT other, (SELECT title FROM notes WHERE id = other) FROM (
@@ -131,6 +132,25 @@ fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Option
     )?;
     let rows = stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
+/// 健全性の要約(FR-A2 ホーム表示用)。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Stats {
+    pub total: usize,
+    pub drafts: usize,
+    pub deprecated: usize,
+}
+
+pub fn stats(conn: &Connection) -> Result<Stats> {
+    let count = |sql: &str| -> Result<usize> {
+        Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as usize)
+    };
+    Ok(Stats {
+        total: count("SELECT count(*) FROM notes")?,
+        drafts: count("SELECT count(*) FROM notes WHERE status='draft'")?,
+        deprecated: count("SELECT count(*) FROM notes WHERE status='deprecated'")?,
+    })
 }
 
 /// 直近ノート(generated_at 降順、なければ mtime 降順)。

@@ -132,6 +132,19 @@ impl Vault {
         Ok(id)
     }
 
+    /// ノートの編集(GUI エディタの保存)。タイトル・本文を更新し generated を更新。
+    /// 呼び出しは常に人間側(actor = human:*)— AI の編集は propose 経由のみ(原則9)。
+    pub fn edit_note(&self, id: &str, title: &str, body: &str, actor: &str) -> Result<()> {
+        let mut note = self.read_note(id)?;
+        note.front.title = Some(title.to_string());
+        note.front.generated = Some(Generated { by: actor.into(), at: now_iso() });
+        note.body = body.to_string();
+        self.write_note(id, &note)?;
+        self.write_index_md()?;
+        self.commit_note_op(id, &format!("note: edit {id}"))?;
+        Ok(())
+    }
+
     /// 下書きの確定(status: stable 化+verified 追記)。人の操作のみ(FR-C5: MCP に公開しない)。
     pub fn confirm(&self, id: &str, actor: &str) -> Result<()> {
         let mut note = self.read_note(id)?;

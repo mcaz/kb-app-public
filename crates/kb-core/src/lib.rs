@@ -2,6 +2,8 @@
 //! GUI(Tauri)・CLI・AI ツールはすべてこの crate を呼ぶ(docs/requirements.md システム構成)。
 //! ノート形式は OKF v0.2 互換(docs/okf-conformance.md)。
 
+pub use rusqlite;
+
 pub mod frontmatter;
 pub mod index;
 pub mod mcp;
