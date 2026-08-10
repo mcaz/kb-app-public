@@ -67,6 +67,8 @@ enum Command {
     Confirm { note: String },
     /// 退役(status: deprecated)
     Archive { note: String },
+    /// 削除(本体+添付。git 履歴には残る)
+    Delete { note: String },
     /// 既存 Markdown KB からの移植(互換レイヤ)。`<dir>` か `<dir>=<接頭辞>` を複数指定可。
     /// リンク解決はソース横断
     Import {
@@ -215,6 +217,13 @@ fn main() -> Result<()> {
             }
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
+        }
+        Command::Delete { note } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            vault.delete_note(&note)?;
+            let conn = open_db(&vault)?;
+            sync(&vault, &conn)?;
+            println!("deleted: {note}");
         }
         Command::Sync => {
             let vault = open_vault(cli.vault.as_deref())?;

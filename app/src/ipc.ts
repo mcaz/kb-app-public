@@ -115,6 +115,14 @@ export const api = {
     }
     return invoke("note_new", { title });
   },
+  noteDelete(id: string): Promise<void> {
+    if (!inTauri) {
+      const i = demoNotes.findIndex((x) => x.id === id);
+      if (i >= 0) demoNotes.splice(i, 1);
+      return demo(undefined);
+    }
+    return invoke("note_delete", { id });
+  },
   noteSearch(query: string): Promise<SearchOutcome> {
     if (!inTauri) {
       const hits = demoNotes.filter((n) => (n.title + n.body).includes(query)).map((n) => ({ ...demoHit(n), via: "main" }));

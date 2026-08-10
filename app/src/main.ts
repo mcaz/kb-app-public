@@ -369,6 +369,7 @@ function renderEditor(box: HTMLElement) {
         <div class="title-row">
           <div class="title">${esc(n.title)}</div>
           <button class="small" id="edit">編集</button>
+          <button class="quiet small" id="delete">削除</button>
         </div>
         <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${related}</div>
         <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
@@ -402,6 +403,7 @@ function renderEditor(box: HTMLElement) {
       }
     });
     document.getElementById("edit")!.addEventListener("click", () => { state.editing = true; render(); });
+    document.getElementById("delete")!.addEventListener("click", () => void confirmDelete(n));
     document.getElementById("talk")!.addEventListener("click", async () => {
       try {
         await api.launchAi(n.id);
@@ -454,6 +456,42 @@ async function openNote(id: string) {
   } catch {
     toast("そのノートはまだありません");
   }
+}
+
+// 削除確認(confirm() は WKWebView で無効のためアプリ内モーダル)
+function confirmDelete(n: NoteView): Promise<void> {
+  return new Promise((resolve) => {
+    const hasAttach = n.attachments.length > 0;
+    const overlay = el(`
+      <div class="modal-overlay">
+        <div class="modal">
+          <div class="modal-title">「${esc(n.title)}」を削除しますか?</div>
+          <div class="modal-desc">${hasAttach ? `添付 ${n.attachments.length} 件も一緒に削除されます。` : ""}画面からは消えますが、履歴には残ります。</div>
+          <div class="modal-row">
+            <button class="danger" id="modal-del">削除する</button>
+            <button class="quiet" id="modal-cancel">やめる</button>
+          </div>
+        </div>
+      </div>
+    `);
+    const done = () => { overlay.remove(); resolve(); };
+    overlay.querySelector("#modal-cancel")!.addEventListener("click", done);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(); });
+    overlay.querySelector("#modal-del")!.addEventListener("click", async () => {
+      try {
+        await api.noteDelete(n.id);
+        state.selected = null;
+        await refreshHome();
+        done();
+        render();
+        toast("削除しました");
+      } catch (e) {
+        done();
+        toast(`削除に失敗: ${e}`);
+      }
+    });
+    document.body.appendChild(overlay);
+  });
 }
 
 async function saveNote() {

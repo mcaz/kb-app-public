@@ -85,7 +85,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
         "SELECT f.id, n.title, n.status,
                 snippet(fts_main, 1, '[', ']', '…', 12)
          FROM fts_main f JOIN notes n ON n.id = f.id
-         WHERE fts_main MATCH ?1
+         WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
          ORDER BY rank LIMIT ?2",
     )?;
     let rows = stmt.query_map(rusqlite::params![expr, limit as i64], |r| {
@@ -114,7 +114,8 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
     let neighbors = embed::knn(conn, &qv, limit * 2)?;
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT title, status, coalesce(description, substr(body,1,80)) FROM notes WHERE id = ?1",
+        "SELECT title, status, coalesce(description, substr(body,1,80))
+         FROM notes WHERE id = ?1 AND status != 'deprecated'",
     )?;
     for (id, dist) in neighbors {
         if dist > embed::RELATED_DISTANCE {
@@ -192,7 +193,8 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
         }
     }
     let sql = format!(
-        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80) FROM notes n WHERE {} LIMIT {}",
+        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80) FROM notes n
+         WHERE n.status != 'deprecated' AND {} LIMIT {}",
         conds.join(" AND "),
         limit
     );
@@ -259,7 +261,8 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, title, status, coalesce(description, substr(body,1,80))
-         FROM notes ORDER BY coalesce(generated_at, datetime(mtime,'unixepoch')) DESC LIMIT ?1",
+         FROM notes WHERE status != 'deprecated'
+         ORDER BY coalesce(generated_at, datetime(mtime,'unixepoch')) DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map([limit as i64], |r| {
         Ok(Hit {

@@ -165,6 +165,28 @@ impl Vault {
         Ok(())
     }
 
+    /// ノートの削除(本体+添付)。git 履歴には残る(エンジニア経路で復元可能)。
+    /// MCP には公開しない — 削除は人の操作のみ。
+    pub fn delete_note(&self, id: &str) -> Result<()> {
+        let title = self
+            .read_note(id)
+            .ok()
+            .and_then(|n| n.front.title)
+            .unwrap_or_else(|| id.to_string());
+        let repo = Repository::open(&self.root)?;
+        let mut index = repo.index()?;
+        index.remove_path(Path::new(&format!("{id}.md")))?;
+        let _ = index.remove_dir(Path::new(&format!("{id}.files")), 0);
+        index.write()?;
+        fs::remove_file(self.note_path(id))?;
+        let _ = fs::remove_dir_all(self.attach_dir(id));
+        self.write_index_md()?;
+        self.append_log(&format!("**Deletion**: 「{title}」({id})を削除。"))?;
+        self.commit(&["index.md", "log.md"], &format!("note: delete {id}"))?;
+        crate::connect::auto_push(self);
+        Ok(())
+    }
+
     /// 退役(status: deprecated)。ファイルは消さない(OKF §5.4: kept for links and history)。
     pub fn archive(&self, id: &str) -> Result<()> {
         let mut note = self.read_note(id)?;

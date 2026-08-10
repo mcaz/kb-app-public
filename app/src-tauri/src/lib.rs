@@ -187,6 +187,16 @@ fn note_save(id: String, title: String, body: String) -> CmdResult<()> {
     vault.edit_note(&id, &title, &body, OWNER_ACTOR).map_err(err)
 }
 
+/// ノート削除(本体+添付。git 履歴には残る)。MCP には公開しない — 人の操作のみ。
+#[tauri::command]
+fn note_delete(id: String) -> CmdResult<()> {
+    let vault = default_vault()?;
+    vault.delete_note(&id).map_err(err)?;
+    let (conn, _) = synced_conn(&vault)?;
+    let _ = conn; // 索引から即時に消す(sync が削除を検知)
+    Ok(())
+}
+
 #[tauri::command]
 fn note_new(title: String) -> CmdResult<String> {
     let vault = default_vault()?;
@@ -327,6 +337,7 @@ pub fn run() {
             note_get,
             note_save,
             note_new,
+            note_delete,
             note_search,
             draft_confirm,
             draft_reject,
