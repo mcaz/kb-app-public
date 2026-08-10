@@ -75,6 +75,11 @@ enum Command {
         /// 例: ~/old-kb/vault ~/old-team/vault=team
         sources: Vec<String>,
     },
+    /// お手入れ(FR-C7)の一覧・承諾・却下(エンジニア向けの口)
+    Care {
+        #[command(subcommand)]
+        command: CareCommand,
+    },
     /// 索引の増分 sync
     Sync,
     /// かしこい検索(段1: 埋め込み内蔵)の管理
@@ -88,6 +93,16 @@ enum Command {
         #[arg(long, default_value = "mcp-client/unknown")]
         client: String,
     },
+}
+
+#[derive(Subcommand)]
+enum CareCommand {
+    /// 検知を回して未処理の提案を一覧
+    List,
+    /// 「つなげる」の承諾
+    Accept { key: String },
+    /// 「このまま」(同じ提案は出なくなる)
+    Dismiss { key: String },
 }
 
 #[derive(Subcommand)]
@@ -224,6 +239,27 @@ fn main() -> Result<()> {
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
             println!("deleted: {note}");
+        }
+        Command::Care { command } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            let conn = open_db(&vault)?;
+            sync(&vault, &conn)?;
+            match command {
+                CareCommand::List => {
+                    kb_core::care::detect(&conn, &vault)?;
+                    for p in kb_core::care::list_open(&conn)? {
+                        println!("{}\t{}\t{}", p.key, p.kind, p.detail);
+                    }
+                }
+                CareCommand::Accept { key } => {
+                    kb_core::care::accept_connect(&conn, &vault, &key)?;
+                    println!("connected: {key}");
+                }
+                CareCommand::Dismiss { key } => {
+                    kb_core::care::dismiss(&conn, &key)?;
+                    println!("dismissed: {key}");
+                }
+            }
         }
         Command::Sync => {
             let vault = open_vault(cli.vault.as_deref())?;

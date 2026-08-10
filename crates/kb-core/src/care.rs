@@ -13,9 +13,9 @@ use crate::vault::Vault;
 
 /// 「同じ話題に見える」判定のコサイン距離閾値(ノート全文同士)。
 /// PoC 実測の関連帯(0.17〜0.43)と無関係帯(0.69〜)の間に置く。
-const DUP_DISTANCE: f32 = 0.45;
-/// 1回の検知で受信箱に積む提案の上限(通知疲れの抑制)。
-const MAX_NEW_PROPOSALS: usize = 5;
+const DUP_DISTANCE: f32 = 0.35;
+/// 未処理の提案の総数上限(通知疲れの抑制)。処理されて枠が空いたら次を補充する。
+const MAX_OPEN_PROPOSALS: usize = 5;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CareProposal {
@@ -40,6 +40,15 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 /// 既知(open/dismissed 問わず)の key は再提案しない — 「いいえ」は尊重される。
 pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
     init_schema(conn)?;
+    let open_now: usize = conn.query_row(
+        "SELECT count(*) FROM care_proposals WHERE status='open'",
+        [],
+        |r| r.get::<_, i64>(0),
+    )? as usize;
+    let budget = MAX_OPEN_PROPOSALS.saturating_sub(open_now);
+    if budget == 0 {
+        return Ok(0);
+    }
     let mut added = 0;
 
     // ① 意味的な近接(埋め込みがある場合のみ — 段0 では黙ってスキップ)
@@ -59,7 +68,7 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         };
         'outer: for i in 0..notes.len() {
             for j in (i + 1)..notes.len() {
-                if added >= MAX_NEW_PROPOSALS {
+                if added >= budget {
                     break 'outer;
                 }
                 let (ida, ta, va) = &notes[i];
@@ -103,7 +112,7 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         rows.filter_map(|r| r.ok()).collect()
     };
     for (src, dst) in broken {
-        if added >= MAX_NEW_PROPOSALS {
+        if added >= budget {
             break;
         }
         let key = format!("broken:{src}:{dst}");
