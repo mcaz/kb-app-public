@@ -275,6 +275,59 @@ fn connect_state() -> CmdResult<ConnectState> {
     })
 }
 
+#[derive(Serialize)]
+struct GraphNode {
+    id: String,
+    title: String,
+    origin: Option<String>,
+    status: String,
+    degree: usize,
+}
+
+#[derive(Serialize)]
+struct GraphData {
+    nodes: Vec<GraphNode>,
+    edges: Vec<(String, String)>,
+}
+
+/// グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。
+#[tauri::command]
+fn graph_data() -> CmdResult<GraphData> {
+    let vault = default_vault()?;
+    let (conn, _) = synced_conn(&vault)?;
+    let mut nodes: Vec<GraphNode> = {
+        let mut stmt = conn
+            .prepare("SELECT id, coalesce(title, id), origin, status FROM notes WHERE status != 'deprecated'")
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(GraphNode {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    origin: r.get(2)?,
+                    status: r.get(3)?,
+                    degree: 0,
+                })
+            })
+            .map_err(err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(err)?
+    };
+    let ids: std::collections::HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+    let edges: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT src, dst FROM links").map_err(err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(err)?;
+        rows.filter_map(|r| r.ok())
+            .filter(|(s, d)| ids.contains(s) && ids.contains(d))
+            .collect()
+    };
+    for n in &mut nodes {
+        n.degree = edges.iter().filter(|(s, d)| *s == n.id || *d == n.id).count();
+    }
+    Ok(GraphData { nodes, edges })
+}
+
 /// かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
 #[tauri::command]
 async fn embed_enable() -> CmdResult<()> {
@@ -349,6 +402,7 @@ pub fn run() {
             note_search,
             draft_confirm,
             draft_reject,
+            graph_data,
             connect_state,
             connect_desktop,
             backup_now,

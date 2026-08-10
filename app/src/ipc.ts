@@ -34,6 +34,11 @@ export interface NoteView {
   vault_root: string;
 }
 
+export interface GraphData {
+  nodes: { id: string; title: string; origin: string | null; status: string; degree: number }[];
+  edges: [string, string][];
+}
+
 export interface ConnectState {
   desktop: "not_found" | "not_connected" | "connected";
   backup: { remote: string | null; pending: number };
@@ -180,6 +185,20 @@ export const api = {
       return demo(undefined);
     }
     return invoke("draft_confirm", { id });
+  },
+  graphData(): Promise<GraphData> {
+    if (!inTauri) {
+      const edges: [string, string][] = [];
+      for (const n of demoNotes) for (const [dst] of n.related) edges.push([n.id, dst]);
+      return demo({
+        nodes: demoNotes.map((n) => ({
+          id: n.id, title: n.title, origin: n.origin, status: n.status,
+          degree: edges.filter(([s, d]) => s === n.id || d === n.id).length,
+        })),
+        edges,
+      });
+    }
+    return invoke("graph_data");
   },
   connectState(): Promise<ConnectState> {
     if (!inTauri) return demo(demoConnect);

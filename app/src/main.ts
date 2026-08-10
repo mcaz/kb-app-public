@@ -2,8 +2,12 @@
 // ユーザーに見せる概念は「ノート・下書き・つながり・バックアップ」まで(原則7)。
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import {
+  forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation,
+  type Simulation, type SimulationLinkDatum, type SimulationNodeDatum,
+} from "d3-force";
 import { marked } from "marked";
-import { api, type ConnectState, type HomeState, type NoteView } from "./ipc";
+import { api, type ConnectState, type GraphData, type HomeState, type NoteView } from "./ipc";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 
@@ -144,7 +148,7 @@ document.addEventListener("paste", (e) => {
 
 const app = document.getElementById("app")!;
 
-type View = "home" | "notes" | "inbox" | "connect";
+type View = "home" | "notes" | "inbox" | "connect" | "graph";
 type Tab = "all" | "human" | "agent";
 const state = {
   view: "notes" as View,
@@ -233,6 +237,7 @@ function render() {
           <button class="nav ${state.view === "home" ? "on" : ""}" id="nav-home"><span>🏠 ホーム</span></button>
           <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span></button>
           <button class="nav ${state.view === "inbox" ? "on" : ""}" id="nav-inbox"><span>📥 受信箱</span>${home.drafts.length ? `<span class="badge">${home.drafts.length}</span>` : ""}</button>
+          <button class="nav ${state.view === "graph" ? "on" : ""}" id="nav-graph"><span>🕸️ グラフ</span></button>
           <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
           <button class="nav grow-btn" id="nav-new"><span>＋ 新しいノート</span></button>
         </nav>
@@ -244,6 +249,7 @@ function render() {
   document.getElementById("nav-home")!.addEventListener("click", () => { state.view = "home"; render(); });
   document.getElementById("nav-notes")!.addEventListener("click", () => { state.view = "notes"; render(); });
   document.getElementById("nav-inbox")!.addEventListener("click", () => { state.view = "inbox"; render(); });
+  document.getElementById("nav-graph")!.addEventListener("click", () => { state.view = "graph"; render(); });
   document.getElementById("nav-connect")!.addEventListener("click", () => { state.view = "connect"; render(); });
   document.getElementById("nav-new")!.addEventListener("click", newNote);
   const pane = document.getElementById("pane")!;
@@ -253,6 +259,7 @@ function render() {
   if (state.view === "home") renderHome(pane);
   else if (state.view === "notes") renderNotes(pane);
   else if (state.view === "inbox") renderInbox(pane);
+  else if (state.view === "graph") renderGraph(pane);
   else renderConnect(pane);
 }
 
@@ -540,6 +547,7 @@ async function openNote(id: string) {
   try {
     state.selected = await api.noteGet(id);
     state.editing = false;
+    state.view = "notes"; // グラフ等どこから開いてもノート画面へ
     render();
   } catch {
     toast("そのノートはまだありません");
@@ -674,6 +682,169 @@ function renderHome(pane: HTMLElement) {
       warnings.push(`同期エラー: ${c.sync_error}`);
       renderWarnings();
       tile.classList.add("amber");
+    }
+  });
+}
+
+// ---- 画面E: つながりグラフ(FR-A7)----
+// メモ=緑 / AI ノート=琥珀の2色(原則9 の可視化)。クリックでノートを開く。
+type GNode = SimulationNodeDatum & GraphData["nodes"][number];
+let graphSim: Simulation<GNode, SimulationLinkDatum<GNode>> | null = null;
+
+function renderGraph(pane: HTMLElement) {
+  graphSim?.stop();
+  const wrap = el(`
+    <div class="graph-wrap">
+      <canvas></canvas>
+      <div class="graph-legend">
+        <span><i class="dot human"></i>メモ</span>
+        <span><i class="dot agent"></i>AI のノート</span>
+        <span class="hint">クリックで開く / ドラッグで動かす / ホイールで拡大</span>
+      </div>
+    </div>
+  `);
+  pane.replaceChildren(wrap);
+  const canvas = wrap.querySelector("canvas")!;
+  void api.graphData().then((data) => startGraph(wrap, canvas, data));
+}
+
+function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphData) {
+  const css = getComputedStyle(document.documentElement);
+  const colHuman = css.getPropertyValue("--grow").trim() || "#3E7550";
+  const colAgent = css.getPropertyValue("--prop").trim() || "#A97B2F";
+  const colLine = css.getPropertyValue("--line").trim() || "#888";
+  const colInk = css.getPropertyValue("--ink").trim() || "#222";
+  const ctx = canvas.getContext("2d")!;
+  const dpr = window.devicePixelRatio || 1;
+
+  const nodes: GNode[] = data.nodes.map((n) => ({ ...n }));
+  const links = data.edges.map(([source, target]) => ({ source, target })) as SimulationLinkDatum<GNode>[];
+  const t = { x: 0, y: 0, k: 1 };
+  let hovered: GNode | null = null;
+
+  const size = () => {
+    canvas.width = wrap.clientWidth * dpr;
+    canvas.height = wrap.clientHeight * dpr;
+  };
+  size();
+  new ResizeObserver(() => { size(); draw(); }).observe(wrap);
+
+  const radius = (n: GNode) => 5 + Math.min(9, n.degree * 1.5);
+
+  const sim = forceSimulation(nodes)
+    .force("link", forceLink<GNode, SimulationLinkDatum<GNode>>(links).id((d) => d.id).distance(70).strength(0.5))
+    .force("charge", forceManyBody().strength(-170))
+    .force("center", forceCenter(wrap.clientWidth / 2, wrap.clientHeight / 2))
+    .force("collide", forceCollide<GNode>().radius((d) => radius(d) + 4))
+    .on("tick", () => draw());
+  graphSim = sim as Simulation<GNode, SimulationLinkDatum<GNode>>;
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+    ctx.translate(t.x, t.y);
+    ctx.scale(t.k, t.k);
+    ctx.strokeStyle = colLine;
+    ctx.lineWidth = 1 / t.k;
+    ctx.globalAlpha = 0.7;
+    for (const l of links) {
+      const s = l.source as GNode;
+      const d = l.target as GNode;
+      if (s.x == null || d.x == null) continue;
+      ctx.beginPath();
+      ctx.moveTo(s.x!, s.y!);
+      ctx.lineTo(d.x!, d.y!);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    for (const n of nodes) {
+      if (n.x == null) continue;
+      ctx.beginPath();
+      ctx.arc(n.x!, n.y!, radius(n), 0, Math.PI * 2);
+      ctx.fillStyle = n.origin === "agent" ? colAgent : colHuman;
+      ctx.fill();
+      if (n === hovered) {
+        ctx.strokeStyle = colInk;
+        ctx.lineWidth = 2 / t.k;
+        ctx.stroke();
+      }
+      if (t.k > 0.75 || n === hovered) {
+        ctx.fillStyle = colInk;
+        ctx.font = `${11 / t.k}px sans-serif`;
+        const label = n.title.length > 16 ? `${n.title.slice(0, 16)}…` : n.title;
+        ctx.fillText(label, n.x! + radius(n) + 3 / t.k, n.y! + 4 / t.k);
+      }
+    }
+  }
+
+  const toGraph = (mx: number, my: number) => ({ x: (mx - t.x) / t.k, y: (my - t.y) / t.k });
+  const hit = (mx: number, my: number): GNode | null => {
+    const p = toGraph(mx, my);
+    for (const n of nodes) {
+      if (n.x == null) continue;
+      const dx = p.x - n.x!;
+      const dy = p.y - n.y!;
+      if (dx * dx + dy * dy <= (radius(n) + 3) ** 2) return n;
+    }
+    return null;
+  };
+
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const k2 = Math.min(4, Math.max(0.2, t.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    t.x = mx - ((mx - t.x) / t.k) * k2;
+    t.y = my - ((my - t.y) / t.k) * k2;
+    t.k = k2;
+    draw();
+  }, { passive: false });
+
+  canvas.addEventListener("mousedown", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const node = hit(mx, my);
+    const start = { mx, my, moved: false };
+    const move = (ev: MouseEvent) => {
+      const cx = ev.clientX - rect.left;
+      const cy = ev.clientY - rect.top;
+      if (Math.abs(cx - start.mx) + Math.abs(cy - start.my) > 4) start.moved = true;
+      if (node) {
+        const p = toGraph(cx, cy);
+        node.fx = p.x;
+        node.fy = p.y;
+        sim.alphaTarget(0.25).restart();
+      } else {
+        t.x += cx - start.mx;
+        t.y += cy - start.my;
+        start.mx = cx;
+        start.my = cy;
+        draw();
+      }
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      if (node) {
+        node.fx = null;
+        node.fy = null;
+        sim.alphaTarget(0);
+        if (!start.moved) void openNote(node.id);
+      }
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+
+  canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const h = hit(e.clientX - rect.left, e.clientY - rect.top);
+    if (h !== hovered) {
+      hovered = h;
+      canvas.style.cursor = h ? "pointer" : "default";
+      draw();
     }
   });
 }
