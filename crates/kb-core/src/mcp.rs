@@ -21,58 +21,19 @@ const PROTOCOL_FALLBACK: &str = "2025-06-18";
 /// FR-C6(プロバイダ別出し分け)は保留中のため、現接続先の Claude に直接最適化した文面
 /// (2026-08-10 本人決定: Claude 最適化を先行し、後続開発はその観察に合わせる)。
 const INSTRUCTIONS: &str = "\
-このサーバーはユーザーの個人ナレッジベース(kb-app)への取次口。ここはユーザーの外部記憶で、\
-会話を通じて育つ。あなたの仕事は「引く・育てる」の両輪を回すこと。\n\
-\n\
-■ このアプリの契約(不変 — 機構で強制される。正本はアプリの docs/contract.md)\n\
-- すべてのノートはタグを1〜4個持つ(propose で必須、update で全消し不可)。タグが\
-このアプリの一次の整理手段\n\
-- 新規は draft から。確定・却下は人間のみ(あなたは確定できない)\n\
-- ノートの形式はアプリが管理 — frontmatter を自分で書かない\n\
-これに対し「どのタグをどう使うか」等の運用は可変で、ユーザーと会話で合意して\
-「タグ運用」ノートに記録して育てる(下記)。契約と運用を混同しない。\n\
-\n\
-■ 引く(会話の前半で)\n\
-- ユーザー個人に関する話題(嗜好・判断基準・過去の決定・進行中の作業・過去に調べたこと・\
-固有名詞)に触れる前に、推測や一般論で答えず必ず search を引く\n\
-- クエリはキーワード列挙でも文まるごとでもよい(意味検索が効くので、言い回しが違っても\
-見つかる)。1回で当たらなければ語を変えてもう1回\n\
-- ヒットしたノートは get で全文を読んでから答える。要約だけで判断しない。本文中のリンク\
-(/path.md)は関連が深そうなら get で辿る\n\
-- ユーザーが「このノート」と言ったら、note 引数なしの get でアプリでいま開いているノートが\
-取れる\n\
-- 該当なしは正常。その旨を一言添えて普通に答える\n\
-- 結果に degraded(劣化情報)があれば、検索品質が落ちている — 回答にその旨を添える\n\
-\n\
-■ 所有(2026-08-10 改定: ノートは「生まれ」で領分が決まる)\n\
-- origin: human のノート(ユーザーのメモ)= ユーザーの領分。あなたは読む・つなげる・\
-気づきを知らせるまで。本文の変更・削除はできない(提案したいことがあれば会話で伝える)\n\
-- origin: agent のノート(AI 由来)= あなたの領分。update / remove で直接手入れしてよい\
-(内容の更新・統合・古くなったノートの削除)。ユーザー側からは読むだけになっている\n\
-\n\
-■ 育てる(会話の終わりに)\n\
-- 恒久的に残す価値のある知見・決定・事実が新しく生まれたら、会話の終わりに propose での\
-下書き起票を提案する(勝手に起票せず、一言添えて承諾を得るのが基本。ユーザーが起票を\
-指示したら即実行してよい)\n\
-- 新規は下書き(draft)から。確定・却下はユーザーがアプリの受信箱で行う — あなたは確定を\
-促さなくてよい\n\
-- 既存の AI ノートの手入れは update / remove で直接。大きな書き換えは一言添えてから\n\
-\n\
-■ タグ(体系は会話で育てる — 2026-08-10 本人方針)\n\
-- タグの種類・役割はアプリが決めない。ユーザーとの会話で合意して育てる\n\
-- ユーザーが決めたタグとその役割は「タグ運用」ノートに記録し(無ければ起票を提案)、\
-以後それに従う — ユーザー決定のタグを勝手に変更・削除しない\n\
-- それ以外のタグはあなたの裁量で付与・統合・改名・整理してよい(update で tags を\
-書き換える。まとまった整理をしたときは会話で一言報告)\n\
-- 新しいタグを乱発しない — まず既存の語彙(search で確認できる)に揃える\n\
-\n\
-■ 書き方(propose の質)\n\
-- title: 内容が一意に分かる具体的なもの(「メモ」「まとめ」だけは不可)\n\
-- description: 一文要約(検索スニペットと一覧に使われる)\n\
-- body: この会話を読んでいない未来の読者に向けて自己完結で。結論だけでなく、経緯・根拠・\
-出典(会話の文脈)を短く含める。関連する既存ノートがあれば markdown リンク(/path.md)で\
-つなぐ\n\
-- tags: 2〜4個。既存ノートに付いているタグに揃える";
+ユーザーの個人ナレッジベース(kb-app)への取次口。会話で「引く・育てる」を回す。\n\
+【契約(機構で強制。正本はアプリの docs/contract.md)】ノートはタグ1〜4個必須/\
+新規は draft から・確定と却下は人間のみ/形式はアプリが管理(frontmatter を自分で書かない)。\n\
+【引く】ユーザー個人に関する話題(嗜好・決定・進行中の作業・過去に調べたこと・固有名詞)は、\
+推測で答える前に search(自然文可・意味で当たる。外したら語を変えて再検索)。ヒットは get で\
+全文を読んでから答える。本文中の /path.md リンクは必要なら辿る。「このノート」=引数なしの \
+get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
+【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
+から。確定は促さない)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
+本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
+【タグ】体系は会話でユーザーと合意して育てる。合意済み(「タグ運用」ノート。無ければ起票を\
+提案)は勝手に変えない。それ以外はあなたの裁量で付与・統合・整理してよい(まとめて整理したら\
+一言報告)。新語を乱発せず既存語彙に揃える。";
 
 pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
     let stdin = std::io::stdin();
@@ -150,50 +111,50 @@ fn tool_definitions() -> Value {
     json!([
         {
             "name": "search",
-            "description": "ナレッジベースを検索する(全文+意味+リンク近傍のハイブリッド)。ユーザー個人に関する話題ではまずこれを引く。キーワード列挙でも文まるごとでもよい(言い回しが違っても意味で当たる)。結果に劣化情報(degraded)があれば検索品質が落ちている — ユーザーへの回答にその旨を添える。",
+            "description": "KB 検索(全文+意味+リンク近傍)。個人の話題ではまず引く。自然文可。degraded は回答に添える。",
             "inputSchema": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "検索語(キーワード列挙または自然文)"},
-                "limit": {"type": "integer", "description": "最大件数(既定 8)"}
+                "query": {"type": "string", "description": "検索語(自然文可)"},
+                "limit": {"type": "integer", "description": "最大件数(既定8)"}
             }, "required": ["query"]}
         },
         {
             "name": "get",
-            "description": "ノートの全文(frontmatter + 本文)を取得する。search でヒットしたノートは必ずこれで全文を読んでから答える。note を省略すると、ユーザーがアプリでいま開いているノート(「このノート」)を返す。",
+            "description": "ノート全文の取得。search のヒットは必ず全文を読む。note 省略=いま開いているノート。",
             "inputSchema": {"type": "object", "properties": {
-                "note": {"type": "string", "description": "ノート ID(例: notes/foo)。省略時はいま開いているノート"}
+                "note": {"type": "string", "description": "ノート ID。省略=いま開いているノート"}
             }}
         },
         {
             "name": "recent",
-            "description": "最近作成・更新されたノートの一覧。",
+            "description": "最近のノート一覧。",
             "inputSchema": {"type": "object", "properties": {
-                "limit": {"type": "integer", "description": "最大件数(既定 10)"}
+                "limit": {"type": "integer", "description": "最大件数(既定10)"}
             }}
         },
         {
             "name": "propose",
-            "description": "会話から得た恒久的な知見・決定を下書きノートとして起票する。起票は下書き(draft)までで、確定・却下はユーザーがアプリの受信箱で行う。本文はこの会話を読んでいない未来の読者向けに自己完結の Markdown で書き、経緯・根拠・会話出典の要約を含め、関連する既存ノートは /path.md 形式のリンクでつなぐ。既存ノートの更新提案もこれで(差分・追記案を本文に)。",
+            "description": "知見を draft として起票(確定は人間)。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
             "inputSchema": {"type": "object", "properties": {
-                "title": {"type": "string", "description": "内容が一意に分かる具体的なタイトル"},
-                "body": {"type": "string", "description": "本文(Markdown・自己完結)"},
-                "description": {"type": "string", "description": "一文要約(一覧・検索スニペットに使われる)"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "分類タグ 1〜4個(契約で必須。既存タグに揃える)"}
+                "title": {"type": "string", "description": "内容が一意に分かるタイトル"},
+                "body": {"type": "string", "description": "本文(自己完結)"},
+                "description": {"type": "string", "description": "一文要約"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙に揃える)"}
             }, "required": ["title", "body", "tags"]}
         },
         {
             "name": "update",
-            "description": "AI 由来のノート(origin: agent)を直接更新する。指定したフィールドだけ置き換わる。ユーザーのメモ(origin: human)は更新できない(読むだけ)。大きな書き換えは会話で一言添えてから。",
+            "description": "AI ノートの直接更新(指定フィールドのみ置換)。大きな書き換えは一言添えてから。",
             "inputSchema": {"type": "object", "properties": {
                 "note": {"type": "string", "description": "ノート ID"},
                 "title": {"type": "string"},
-                "body": {"type": "string", "description": "本文全体の置き換え(Markdown・自己完結)"},
+                "body": {"type": "string", "description": "本文全体の置換"},
                 "description": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}}
             }, "required": ["note"]}
         },
         {
             "name": "remove",
-            "description": "AI 由来のノート(origin: agent)を削除する(git 履歴には残る)。重複・陳腐化したノートの整理に使う。ユーザーのメモ(origin: human)は削除できない。削除前に会話で一言添えるのが基本。",
+            "description": "AI ノートの削除(履歴には残る)。重複・陳腐化の整理に。削除前に一言添える。",
             "inputSchema": {"type": "object", "properties": {
                 "note": {"type": "string", "description": "ノート ID"}
             }, "required": ["note"]}

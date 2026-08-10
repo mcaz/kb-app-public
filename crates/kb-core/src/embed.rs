@@ -165,26 +165,48 @@ impl Embedder {
     }
 }
 
-static EMBEDDER: OnceLock<std::result::Result<Mutex<Embedder>, String>> = OnceLock::new();
+/// アイドル時アンロード(常駐メモリ対策 — ウォーム時 ~1.8GB を解放する)。
+/// 最終使用から IDLE_UNLOAD_SECS 経過で番人スレッドが解放し、次回使用時に再ロード
+/// (~1秒)。長寿命プロセス(Desktop の MCP・GUI)で効く。CLI は都度プロセスで無関係。
+const IDLE_UNLOAD_SECS: u64 = 300;
 
-/// プロセス内シングルトン。導入済みでロードに失敗した場合はエラー文字列を保持
-/// (fail-open + 可視化 — 沈黙させない)。未導入なら None(段0 の正常形)。
-pub fn embedder() -> Option<std::result::Result<&'static Mutex<Embedder>, String>> {
-    if !model_installed() {
-        return None;
-    }
-    Some(match EMBEDDER.get_or_init(|| Embedder::load().map(Mutex::new).map_err(|e| e.to_string())) {
-        Ok(m) => Ok(m),
-        Err(e) => Err(e.clone()),
-    })
+struct Loaded {
+    emb: Embedder,
+    last_used: std::time::Instant,
+}
+
+static STATE: OnceLock<Mutex<Option<Loaded>>> = OnceLock::new();
+static JANITOR: OnceLock<()> = OnceLock::new();
+
+fn state() -> &'static Mutex<Option<Loaded>> {
+    STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn spawn_janitor() {
+    JANITOR.get_or_init(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            if let Ok(mut g) = state().lock() {
+                if g.as_ref().is_some_and(|l| l.last_used.elapsed().as_secs() > IDLE_UNLOAD_SECS) {
+                    *g = None; // モデル解放(次回使用時に再ロード)
+                }
+            }
+        });
+    });
 }
 
 pub fn embed_text(text: &str) -> Result<Vec<f32>> {
-    match embedder() {
-        None => bail!("埋め込みモデル未導入"),
-        Some(Err(e)) => bail!("埋め込み初期化失敗: {e}"),
-        Some(Ok(m)) => m.lock().map_err(|_| anyhow!("embedder lock"))?.embed(text),
+    if !model_installed() {
+        bail!("埋め込みモデル未導入");
     }
+    let mut g = state().lock().map_err(|_| anyhow!("embedder lock"))?;
+    if g.is_none() {
+        *g = Some(Loaded { emb: Embedder::load()?, last_used: std::time::Instant::now() });
+        spawn_janitor();
+    }
+    let l = g.as_mut().expect("loaded above");
+    l.last_used = std::time::Instant::now();
+    l.emb.embed(text)
 }
 
 // ---------------------------------------------------------------- storage

@@ -111,12 +111,10 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
 /// 関連判定は生コサイン距離 ≤ RELATED_DISTANCE(RRF スコアでは判定しない)。
 fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec<(Hit, f32)>>> {
     use crate::embed;
-    match embed::embedder() {
-        None => return Ok(None),
-        Some(Err(e)) => anyhow::bail!("{e}"),
-        Some(Ok(_)) => {}
+    if !embed::model_installed() {
+        return Ok(None); // 段0 の正常形
     }
-    let qv = embed::embed_text(query)?;
+    let qv = embed::embed_text(query)?; // 失敗は呼び側で劣化表示
     let neighbors = embed::knn(conn, &qv, limit * 2)?;
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
