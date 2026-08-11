@@ -1,0 +1,173 @@
+import { Cloud, MessageSquare, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+
+import { Button } from "@/components/atoms/ui/button";
+import { ConnectCard } from "@/components/molecules/ConnectCard";
+import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
+import {
+  useBackupNow,
+  useBackupSetRemote,
+  useConnectDesktop,
+  useConnectState,
+  useEmbedEnable,
+} from "@/lib/queries";
+
+/** 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)。 */
+export function ConnectPage() {
+  const { t } = useTranslation(["connect", "common"]);
+  const { data: state, isPending } = useConnectState();
+  const connectDesktop = useConnectDesktop();
+  const embedEnable = useEmbedEnable();
+  const backupSetRemote = useBackupSetRemote();
+  const backupNow = useBackupNow();
+  const [remoteUrl, setRemoteUrl] = useState("");
+
+  if (isPending || !state) {
+    return (
+      <SinglePaneLayout>
+        <p className="text-muted px-5 py-4">{t("common:state.checking")}</p>
+      </SinglePaneLayout>
+    );
+  }
+
+  const search = state.smart_search;
+
+  return (
+    <SinglePaneLayout>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] content-start gap-3 px-5 py-4">
+        <ConnectCard
+          name={t("ai.name")}
+          icon={MessageSquare}
+          description={t("ai.desc")}
+          state={{
+            ok: state.desktop === "connected",
+            label:
+              state.desktop === "connected"
+                ? t("ai.connected")
+                : state.desktop === "not_found"
+                  ? t("ai.notFound")
+                  : t("ai.notConnected"),
+          }}
+        >
+          {state.desktop === "not_connected" && (
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={connectDesktop.isPending}
+              onClick={() =>
+                connectDesktop.mutate(undefined, {
+                  onSuccess: () => toast(t("ai.done")),
+                  onError: (e) => toast(t("ai.failed", { error: String(e) })),
+                })
+              }
+            >
+              {t("ai.connect")}
+            </Button>
+          )}
+        </ConnectCard>
+
+        <ConnectCard
+          name={t("smartSearch.name")}
+          icon={Sparkles}
+          description={t("smartSearch.desc")}
+          state={{
+            ok: search.state === "enabled",
+            label:
+              search.state === "enabled"
+                ? t("smartSearch.enabled", { embedded: search.embedded, total: search.total })
+                : search.state === "downloading"
+                  ? t("smartSearch.downloading")
+                  : t("smartSearch.off"),
+          }}
+        >
+          {search.state === "not_installed" && (
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={embedEnable.isPending}
+              onClick={() => {
+                toast(t("smartSearch.preparing"));
+                embedEnable.mutate(undefined, {
+                  onSuccess: () => toast(t("smartSearch.done")),
+                  onError: (e) => toast(String(e)),
+                });
+              }}
+            >
+              {t("smartSearch.enable")}
+            </Button>
+          )}
+        </ConnectCard>
+
+        <ConnectCard
+          name={t("backup.name")}
+          icon={Cloud}
+          description={t("backup.desc")}
+          state={{
+            ok: Boolean(state.backup.remote),
+            label: state.backup.remote ? t("backup.connected") : t("backup.unset"),
+          }}
+          notes={
+            <>
+              {state.backup.remote && state.backup.pending > 0 && (
+                <div className="text-muted mb-3 text-[12.5px]">
+                  {t("backup.pending", { count: state.backup.pending })}
+                </div>
+              )}
+              {state.sync_error && (
+                <div className="text-danger mb-3 text-[12.5px]">
+                  {t("backup.error", { error: state.sync_error })}
+                </div>
+              )}
+            </>
+          }
+        >
+          {state.backup.remote ? (
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={backupNow.isPending}
+              onClick={() =>
+                backupNow.mutate(undefined, {
+                  onSuccess: (message) => toast(message),
+                  onError: (e) => toast(String(e)),
+                })
+              }
+            >
+              {t("backup.syncNow")}
+            </Button>
+          ) : (
+            <>
+              <input
+                className="border-line bg-chip text-ink mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs"
+                placeholder={t("backup.urlPlaceholder")}
+                aria-label={t("backup.urlPlaceholder")}
+                value={remoteUrl}
+                onChange={(e) => setRemoteUrl(e.target.value)}
+              />
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={backupSetRemote.isPending}
+                onClick={() => {
+                  const url = remoteUrl.trim();
+                  if (!url) {
+                    toast(t("backup.needUrl"));
+                    return;
+                  }
+                  backupSetRemote.mutate(url, {
+                    onSuccess: () => toast(t("backup.done")),
+                    onError: (e) => toast(String(e)),
+                  });
+                }}
+              >
+                {t("backup.connect")}
+              </Button>
+            </>
+          )}
+        </ConnectCard>
+      </div>
+    </SinglePaneLayout>
+  );
+}

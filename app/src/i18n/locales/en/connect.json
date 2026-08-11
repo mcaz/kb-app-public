@@ -1,0 +1,35 @@
+{
+  "ai": {
+    "name": "AI app (Claude)",
+    "desc": "Your knowledge base gets pulled into conversations, and what you learn there comes back as drafts.",
+    "connected": "Connected",
+    "notFound": "Claude Desktop not found",
+    "notConnected": "Not connected",
+    "connect": "Connect",
+    "done": "Connected. Restart Claude Desktop to start using it.",
+    "failed": "Could not connect: {{error}}"
+  },
+  "smartSearch": {
+    "name": "Smart search",
+    "desc": "Finds notes by meaning, even when the wording differs. Just turn it on — nothing leaves your machine (a one-time ~560MB download).",
+    "enabled": "On ({{embedded}}/{{total}})",
+    "downloading": "Downloading…",
+    "off": "Off",
+    "enable": "Turn on",
+    "preparing": "Setting up smart search… (this takes a few minutes)",
+    "done": "Smart search is on"
+  },
+  "backup": {
+    "name": "Backup",
+    "desc": "Notes are backed up whenever they change, and edits from your other devices come back in. Private, and notes only.",
+    "connected": "Connected",
+    "unset": "Not set up",
+    "pending": "{{count}} change(s) not yet sent.",
+    "error": "{{error}}",
+    "urlPlaceholder": "GitHub repository URL (git@github.com:…)",
+    "syncNow": "Sync now",
+    "connect": "Connect",
+    "needUrl": "Please enter the repository URL",
+    "done": "Backup destination set, and the first copy has been sent"
+  }
+}

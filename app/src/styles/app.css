@@ -1,0 +1,221 @@
+@import "tailwindcss";
+
+/*
+ * デザイントークン(ADR-0002: 移行で見た目は変えない)。
+ *
+ * 値の正本は :root の --kb-* で、ライト/ダークで差し替わる。Tailwind の
+ * @theme はそれを参照するだけなので、bg-ground / text-ink のように書けば
+ * 配色の切り替えは自動で追従する。
+ *
+ * テーマの決定は JS 側が持つ(lib/theme.ts)。「システムに従う」も含めて
+ * 解決した結果を <html data-theme="light|dark"> として必ず貼るため、
+ * CSS には prefers-color-scheme の分岐を置かない
+ * — 同じ配色を2箇所に書いてズレる事故を作らないため。
+ *
+ * 由来: docs/ui-draft.html のデザイン言語(育つ緑 / 提案の琥珀 / 紙の地色)。
+ */
+
+/* dark: ユーティリティも data-theme に従わせる(既定の prefers-color-scheme を置換) */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --kb-ground: #f3f5f0;
+  --kb-panel: #fcfdfb;
+  --kb-panel-2: #edf0e9;
+  --kb-ink: #232821;
+  --kb-muted: #6c7468;
+  --kb-line: #d8ddd2;
+  --kb-chip: #ffffff;
+  --kb-grow: #3e7550;
+  --kb-grow-soft: #e2eee5;
+  --kb-prop: #a97b2f;
+  --kb-prop-soft: #f5ead8;
+  --kb-sel: #e7ebe2;
+  --kb-danger: #a94a2f;
+  --kb-on-accent: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --kb-ground: #141713;
+  --kb-panel: #1c201a;
+  --kb-panel-2: #232821;
+  --kb-ink: #e7e9e2;
+  --kb-muted: #98a093;
+  --kb-line: #343b31;
+  --kb-chip: #262c24;
+  --kb-grow: #7fb08d;
+  --kb-grow-soft: #20321f;
+  --kb-prop: #d2a050;
+  --kb-prop-soft: #382b18;
+  --kb-sel: #2a3127;
+  --kb-danger: #d2755a;
+  --kb-on-accent: #141713;
+}
+
+@theme inline {
+  /* 製品の語彙(こちらを使う) */
+  --color-ground: var(--kb-ground);
+  --color-panel: var(--kb-panel);
+  --color-panel-2: var(--kb-panel-2);
+  --color-ink: var(--kb-ink);
+  --color-muted: var(--kb-muted);
+  --color-line: var(--kb-line);
+  --color-chip: var(--kb-chip);
+  --color-grow: var(--kb-grow);
+  --color-grow-soft: var(--kb-grow-soft);
+  --color-prop: var(--kb-prop);
+  --color-prop-soft: var(--kb-prop-soft);
+  --color-sel: var(--kb-sel);
+  --color-danger: var(--kb-danger);
+  --color-on-accent: var(--kb-on-accent);
+
+  /* shadcn/ui が前提にする名前を製品のパレットへ写す(部品をほぼ素で取り込めるように) */
+  --color-background: var(--kb-ground);
+  --color-foreground: var(--kb-ink);
+  --color-card: var(--kb-panel);
+  --color-card-foreground: var(--kb-ink);
+  --color-popover: var(--kb-panel);
+  --color-popover-foreground: var(--kb-ink);
+  --color-primary: var(--kb-grow);
+  --color-primary-foreground: var(--kb-on-accent);
+  --color-secondary: var(--kb-panel-2);
+  --color-secondary-foreground: var(--kb-ink);
+  --color-accent: var(--kb-sel);
+  --color-accent-foreground: var(--kb-ink);
+  --color-muted-foreground: var(--kb-muted);
+  --color-destructive: var(--kb-danger);
+  --color-border: var(--kb-line);
+  --color-input: var(--kb-line);
+  --color-ring: var(--kb-grow);
+
+  --font-sans:
+    "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", "Meiryo",
+    "Noto Sans JP", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-DEFAULT: 8px;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  /* キーボード操作時だけ輪郭を出す(旧実装には無かった) */
+  :focus-visible {
+    outline: 2px solid var(--color-grow);
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  /*
+   * ノート本文の書式。
+   * Tailwind の preflight が箇条書きの記号と見出し・段落の余白を落とすため、
+   * Markdown 由来の要素にはここで明示的に与え直す(旧実装はブラウザ既定に
+   * 任せていた — 移行で見た目を変えないための補い)。
+   */
+  .markdown {
+    max-width: 46em;
+  }
+  .markdown h1,
+  .markdown h2,
+  .markdown h3 {
+    font-weight: 700;
+    margin: 1.2em 0 0.5em;
+  }
+  .markdown h1 {
+    font-size: 20px;
+  }
+  .markdown h2 {
+    font-size: 17px;
+  }
+  .markdown h3 {
+    font-size: 15px;
+  }
+  .markdown p,
+  .markdown blockquote {
+    margin: 0.7em 0;
+  }
+  .markdown ul,
+  .markdown ol {
+    margin: 0.7em 0;
+    padding-left: 1.6em;
+  }
+  .markdown ul {
+    list-style: disc;
+  }
+  .markdown ol {
+    list-style: decimal;
+  }
+  .markdown li {
+    margin: 0.15em 0;
+  }
+  .markdown li::marker {
+    color: var(--color-muted);
+  }
+  .markdown blockquote {
+    border-left: 3px solid var(--color-line);
+    padding-left: 0.9em;
+    color: var(--color-muted);
+  }
+  .markdown a {
+    color: var(--color-grow);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .markdown code {
+    background: var(--color-panel-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12.5px;
+  }
+  .markdown pre {
+    background: var(--color-panel-2);
+    padding: 10px 14px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 0.8em 0;
+  }
+  .markdown pre code {
+    background: none;
+    padding: 0;
+  }
+  .markdown img {
+    max-width: 100%;
+    border-radius: 8px;
+  }
+  .markdown hr {
+    border: none;
+    border-top: 1px solid var(--color-line);
+    margin: 1.4em 0;
+  }
+  .markdown table {
+    border-collapse: collapse;
+    margin: 0.8em 0;
+  }
+  .markdown th,
+  .markdown td {
+    border: 1px solid var(--color-line);
+    padding: 4px 10px;
+    text-align: left;
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "search": {
+    "placeholder": "ノートを検索"
+  },
+  "filter": {
+    "title": "フィルター",
+    "tagPlaceholder": "タグで絞り込み",
+    "clearTags": "全解除",
+    "clearTagsTitle": "タグをすべて解除",
+    "period": "更新",
+    "periodAll": "全期間",
+    "periodDays": "{{count}}日以内",
+    "sort": "並び",
+    "sortUpdated": "更新が新しい順",
+    "sortCreated": "作成が新しい順",
+    "sortTitle": "タイトル順"
+  },
+  "favorite": {
+    "save": "お気に入りに保存",
+    "title": "お気に入り",
+    "empty": "まだありません。ノート一覧のフィルターから保存できます。",
+    "noCondition": "(条件なし)",
+    "queryPart": "検索「{{query}}」",
+    "defaultName": "お気に入り{{n}}",
+    "askSave": "お気に入りに保存",
+    "askRename": "お気に入りの名前を変更",
+    "needName": "名前を入れてください",
+    "needCondition": "タグか検索語を指定してから保存します",
+    "saved": "お気に入りに保存しました",
+    "updated": "「{{name}}」を更新しました"
+  },
+  "selection": {
+    "head": "選択中",
+    "primary": "主",
+    "secondary": "副",
+    "makePrimary": "主にする"
+  },
+  "list": {
+    "notFound": "見つかりませんでした",
+    "empty": "該当するノートがありません",
+    "placeholder": "左の一覧からノートを選ぶと、ここに表示されます。ノートは Claude との会話から育ちます。"
+  },
+  "related": {
+    "openGraph": "グラフで見る",
+    "linked": "つながっているノート",
+    "linkedEmpty": "まだありません",
+    "similar": "近いノート",
+    "similarEmpty": "見つかりませんでした"
+  },
+  "note": {
+    "deprecated": "しまってある",
+    "datesTitle": "作成 / 最終更新",
+    "talk": "このノートについて Claude と話す",
+    "opened": "Claude を開きました",
+    "missing": "そのノートはまだありません",
+    "careConfirm": "確認した",
+    "careDismissed": "了解、そのままにします"
+  },
+  "attachment": {
+    "label": "添付:",
+    "add": "ファイルを添付",
+    "added": "添付しました",
+    "addedNamed": "添付しました({{name}})",
+    "addedCount": "添付しました({{count}} 件)",
+    "removed": "添付を削除しました(履歴には残ります)",
+    "tooLarge": "50MB を超えるファイルは添付できません",
+    "needNote": "ノートを開いてからドロップしてください",
+    "failed": "添付に失敗: {{error}}",
+    "pasteFailed": "ペースト添付に失敗: {{error}}"
+  }
+}

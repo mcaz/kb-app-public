@@ -1,0 +1,48 @@
+{
+  "nav": {
+    "home": "ホーム",
+    "notes": "ノート",
+    "graph": "グラフ",
+    "connect": "繋ぐ",
+    "favorites": "お気に入り",
+    "collapse": "畳む",
+    "expand": "開く",
+    "settings": "設定"
+  },
+  "action": {
+    "save": "保存",
+    "cancel": "やめる",
+    "close": "閉じる",
+    "rename": "名前変更",
+    "delete": "削除",
+    "update": "更新",
+    "saveAs": "別名で保存"
+  },
+  "date": {
+    "created": "作成 {{value}}",
+    "updated": "更新 {{value}}",
+    "createdUpdated": "作成 {{created}} · 更新 {{updated}}",
+    "unknown": "不明",
+    "none": "—"
+  },
+  "toast": {
+    "deleted": "削除しました",
+    "renamed": "名前を変更しました"
+  },
+  "state": {
+    "loading": "読み込み中…",
+    "checking": "確認中…"
+  },
+  "settings": {
+    "title": "設定",
+    "appearance": "見た目",
+    "theme": "テーマ",
+    "themeSystem": "システムに合わせる",
+    "themeLight": "ライト",
+    "themeDark": "ダーク",
+    "language": "言語",
+    "languageJa": "日本語",
+    "languageEn": "English",
+    "note": "この設定はこの端末にだけ保存されます(ノートには入りません)。"
+  }
+}
