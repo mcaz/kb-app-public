@@ -3,24 +3,23 @@
 //!
 //! 検知 → 平易な提案に変換 → 受信箱で「はい / いいえ」。ユーザーは維持作業を計画しない
 //! (原則8)。実行は常に承諾経由で、メモ(origin: human)への操作は「つなげる」まで(原則9)。
-//! v1 の検知: ①意味的な近接(埋め込み距離)②リンク切れ。鮮度・統合提案は段2(AI)で強化。
+//! v1 の検知: ①リンク切れ ②タグ無し(契約違反状態)。
+//! **意味的な近接の「つなげますか?」は 2026-08-11 に撤去** — ノート間の関連を決めるのは
+//! AI の領分であり、ユーザーに二択で決めさせるのは方針に反する。近さの提示は
+//! 「近いノート」パネル(人間の閲覧用)と MCP の get 応答(AI の判断材料)が担う。
 
 use anyhow::Result;
 use rusqlite::Connection;
 
-use crate::embed;
 use crate::vault::Vault;
 
-/// 「同じ話題に見える」判定のコサイン距離閾値(ノート全文同士)。
-/// PoC 実測の関連帯(0.17〜0.43)と無関係帯(0.69〜)の間に置く。
-const DUP_DISTANCE: f32 = 0.35;
 /// 未処理の提案の総数上限(通知疲れの抑制)。処理されて枠が空いたら次を補充する。
 const MAX_OPEN_PROPOSALS: usize = 5;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CareProposal {
     pub key: String,
-    pub kind: String, // "connect"(つなげる提案)| "broken"(リンク切れの気づき)
+    pub kind: String, // "broken"(リンク切れ)| "untagged"(タグ無し=契約違反状態)
     pub a: String,
     pub b: String,
     pub detail: String,
@@ -50,55 +49,6 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         return Ok(0);
     }
     let mut added = 0;
-
-    // ① 意味的な近接(埋め込みがある場合のみ — 段0 では黙ってスキップ)
-    if embed::model_installed() {
-        let notes: Vec<(String, String, Vec<f32>)> = {
-            let mut stmt = conn.prepare_cached(
-                "SELECT n.id, coalesce(n.title, n.id), v.embedding
-                 FROM notes n JOIN note_vecs v ON v.id = n.id AND v.stamp = ?1
-                 WHERE n.status != 'deprecated'",
-            )?;
-            let rows = stmt.query_map([embed::EMBED_STAMP], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Vec<u8>>(2)?))
-            })?;
-            rows.filter_map(|r| r.ok())
-                .map(|(id, t, b)| (id, t, embed::from_blob(&b)))
-                .collect()
-        };
-        'outer: for i in 0..notes.len() {
-            for j in (i + 1)..notes.len() {
-                if added >= budget {
-                    break 'outer;
-                }
-                let (ida, ta, va) = &notes[i];
-                let (idb, tb, vb) = &notes[j];
-                if va.len() != vb.len() {
-                    continue;
-                }
-                let sim: f32 = va.iter().zip(vb.iter()).map(|(x, y)| x * y).sum();
-                let dist = 1.0 - sim;
-                if dist > DUP_DISTANCE {
-                    continue;
-                }
-                // 既にリンク済みのペアは提案しない
-                let linked: bool = conn.query_row(
-                    "SELECT count(*) FROM links WHERE (src=?1 AND dst=?2) OR (src=?2 AND dst=?1)",
-                    [ida, idb],
-                    |r| Ok(r.get::<_, i64>(0)? > 0),
-                )?;
-                if linked {
-                    continue;
-                }
-                let (x, y) = if ida < idb { (ida, idb) } else { (idb, ida) };
-                let key = format!("connect:{x}:{y}");
-                let detail = format!("「{ta}」と「{tb}」が同じ話題に見えます(近さ {dist:.2})。");
-                if insert_new(conn, &key, "connect", x, y, &detail)? {
-                    added += 1;
-                }
-            }
-        }
-    }
 
     // ②' タグ無し(契約1違反状態の可視化 — 修復は Claude への依頼で)
     let untagged: Vec<(String, String)> = {
@@ -172,39 +122,6 @@ pub fn dismiss(conn: &Connection, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// 「つなげる」の承諾。片方の本文末尾に関連リンクを1行足す。
-/// メモ(human)より AI ノート(agent)側を優先して書き足し、メモの本文改変を最小にする。
-/// (メモ側へ書く場合も、承諾済みの「つなげる」は原則9 の許容範囲)
-pub fn accept_connect(conn: &Connection, vault: &Vault, key: &str) -> Result<()> {
-    let (a, b): (String, String) = conn.query_row(
-        "SELECT a, b FROM care_proposals WHERE key=?1 AND kind='connect' AND status='open'",
-        [key],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let note_a = vault.read_note(&a)?;
-    let note_b = vault.read_note(&b)?;
-    // 書き足す側: agent を優先、両方 human / 両方 agent なら a
-    let (host, host_note, target, target_note) =
-        if note_a.front.origin.as_deref() == Some("agent") || note_b.front.origin.as_deref() != Some("agent") {
-            (&a, note_a, &b, &note_b)
-        } else {
-            (&b, note_b, &a, &note_a)
-        };
-    let ttitle = target_note.front.title.clone().unwrap_or_else(|| target.to_string());
-    let mut updated = host_note;
-    updated.body = format!(
-        "{}\n\n関連: [{}](/{}.md)\n",
-        updated.body.trim_end(),
-        ttitle,
-        target
-    );
-    vault.write_note(host, &updated)?;
-    vault.append_log(&format!("**Care**: /{host}.md と /{target}.md をつなげた(承諾)。"))?;
-    vault.commit_care(host, &format!("care: connect {host} <-> {target}"))?;
-    conn.execute("DELETE FROM care_proposals WHERE key=?1", [key])?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,24 +153,4 @@ mod tests {
         assert_eq!(detect(&conn, &vault).unwrap(), 0);
     }
 
-    #[test]
-    fn connect_acceptance_appends_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault = Vault::create(dir.path().join("v")).unwrap();
-        let a = vault.new_human_note("読書メモ 昆虫", "昆虫の本のメモ。", "human:o").unwrap();
-        let b = vault.propose("昆虫の本まとめ", "AI がまとめた昆虫の本。", None, &["本".into()], "c/x").unwrap();
-        let conn = open_db(&vault).unwrap();
-        sync(&vault, &conn).unwrap();
-        init_schema(&conn).unwrap();
-        insert_new(&conn, &format!("connect:{a}:{b}"), "connect", &a, &b, "test").unwrap();
-        accept_connect(&conn, &vault, &format!("connect:{a}:{b}")).unwrap();
-        // agent 側(b)に追記され、human 側(a)は不可侵のまま
-        assert!(vault.read_note(&b).unwrap().body.contains("関連: ["));
-        assert!(!vault.read_note(&a).unwrap().body.contains("関連: ["));
-        sync(&vault, &conn).unwrap();
-        let n: i64 = conn
-            .query_row("SELECT count(*) FROM links WHERE src=?1", [&b], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1);
-    }
 }

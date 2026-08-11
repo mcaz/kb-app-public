@@ -90,13 +90,6 @@ async function demo<T>(v: T): Promise<T> {
 
 const demoCare: CareProposal[] = [
   {
-    key: "connect:notes/引っ越し手続きメモ:notes/確定申告の準備",
-    kind: "connect",
-    a: "notes/引っ越し手続きメモ",
-    b: "notes/確定申告の準備",
-    detail: "「引っ越し手続きメモ」と「確定申告の準備」が同じ話題に見えます(近さ 0.38)。",
-  },
-  {
     key: "broken:notes/引っ越し手続きメモ:notes/新居の契約",
     kind: "broken",
     a: "notes/引っ越し手続きメモ",
@@ -219,14 +212,6 @@ export const api = {
       return demo(undefined);
     }
     return invoke("attachment_remove", { id, name });
-  },
-  careAccept(key: string): Promise<void> {
-    if (!inTauri) {
-      const i = demoCare.findIndex((c) => c.key === key);
-      if (i >= 0) demoCare.splice(i, 1);
-      return demo(undefined);
-    }
-    return invoke("care_accept", { key });
   },
   careDismiss(key: string): Promise<void> {
     if (!inTauri) {

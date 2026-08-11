@@ -117,12 +117,6 @@ fn home_state() -> CmdResult<HomeState> {
     })
 }
 
-#[tauri::command]
-fn care_accept(key: String) -> CmdResult<()> {
-    let vault = default_vault()?;
-    let (conn, _) = synced_conn(&vault)?;
-    kb_core::care::accept_connect(&conn, &vault, &key).map_err(err)
-}
 
 #[tauri::command]
 fn care_dismiss(key: String) -> CmdResult<()> {
@@ -435,7 +429,6 @@ pub fn run() {
             note_delete,
             note_make_mine,
             note_search,
-            care_accept,
             care_dismiss,
             graph_data,
             favorites_list,

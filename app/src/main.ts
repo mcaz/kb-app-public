@@ -266,6 +266,29 @@ function matchFilter(h: { tags: string[] }): boolean {
   return state.selectedTags.every((t) => h.tags.includes(t));
 }
 
+/// パネル幅のドラッグ調整。key ごとに localStorage へ記憶する。
+function makeSplitter(target: HTMLElement, key: string, min: number, max: number): HTMLElement {
+  const sp = el(`<div class="splitter"></div>`);
+  sp.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    sp.classList.add("active");
+    const startX = (e as MouseEvent).clientX;
+    const startW = target.getBoundingClientRect().width;
+    const move = (ev: MouseEvent) => {
+      target.style.width = `${Math.min(max, Math.max(min, startW + ev.clientX - startX))}px`;
+    };
+    const up = () => {
+      sp.classList.remove("active");
+      localStorage.setItem(key, String(Math.round(target.getBoundingClientRect().width)));
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+  return sp;
+}
+
 function renderNotes(pane: HTMLElement) {
   const home = state.home!;
   const list = el(`
@@ -277,30 +300,15 @@ function renderNotes(pane: HTMLElement) {
   `);
   buildTagSelect(list.querySelector<HTMLElement>("#tag-select")!, home.tags.map(([t]) => t));
   list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 260}px`;
-  const splitter = el(`<div class="splitter"></div>`);
-  splitter.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    splitter.classList.add("active");
-    const startX = (e as MouseEvent).clientX;
-    const startW = list.getBoundingClientRect().width;
-    const move = (ev: MouseEvent) => {
-      list.style.width = `${Math.min(520, Math.max(180, startW + ev.clientX - startX))}px`;
-    };
-    const up = () => {
-      splitter.classList.remove("active");
-      localStorage.setItem("kb.listWidth", String(Math.round(list.getBoundingClientRect().width)));
-      document.removeEventListener("mousemove", move);
-      document.removeEventListener("mouseup", up);
-    };
-    document.addEventListener("mousemove", move);
-    document.addEventListener("mouseup", up);
-  });
-  pane.replaceChildren(
-    list,
-    splitter,
-    state.localGraph && state.selected ? el(`<div class="rel-panel" id="rel-panel"></div>`) : el(`<span hidden></span>`),
-    el(`<div class="editor" id="editor"></div>`),
-  );
+  const splitter = makeSplitter(list, "kb.listWidth", 180, 520);
+
+  const showRel = state.localGraph && state.selected;
+  const relPanelEl = el(`<div class="rel-panel" id="rel-panel"></div>`);
+  relPanelEl.style.width = `${Number(localStorage.getItem("kb.relWidth")) || 220}px`;
+  const relSplitter = makeSplitter(relPanelEl, "kb.relWidth", 160, 420);
+  const editorEl = el(`<div class="editor" id="editor"></div>`);
+  if (showRel) pane.replaceChildren(list, splitter, relPanelEl, relSplitter, editorEl);
+  else pane.replaceChildren(list, splitter, editorEl);
 
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
   // 再描画で DOM を作り直すため、位置を明示的に持ち越す(選択でリストが先頭に戻らないように)
@@ -498,8 +506,15 @@ function renderEditor(box: HTMLElement) {
     return;
   }
   box.replaceChildren();
-  box.appendChild(notePane(n, false));
-  if (state.secondary) box.appendChild(notePane(state.secondary, true));
+  const main = notePane(n, false);
+  box.appendChild(main);
+  if (state.secondary) {
+    main.style.width = `${Number(localStorage.getItem("kb.mainWidth")) || 0}px`;
+    if (!Number(localStorage.getItem("kb.mainWidth"))) main.style.width = "";
+    main.style.flex = Number(localStorage.getItem("kb.mainWidth")) ? "none" : "1";
+    box.appendChild(makeSplitter(main, "kb.mainWidth", 320, 1200));
+    box.appendChild(notePane(state.secondary, true));
+  }
 }
 
 /// 1ノート分のペイン(本文+操作)。副ペインは閉じる/主にするボタン付き。
@@ -517,8 +532,7 @@ function notePane(n: NoteView, secondary: boolean): HTMLElement {
   const careBars = myCare
     .map(
       (c, i) => `<div class="approve-bar care">🔧 ${esc(c.detail)}
-        ${c.kind === "connect" ? `<button class="primary small" data-care-ok="${i}">つなげる</button>` : ""}
-        <button class="quiet small" data-care-no="${i}">${c.kind === "connect" ? "このまま" : "確認した"}</button>
+        <button class="quiet small" data-care-no="${i}">確認した</button>
       </div>`
     )
     .join("");
@@ -579,21 +593,6 @@ function notePane(n: NoteView, secondary: boolean): HTMLElement {
       await reload();
       render();
       toast("添付を削除しました(履歴には残ります)");
-    })
-  );
-  pane.querySelectorAll<HTMLButtonElement>("[data-care-ok]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const c = myCare[Number(b.dataset.careOk)];
-      try {
-        await api.careAccept(c.key);
-        state.graphCache = null;
-        await refreshHome();
-        await reload();
-        render();
-        toast("つなげました");
-      } catch (e) {
-        toast(`${e}`);
-      }
     })
   );
   pane.querySelectorAll<HTMLButtonElement>("[data-care-no]").forEach((b) =>

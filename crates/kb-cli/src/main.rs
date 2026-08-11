@@ -97,8 +97,6 @@ enum Command {
 enum CareCommand {
     /// 検知を回して未処理の提案を一覧
     List,
-    /// 「つなげる」の承諾
-    Accept { key: String },
     /// 「このまま」(同じ提案は出なくなる)
     Dismiss { key: String },
 }
@@ -243,10 +241,6 @@ fn main() -> Result<()> {
                     for p in kb_core::care::list_open(&conn)? {
                         println!("{}\t{}\t{}", p.key, p.kind, p.detail);
                     }
-                }
-                CareCommand::Accept { key } => {
-                    kb_core::care::accept_connect(&conn, &vault, &key)?;
-                    println!("connected: {key}");
                 }
                 CareCommand::Dismiss { key } => {
                     kb_core::care::dismiss(&conn, &key)?;

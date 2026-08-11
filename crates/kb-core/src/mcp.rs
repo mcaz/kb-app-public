@@ -31,6 +31,8 @@ get。該当なしは正常(その旨を添える)。degraded があれば回答
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
 から)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
 本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
+【関連】ノート間の関連づけはあなたの領分。get の「近いノート」を見て、本当に関連するなら\
+update で本文に /path.md リンクを足す(ユーザーに可否を尋ねる形にはしない)。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。それ以外はあなたの裁量で付与・統合・整理してよい(まとめて整理したら\
@@ -160,7 +162,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "get",
-            "description": "ノート全文の取得。search のヒットは必ず全文を読む。note 省略=いま開いているノート。",
+            "description": "ノート全文の取得(応答に添付と「近いノート」が付く)。search のヒットは必ず全文を読む。note 省略=いま開いているノート。",
             "inputSchema": {"type": "object", "properties": {
                 "note": {"type": "string", "description": "ノート ID。省略=いま開いているノート"}
             }}
@@ -266,7 +268,21 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     attachments.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
                 )
             };
-            Ok(format!("(note: {id})\n{attach_line}{}", note.to_file_string()?))
+            // 関連を決めるのは AI(2026-08-11 方針)。判断材料として近いノートを添える
+            let similar = crate::search::similar_notes(&conn, &id, 5).unwrap_or_default();
+            let sim_line = if similar.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "(近いノート — まだリンクされていない: {})\n",
+                    similar
+                        .iter()
+                        .map(|(sid, t, d)| format!("{sid}[{}] {d:.2}", t.as_deref().unwrap_or("無題")))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            Ok(format!("(note: {id})\n{attach_line}{sim_line}{}", note.to_file_string()?))
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
