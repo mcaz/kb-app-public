@@ -142,7 +142,7 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .list .empty { color: var(--muted); padding: 8px 14px; font-size: 12.5px; }
 
 /* エディタ/ビュー */
-.editor { flex: 1; min-width: 0; padding: 18px 22px; overflow-y: auto; display: flex; flex-direction: column; }
+.editor { flex: 1; min-width: 0; }
 .editor .title-row { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
 .editor .title { font-size: 18px; font-weight: 700; flex: 1; min-width: 0; }
 .editor input.title { border: none; background: transparent; padding: 0; }
@@ -173,13 +173,22 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .status-pill.deprecated { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .status-pill.agent { background: var(--prop-soft); color: var(--prop); white-space: nowrap; }
 
-/* ノート閲覧 + ローカルグラフの2カラム */
-.note-split { display: flex; gap: 16px; flex: 1; min-height: 0; }
-.note-main { flex: 1; min-width: 340px; }
-.local-graph {
-  width: 260px; flex: none; display: flex; flex-direction: column;
-  border-left: 1px solid var(--line); padding-left: 14px;
+/* 関連パネル(ノート一覧の右の独立カラム) */
+.rel-panel {
+  width: 220px; flex: none; padding: 12px 10px; overflow-y: auto;
+  background: var(--panel-2);
 }
+.rel-inner { display: flex; flex-direction: column; height: 100%; }
+@media (max-width: 1100px) { .rel-panel { display: none; } }
+
+/* 本文エリア: 主ノート(+ 横に並べた副ノート) */
+.editor { display: flex; flex-direction: row; gap: 0; padding: 0; overflow: hidden; }
+.note-pane {
+  flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px;
+  display: flex; flex-direction: column;
+}
+.note-pane.secondary { min-width: 220px; background: var(--panel); }
+.note-pane > div:first-child { flex: none; }
 .rel-panel .lg-head, .local-graph .lg-head { font-size: 11.5px; color: var(--muted); letter-spacing: .08em; margin-bottom: 6px; }
 .rel-panel .graph-link, .local-graph .graph-link {
   width: 100%; font-size: 12.5px; padding: 6px 10px; text-align: left;
@@ -199,7 +208,7 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .lg-canvas { position: absolute; inset: 0; }
 .lg-canvas canvas { width: 100%; height: 100%; display: block; }
 .lg-empty { color: var(--muted); font-size: 12px; }
-@media (max-width: 1200px) { .local-graph { display: none; } }
+
 
 /* つながり(ノート末尾・Obsidian 風) */
 .related-section { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); max-width: 46em; }

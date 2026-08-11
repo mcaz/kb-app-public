@@ -274,6 +274,9 @@ function makeSplitter(target: HTMLElement, key: string, min: number, max: number
     sp.classList.add("active");
     const startX = (e as MouseEvent).clientX;
     const startW = target.getBoundingClientRect().width;
+    // flex:1 のままでは width が効かないため、ドラッグ開始時に固定幅へ切り替える
+    target.style.flex = "none";
+    target.style.width = `${startW}px`;
     const move = (ev: MouseEvent) => {
       target.style.width = `${Math.min(max, Math.max(min, startW + ev.clientX - startX))}px`;
     };
@@ -509,10 +512,13 @@ function renderEditor(box: HTMLElement) {
   const main = notePane(n, false);
   box.appendChild(main);
   if (state.secondary) {
-    main.style.width = `${Number(localStorage.getItem("kb.mainWidth")) || 0}px`;
-    if (!Number(localStorage.getItem("kb.mainWidth"))) main.style.width = "";
-    main.style.flex = Number(localStorage.getItem("kb.mainWidth")) ? "none" : "1";
-    box.appendChild(makeSplitter(main, "kb.mainWidth", 320, 1200));
+    // 副ペインを横に並べる。主ペインを固定幅にして境界をドラッグで動かせるように
+    const saved = Number(localStorage.getItem("kb.mainWidth"));
+    if (saved) {
+      main.style.flex = "none";
+      main.style.width = `${saved}px`;
+    }
+    box.appendChild(makeSplitter(main, "kb.mainWidth", 320, 1400));
     box.appendChild(notePane(state.secondary, true));
   }
 }
