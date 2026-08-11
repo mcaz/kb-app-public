@@ -163,6 +163,7 @@ fn convert(content: &str, link_map: &HashMap<String, String>, unresolved: &mut V
                 .expect("sources serializes")
         }),
         stale_after: None,
+        created: get("created").map(|d| if d.len() == 10 { format!("{d}T00:00:00Z") } else { d }),
         origin: Some(if source.as_deref().is_some_and(|s| s.starts_with("manual:")) {
             "human".into()
         } else {

@@ -12,7 +12,7 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: &str = "3";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let path = vault.index_db_path();
@@ -34,14 +34,14 @@ fn init_schema(conn: &Connection) -> Result<()> {
     if ver.as_deref() == Some(SCHEMA_VERSION) {
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
         // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
-        let has_tags = conn
-            .prepare("SELECT tags FROM notes LIMIT 0")
-            .is_ok();
-        if !has_tags {
-            conn.execute_batch(
-                "ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT '';
-                 UPDATE notes SET mtime = -1;", // 全ノート再 upsert(本文不変なら埋め込みは保持される)
-            )?;
+        for (col, ddl) in [
+            ("tags", "ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''"),
+            ("created", "ALTER TABLE notes ADD COLUMN created TEXT"),
+        ] {
+            if conn.prepare(&format!("SELECT {col} FROM notes LIMIT 0")).is_err() {
+                // 破壊的な作り直しをしない(埋め込み再計算の嵐を避ける)
+                conn.execute_batch(&format!("{ddl}; UPDATE notes SET mtime = -1;"))?;
+            }
         }
         return Ok(());
     }
@@ -56,7 +56,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE notes(
             id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
             origin TEXT, generated_by TEXT, generated_at TEXT,
-            mtime INTEGER, body TEXT, tags TEXT DEFAULT ''
+            mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT
         );
         CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
         DROP TABLE IF EXISTS note_vecs;
@@ -149,8 +149,8 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
         .query_row("SELECT body FROM notes WHERE id=?1", [id], |r| r.get(0))
         .ok();
     conn.execute(
-        "INSERT OR REPLACE INTO notes(id, title, description, status, origin, generated_by, generated_at, mtime, body, tags)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        "INSERT OR REPLACE INTO notes(id, title, description, status, origin, generated_by, generated_at, mtime, body, tags, created)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         rusqlite::params![
             id,
             f.title,
@@ -162,6 +162,7 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
             mtime,
             note.body,
             f.tags.join(" "),
+            f.created_at(),
         ],
     )?;
     conn.execute("DELETE FROM fts_main WHERE id=?1", [id])?;

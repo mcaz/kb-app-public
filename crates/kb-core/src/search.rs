@@ -22,6 +22,9 @@ pub struct Hit {
     pub origin: Option<String>,
     /// 分類タグ(空白区切りを分解済み)
     pub tags: Vec<String>,
+    /// 作成日時・最終更新(一覧でも見えるように)
+    pub created: Option<String>,
+    pub updated: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -87,7 +90,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     }
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
-                snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags
+                snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags, n.created, n.generated_at
          FROM fts_main f JOIN notes n ON n.id = f.id
          WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
          ORDER BY rank LIMIT ?2",
@@ -102,6 +105,8 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
             distance: None,
             origin: r.get(4)?,
             tags: split_tags(r.get::<_, Option<String>>(5)?),
+            created: r.get(6)?,
+            updated: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -118,7 +123,7 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
     let neighbors = embed::knn(conn, &qv, limit * 2)?;
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT title, status, coalesce(description, substr(body,1,80)), origin, tags
+        "SELECT title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at
          FROM notes WHERE id = ?1 AND status != 'deprecated'",
     )?;
     for (id, dist) in neighbors {
@@ -132,9 +137,11 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                 r.get::<_, String>(2)?,
                 r.get::<_, Option<String>>(3)?,
                 r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
             ))
         });
-        if let Ok((title, status, snippet, origin, tags)) = row {
+        if let Ok((title, status, snippet, origin, tags, created, updated)) = row {
             out.push((
                 Hit {
                     id,
@@ -145,6 +152,8 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                     distance: Some(dist),
                     origin,
                     tags: split_tags(tags),
+                    created,
+                    updated,
                 },
                 dist,
             ));
@@ -205,7 +214,7 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
         }
     }
     let sql = format!(
-        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin, n.tags FROM notes n
+        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin, n.tags, n.created, n.generated_at FROM notes n
          WHERE n.status != 'deprecated' AND {} LIMIT {}",
         conds.join(" AND "),
         limit
@@ -221,6 +230,8 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
             distance: None,
             origin: r.get(4)?,
             tags: split_tags(r.get::<_, Option<String>>(5)?),
+            created: r.get(6)?,
+            updated: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -346,9 +357,9 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
 /// 直近ノート(generated_at 降順、なければ mtime 降順)。
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin, tags
+        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at
          FROM notes WHERE status != 'deprecated'
-         ORDER BY coalesce(generated_at, datetime(mtime,'unixepoch')) DESC LIMIT ?1",
+         ORDER BY coalesce(generated_at, created, '') DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map([limit as i64], |r| {
         Ok(Hit {
@@ -360,6 +371,8 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
             distance: None,
             origin: r.get(4)?,
             tags: split_tags(r.get::<_, Option<String>>(5)?),
+            created: r.get(6)?,
+            updated: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)

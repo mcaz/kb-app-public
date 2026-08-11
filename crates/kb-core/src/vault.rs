@@ -98,6 +98,7 @@ impl Vault {
     pub fn new_human_note(&self, title: &str, body: &str, actor: &str) -> Result<String> {
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("human".into());
+        front.created = Some(now_iso());
         front.generated = Some(Generated { by: actor.into(), at: now_iso() });
         let note = Note { front, body: body.to_string() };
         let id = self.write_new_note(title, &note)?;
@@ -132,6 +133,7 @@ impl Vault {
         Self::validate_tags(tags)?;
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("agent".into());
+        front.created = Some(now_iso());
         front.description = description.map(|s| s.to_string());
         front.tags = tags.to_vec();
         front.generated = Some(Generated { by: client.into(), at: now_iso() });

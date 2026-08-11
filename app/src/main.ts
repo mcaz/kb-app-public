@@ -46,15 +46,19 @@ function toast(msg: string) {
   requestAnimationFrame(() => t.classList.add("show"));
   setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 300); }, 1800);
 }
-function fmtDate(iso: string | null): string {
-  if (!iso) return "";
+function fmtDay(iso: string | null): string {
+  if (!iso) return "—";
   const d = new Date(iso);
-  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-  if (days <= 0) return "きょう";
-  if (days === 1) return "きのう";
-  if (days < 7) return `${days}日前`;
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
+  const y = d.getFullYear() !== new Date().getFullYear() ? `${d.getFullYear()}/` : "";
+  return `${y}${d.getMonth() + 1}/${d.getDate()}`;
 }
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return "不明";
+  const d = new Date(iso);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
 function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
@@ -317,7 +321,7 @@ function renderNotes(pane: HTMLElement) {
   // 再描画で DOM を作り直すため、位置を明示的に持ち越す(選択でリストが先頭に戻らないように)
   itemsBox.addEventListener("scroll", () => { state.listScroll = itemsBox.scrollTop; });
   const showItems = (
-    allHits: { id: string; title: string | null; status: string; snippet: string; tags: string[] }[],
+    allHits: { id: string; title: string | null; status: string; snippet: string; tags: string[]; created: string | null; updated: string | null }[],
     searchMode: boolean
   ) => {
     const hits = allHits.filter((h) => matchFilter(h));
@@ -333,6 +337,7 @@ function renderNotes(pane: HTMLElement) {
         <div class="item ${on}">
           <div class="t">${esc(h.title ?? h.id)}${marks}</div>
           <div class="d">${esc(h.snippet.slice(0, 80))}</div>
+          <div class="dates">作成 ${fmtDay(h.created)} · 更新 ${fmtDay(h.updated)}</div>
         </div>
       `);
       item.addEventListener("click", () => void openNote(h.id));
@@ -550,7 +555,7 @@ function notePane(n: NoteView, secondary: boolean): HTMLElement {
           ? `<button class="quiet small" data-act="main">主にする</button><button class="quiet small" data-act="close">×</button>`
           : `<button class="quiet small" data-act="toggle-rel" title="関連パネル">${state.localGraph ? "🔗 隠す" : "🔗 表示"}</button>`}
       </div>
-      <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${tagChips}</div>
+      <div class="meta"><span title="作成 / 最終更新">作成 ${fmtDateTime(n.created_at)} · 更新 ${fmtDateTime(n.generated_at)}</span> ${statusPill} ${tagChips}</div>
       ${careBars}
       <div style="margin: 2px 0 12px;"><button class="small" data-act="talk">🤖 このノートについて Claude と話す</button></div>
       <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" data-act="attach">＋ ファイルを添付</button><input type="file" class="attach-file" multiple hidden /></div>
@@ -709,6 +714,7 @@ function renderHome(pane: HTMLElement) {
       <button class="dash-note">
         <span class="t">${esc(h.title ?? h.id)}</span>
         <span class="d">${esc(h.snippet.slice(0, 60))}</span>
+        <span class="dates">作成 ${fmtDay(h.created)} · 更新 ${fmtDay(h.updated)}</span>
       </button>
     `);
     row.addEventListener("click", () => void openNote(h.id));

@@ -54,7 +54,8 @@ kb-app の中核関心に重なる:
 | `verified` | OKF §5.2 | app(承諾時に追記) | 受信箱・お手入れの承諾履歴。人間の承諾 = `human:` actor |
 | `sources` | OKF §5.1 | AI(propose 時) | 会話由来なら `resource: "conversation:<クライアント>/<日付>"`(scope descriptor)。外部 URL 由来ならその URL |
 | `stale_after` | OKF §5.5 | お手入れ(任意) | 期限のある知識にだけ付く |
-| `origin`(仮) | **app 拡張(唯一)** | app(作成時のみ) | `human` = メモ(聖域)/ `agent` = 育つノート。**越境の明示操作でのみ変更** |
+| `origin` | **app 拡張** | app(作成時のみ) | `human` / `agent`(所有。越境の明示操作でのみ変更) |
+| `created` | **app 拡張(2026-08-11 追加)** | app(作成時のみ) | 作成日時。OKF に該当フィールドが無く(`generated.at` は「最終更新」)、一覧・ノートで作成/更新を出し分けるために必要。移行ノートは `legacy.created` から解決 |
 
 ### なぜ `origin` だけは拡張が要るか(原則9 の機構化)
 

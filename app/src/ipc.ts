@@ -14,6 +14,8 @@ export interface Hit {
   via: string;
   origin: string | null;
   tags: string[];
+  created: string | null;
+  updated: string | null;
 }
 export interface Stats {
   total: number; deprecated: number;
@@ -30,6 +32,7 @@ export interface NoteView {
   status: string;
   origin: string | null;
   tags: string[];
+  created_at: string | null;
   generated_at: string | null;
   related: [string, string | null][];
   similar: [string, string | null, number][];
@@ -65,23 +68,23 @@ const demoConnect: ConnectState = {
 const demoNotes: NoteView[] = [
   {
     id: "notes/引っ越し手続きメモ", title: "引っ越し手続きメモ", status: "stable", origin: "agent",
-    tags: ["手続き"], generated_at: "2026-08-10T05:00:00Z",
+    tags: ["手続き"], created_at: "2026-08-02T09:15:00Z", generated_at: "2026-08-10T05:00:00Z",
     body: "3月末までにやること:\n\n- 電気・ガス・水道の解約(2週間前まで)\n- 転出届 → 転入届(14日以内)\n- 住所変更: 免許・銀行・[確定申告の準備](/notes/確定申告の準備.md)にも影響\n",
     related: [["notes/確定申告の準備", "確定申告の準備"]], similar: [["notes/沖縄旅行の持ち物リスト", "沖縄旅行の持ち物リスト", 0.42]], attachments: [["間取り図.png", 245760]], vault_root: "(demo)",
   },
   {
     id: "notes/確定申告の準備", title: "確定申告の準備", status: "stable", origin: "agent",
-    tags: ["手続き", "税金"], generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [], similar: [["notes/引っ越し手続きメモ", "引っ越し手続きメモ", 0.38]], attachments: [], vault_root: "(demo)",
+    tags: ["手続き", "税金"], created_at: "2026-06-20T02:00:00Z", generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [], similar: [["notes/引っ越し手続きメモ", "引っ越し手続きメモ", 0.38]], attachments: [], vault_root: "(demo)",
   },
   {
     id: "notes/沖縄旅行の持ち物リスト", title: "沖縄旅行の持ち物リスト", status: "stable", origin: "agent",
-    tags: ["旅行"], generated_at: "2026-08-10T06:00:00Z",
+    tags: ["旅行"], created_at: "2026-08-10T06:00:00Z", generated_at: "2026-08-10T06:00:00Z",
     body: "会話でまとめた持ち物:\n\n- 日焼け止め\n- モバイルバッテリー\n- 子どもの浮き輪\n", related: [], similar: [], attachments: [], vault_root: "(demo)",
   },
 ];
 const demoHit = (n: NoteView): Hit => ({
   id: n.id, title: n.title, status: n.status, snippet: n.body.slice(0, 60).replace(/\n/g, " "), via: "recent",
-  origin: n.origin, tags: n.tags,
+  origin: n.origin, tags: n.tags, created: n.created_at, updated: n.generated_at,
 });
 
 async function demo<T>(v: T): Promise<T> {
@@ -161,7 +164,7 @@ export const api = {
   noteNew(title: string): Promise<string> {
     if (!inTauri) {
       const id = `notes/${title}`;
-      demoNotes.unshift({ id, title, status: "stable", origin: "human", tags: [], generated_at: new Date().toISOString(), body: "", related: [], similar: [], attachments: [], vault_root: "(demo)" });
+      demoNotes.unshift({ id, title, status: "stable", origin: "human", tags: [], created_at: new Date().toISOString(), generated_at: new Date().toISOString(), body: "", related: [], similar: [], attachments: [], vault_root: "(demo)" });
       return demo(id);
     }
     return invoke("note_new", { title });

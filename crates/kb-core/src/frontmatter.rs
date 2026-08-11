@@ -40,7 +40,10 @@ pub struct Frontmatter {
     pub sources: Option<serde_yaml::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stale_after: Option<String>,
-    /// app 拡張(唯一)。"human" = メモ(聖域)/ "agent" = 育つノート。
+    /// app 拡張: 作成日時(OKF に該当フィールドが無いため。generated.at は「最終更新」)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    /// app 拡張。"human" = メモ(聖域)/ "agent" = 育つノート。
     /// 作成時に刻まれ、越境の明示操作でのみ変わる(原則9)。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
@@ -60,9 +63,27 @@ impl Frontmatter {
             verified: None,
             sources: None,
             stale_after: None,
+            created: None,
             origin: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    /// 作成日時。未設定なら移行ノートの legacy.created を使う(旧 KB からの引き継ぎ)。
+    pub fn created_at(&self) -> Option<String> {
+        if let Some(c) = &self.created {
+            return Some(c.clone());
+        }
+        self.extra
+            .get("legacy")
+            .and_then(|v| v.get("created"))
+            .and_then(|v| v.as_str())
+            .map(|d| if d.len() == 10 { format!("{d}T00:00:00Z") } else { d.to_string() })
+    }
+
+    /// 最終更新(generated.at)。
+    pub fn updated_at(&self) -> Option<String> {
+        self.generated.as_ref().map(|g| g.at.clone())
     }
 
     /// 不在 = stable(OKF §5.4)。
