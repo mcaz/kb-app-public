@@ -1,6 +1,6 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / recent / propose のみ — confirm は公開しない
-//! (確定は人の操作。FR-C5。統治は接続面で差を付ける)。
+//! 公開ツールは search / get / recent / propose / update / remove。
+//! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
 //! 段階で公式 Rust SDK(rmcp)への載せ替えを再評価する(ADR-0001 スタック表)。
@@ -23,15 +23,16 @@ const PROTOCOL_FALLBACK: &str = "2025-06-18";
 const INSTRUCTIONS: &str = "\
 ユーザーの個人ナレッジベース(kb-app)への取次口。会話で「引く・育てる」を回す。\n\
 【契約(機構で強制。正本はアプリの docs/contract.md)】ノートはタグ1〜4個必須/\
-新規は draft から・確定と却下は人間のみ/形式はアプリが管理(frontmatter を自分で書かない)。\n\
+形式はアプリが管理(frontmatter を自分で書かない)。\n\
 【引く】ユーザー個人に関する話題(嗜好・決定・進行中の作業・過去に調べたこと・固有名詞)は、\
 推測で答える前に search(自然文可・意味で当たる。外したら語を変えて再検索)。ヒットは get で\
 全文を読んでから答える。本文中の /path.md リンクは必要なら辿る。「このノート」=引数なしの \
 get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
-から。確定は促さない)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
+から)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
 本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
-【タグ】体系は会話でユーザーと合意して育てる。合意済み(「タグ運用」ノート。無ければ起票を\
+【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
+アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。それ以外はあなたの裁量で付与・統合・整理してよい(まとめて整理したら\
 一言報告)。新語を乱発せず既存語彙に揃える。";
 
@@ -122,7 +123,7 @@ fn prompt_definitions() -> Value {
     json!([
         {"name": "タグの整理", "description": "タグ体系を見直し、AI 裁量の範囲で統合・整理する"},
         {"name": "会話を起票", "description": "この会話の知見・決定を下書きノートとして起票する"},
-        {"name": "下書きレビュー", "description": "未確定の下書きを一緒にレビューする(確定はあなたの操作)"}
+        {"name": "最近のノートを点検", "description": "最近のノートを一緒に点検する(内容・タグ・つながり)"}
     ])
 }
 
@@ -139,10 +140,9 @@ fn prompt_text(name: &str) -> Option<&'static str> {
 それぞれについて一言で要約を見せて、私が選んだものを propose で起票して\
 (タグ1〜4個・本文は未来の読者向けに自己完結・関連ノートへリンク)。",
         ),
-        "下書きレビュー" => Some(
-            "kb-app の未確定の下書き(recent で status が draft のもの)を一つずつ、\
-「要約・価値・気になる点」の形で見せて。確定・却下は私がアプリ側で行うので、\
-判断材料の提示に徹して。内容に手を入れた方がよいものは update で直してから見せて。",
+        "最近のノートを点検" => Some(
+            "kb-app の最近のノート(recent)を一つずつ、「要約・気になる点・タグの妥当性」の\
+形で見せて。手を入れた方がよいものは update で直してから見せて(大きな変更は一言添える)。",
         ),
         _ => None,
     }
@@ -174,7 +174,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "propose",
-            "description": "知見を draft として起票(確定は人間)。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
+            "description": "知見をノートとして起票。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string", "description": "内容が一意に分かるタイトル"},
                 "body": {"type": "string", "description": "本文(自己完結)"},
@@ -227,10 +227,9 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             }
             for h in &out.hits {
                 text.push_str(&format!(
-                    "- {} [{}]{}: {}\n",
+                    "- {} [{}]: {}\n",
                     h.id,
                     h.title.as_deref().unwrap_or("無題"),
-                    if h.status == "draft" { "(draft)" } else { "" },
                     h.snippet
                 ));
             }
@@ -276,10 +275,9 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 .iter()
                 .map(|h| {
                     format!(
-                        "- {} [{}]{}: {}",
+                        "- {} [{}]: {}",
                         h.id,
                         h.title.as_deref().unwrap_or("無題"),
-                        if h.status == "draft" { "(draft)" } else { "" },
                         h.snippet
                     )
                 })
@@ -319,7 +317,7 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 )
             };
             Ok(format!(
-                "下書きを起票した: {id}(status: draft)。確定はユーザーがアプリ側で行う。{vocab_note}"
+                "起票した: {id}。{vocab_note}"
             ))
         }
         "update" => {

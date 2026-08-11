@@ -1,6 +1,6 @@
 // kb-app 管理アプリ — AI の知識ベースを人間が統治する(2026-08-10 一本化ピボット)。
 // ノートは AI 管理の1種類。人間は: 読む・検索する・承諾する・添付する・Claude に指示する。
-// 受信箱は廃止 — 下書きの承諾・お手入れ提案はノートの場で、絞り込みはタグ/状態チップで。
+// 下書きという特別な状態は持たない(2026-08-11)— 暫定の扱いはタグで、意味づけは会話で決まる。
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -176,7 +176,7 @@ function renderOnboarding() {
 // ---- 骨格 ----
 function render() {
   const home = state.home!;
-  const pendingCount = home.drafts.length + home.care.length;
+  const pendingCount = home.care.length;
   const degraded = home.degraded.length
     ? `<div class="degraded">⚠ ${home.degraded.map(esc).join(" / ")}</div>` : "";
   const shell = el(`
@@ -267,7 +267,7 @@ function renderNotes(pane: HTMLElement) {
     const care = careIds();
     for (const h of hits) {
       const on = state.selected?.id === h.id ? "on" : "";
-      const marks = `${h.status === "draft" ? " ⏳" : ""}${care.has(h.id) ? " 🔧" : ""}`;
+      const marks = care.has(h.id) ? " 🔧" : "";
       const item = el(`
         <div class="item ${on}">
           <div class="t">${esc(h.title ?? h.id)}${marks}</div>
@@ -367,8 +367,7 @@ function renderNoteView(box: HTMLElement) {
     return;
   }
   const statusPill =
-    n.status === "draft" ? `<span class="status-pill draft">⏳ 下書き</span>`
-    : n.status === "deprecated" ? `<span class="status-pill deprecated">しまってある</span>` : "";
+    n.status === "deprecated" ? `<span class="status-pill deprecated">しまってある</span>` : "";
   const tagChips = n.tags.map((t) => {
     return `<button class="tag-chip" data-tag="${esc(t)}">${esc(t)}</button>`;
   }).join("");
@@ -378,13 +377,6 @@ function renderNoteView(box: HTMLElement) {
         `<span class="chip">📎 ${esc(name)} <i>${fmtSize(size)}</i><button class="chip-x" data-name="${esc(name)}">×</button></span>`
     )
     .join("");
-  // 下書きの承諾バー(受信箱の機能をノートの場へ)
-  const draftBar = n.status === "draft"
-    ? `<div class="approve-bar">この下書きを知識ベースに追加しますか?
-         <button class="primary small" id="draft-ok">追加する</button>
-         <button class="quiet small" id="draft-no">やめておく</button>
-       </div>`
-    : "";
   // このノートへのお手入れ提案
   const myCare = state.home!.care.filter((c) => c.a === n.id || c.b === n.id);
   const careBars = myCare
@@ -409,7 +401,6 @@ function renderNoteView(box: HTMLElement) {
         <div class="title">${esc(n.title)}</div>
       </div>
       <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${tagChips}</div>
-      ${draftBar}
       ${careBars}
       <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
       <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
@@ -418,24 +409,6 @@ function renderNoteView(box: HTMLElement) {
     </div>
   `));
 
-  document.getElementById("draft-ok")?.addEventListener("click", async () => {
-    try {
-      await api.draftConfirm(n.id);
-      await refreshHome();
-      state.selected = await api.noteGet(n.id);
-      render();
-      toast("知識ベースに追加しました");
-    } catch (e) {
-      toast(`${e}`);
-    }
-  });
-  document.getElementById("draft-no")?.addEventListener("click", async () => {
-    await api.draftReject(n.id);
-    await refreshHome();
-    state.selected = null;
-    render();
-    toast("しまいました(あとから戻せます)");
-  });
   box.querySelectorAll<HTMLButtonElement>("[data-care-ok]").forEach((b) =>
     b.addEventListener("click", async () => {
       const c = myCare[Number(b.dataset.careOk)];
@@ -535,7 +508,6 @@ function renderHome(pane: HTMLElement) {
       <div class="dash-warnings"></div>
       <div class="dash-tiles">
         <button class="tile" data-go="all"><div class="num">${s.total - s.deprecated}</div><div class="lbl">📄 ノート</div></button>
-        <div class="tile ${s.drafts ? "amber" : ""}"><div class="num">${s.drafts}</div><div class="lbl">⏳ 下書き</div></div>
         <div class="tile ${home.care.length ? "amber" : ""}"><div class="num">${home.care.length}</div><div class="lbl">🔧 提案</div></div>
         <div class="tile"><div class="num">${s.links}</div><div class="lbl">🔗 つながり</div></div>
         <div class="tile"><div class="num">${s.embed_enabled ? `${s.embedded}/${s.total}` : "オフ"}</div><div class="lbl">✨ かしこい検索</div></div>
@@ -565,7 +537,7 @@ function renderHome(pane: HTMLElement) {
   for (const h of home.notes.slice(0, 6)) {
     const row = el(`
       <button class="dash-note">
-        <span class="t">${esc(h.title ?? h.id)}${h.status === "draft" ? " ⏳" : ""}</span>
+        <span class="t">${esc(h.title ?? h.id)}</span>
         <span class="d">${esc(h.snippet.slice(0, 60))}</span>
       </button>
     `);
@@ -597,8 +569,6 @@ function renderGraph(pane: HTMLElement) {
     <div class="graph-wrap">
       <canvas></canvas>
       <div class="graph-legend">
-        <span><i class="dot human"></i>ノート</span>
-        <span><i class="dot agent"></i>下書き</span>
         <span class="hint">クリックで開く / ドラッグで動かす / ホイールで拡大</span>
       </div>
     </div>
@@ -610,8 +580,7 @@ function renderGraph(pane: HTMLElement) {
 
 function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphData) {
   const css = getComputedStyle(document.documentElement);
-  const colStable = css.getPropertyValue("--grow").trim() || "#3E7550";
-  const colDraft = css.getPropertyValue("--prop").trim() || "#A97B2F";
+  const colNode = css.getPropertyValue("--grow").trim() || "#3E7550";
   const colLine = css.getPropertyValue("--line").trim() || "#888";
   const colInk = css.getPropertyValue("--ink").trim() || "#222";
   const ctx = canvas.getContext("2d")!;
@@ -661,7 +630,7 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
       if (n.x == null) continue;
       ctx.beginPath();
       ctx.arc(n.x!, n.y!, radius(n), 0, Math.PI * 2);
-      ctx.fillStyle = n.status === "draft" ? colDraft : colStable;
+      ctx.fillStyle = colNode;
       ctx.fill();
       if (n === hovered) {
         ctx.strokeStyle = colInk;

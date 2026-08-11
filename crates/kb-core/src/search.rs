@@ -263,7 +263,6 @@ pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Op
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Stats {
     pub total: usize,
-    pub drafts: usize,
     pub deprecated: usize,
     /// メモ(origin: human)/ AI ノート(origin: agent)の内訳(deprecated 除く)
     pub memos: usize,
@@ -289,7 +288,6 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
         .unwrap_or(0) as usize;
     Ok(Stats {
         total: count("SELECT count(*) FROM notes")?,
-        drafts: count("SELECT count(*) FROM notes WHERE status='draft'")?,
         deprecated: count("SELECT count(*) FROM notes WHERE status='deprecated'")?,
         memos: count(
             "SELECT count(*) FROM notes WHERE status != 'deprecated' AND coalesce(origin,'human') != 'agent'",

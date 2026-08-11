@@ -63,8 +63,6 @@ enum Command {
         #[arg(long, default_value = "cli/unknown")]
         client: String,
     },
-    /// 下書きの確定(draft → stable+verified)
-    Confirm { note: String },
     /// 退役(status: deprecated)
     Archive { note: String },
     /// 削除(本体+添付。git 履歴には残る)
@@ -198,11 +196,6 @@ fn main() -> Result<()> {
             let body = body_or_stdin(body)?;
             let id = vault.propose(&title, &body, description.as_deref(), &tags, &client)?;
             println!("{id}");
-        }
-        Command::Confirm { note } => {
-            let vault = open_vault(cli.vault.as_deref())?;
-            vault.confirm(&note, OWNER_ACTOR)?;
-            println!("confirmed: {note}");
         }
         Command::Archive { note } => {
             let vault = open_vault(cli.vault.as_deref())?;

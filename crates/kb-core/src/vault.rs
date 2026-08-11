@@ -57,7 +57,7 @@ impl Vault {
 
     pub fn read_note(&self, id: &str) -> Result<Note> {
         if id.trim().is_empty() {
-            bail!("ノート ID が空(確定対象の draft が無い可能性。kb recent で確認)");
+            bail!("ノート ID が空");
         }
         let path = self.note_path(id);
         let content = fs::read_to_string(&path)
@@ -118,7 +118,9 @@ impl Vault {
         Ok(())
     }
 
-    /// AI からの下書き起票(origin: agent、status: draft)。FR-C4 propose。
+    /// AI からのノート起票(origin: agent)。FR-C4 propose。
+    /// 2026-08-11 改定: draft という特別な状態は持たない — 暫定・要確認といった
+    /// 扱いはタグで表現し、その意味づけはユーザーと AI の会話で決まる(運用)。
     pub fn propose(
         &self,
         title: &str,
@@ -130,7 +132,6 @@ impl Vault {
         Self::validate_tags(tags)?;
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("agent".into());
-        front.status = Some(crate::frontmatter::STATUS_DRAFT.into());
         front.description = description.map(|s| s.to_string());
         front.tags = tags.to_vec();
         front.generated = Some(Generated { by: client.into(), at: now_iso() });
@@ -141,10 +142,10 @@ impl Vault {
         let note = Note { front, body: body.to_string() };
         let id = self.write_new_note(title, &note)?;
         self.append_log(&format!(
-            "**Proposal**: [{title}](/{id}.md) を下書き起票(via {client})。"
+            "**Proposal**: [{title}](/{id}.md) を起票(via {client})。"
         ))?;
         self.write_index_md()?;
-        self.commit_note_op(&id, &format!("propose {id} (draft, via {client})"))?;
+        self.commit_note_op(&id, &format!("propose {id} (via {client})"))?;
         Ok(id)
     }
 
@@ -173,22 +174,6 @@ impl Vault {
         self.write_note(id, &note)?;
         self.write_index_md()?;
         self.commit_note_op(id, &format!("note: edit {id}"))?;
-        Ok(())
-    }
-
-    /// 下書きの確定(status: stable 化+verified 追記)。人の操作のみ(FR-C5: MCP に公開しない)。
-    pub fn confirm(&self, id: &str, actor: &str) -> Result<()> {
-        let mut note = self.read_note(id)?;
-        if note.front.effective_status() != crate::frontmatter::STATUS_DRAFT {
-            bail!("{id} は draft ではない(status: {})", note.front.effective_status());
-        }
-        note.front.status = Some(crate::frontmatter::STATUS_STABLE.into());
-        note.front.append_verified(actor, &now_iso());
-        self.write_note(id, &note)?;
-        let title = note.front.title.as_deref().unwrap_or(id);
-        self.append_log(&format!("**Confirmation**: [{title}](/{id}.md) を確定。"))?;
-        self.write_index_md()?;
-        self.commit_note_op(id, &format!("confirm {id}"))?;
         Ok(())
     }
 
@@ -539,7 +524,6 @@ mod tests {
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let mine = vault.new_human_note("俺のメモ", "本文", "human:owner").unwrap();
         let ai = vault.propose("AI の知見", "本文", None, &["dev".into()], "claude/x").unwrap();
-        vault.confirm(&ai, "human:owner").unwrap();
 
         // human ノート: 人間は可・AI は不可
         assert!(vault.edit_note(&mine, "俺のメモ", "編集後", "human:owner").is_ok());
@@ -562,19 +546,17 @@ mod tests {
     }
 
     #[test]
-    fn create_note_confirm_flow() {
+    fn create_and_propose_flow() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let id = vault
             .propose("テスト起票", "本文です。", Some("説明"), &["dev".into()], "test-client/model")
             .unwrap();
         let note = vault.read_note(&id).unwrap();
-        assert_eq!(note.front.effective_status(), "draft");
-        assert_eq!(note.front.origin.as_deref(), Some("agent"));
-        vault.confirm(&id, "human:owner").unwrap();
-        let note = vault.read_note(&id).unwrap();
+        // draft という特別な状態は持たない(2026-08-11 改定)
         assert_eq!(note.front.effective_status(), "stable");
-        assert!(note.front.verified.is_some());
+        assert_eq!(note.front.origin.as_deref(), Some("agent"));
+        assert_eq!(note.front.tags, vec!["dev".to_string()]);
         // index.md / log.md が生成され、予約名はノート一覧に出ない
         assert!(vault.root.join("index.md").exists());
         assert!(vault.root.join("log.md").exists());

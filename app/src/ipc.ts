@@ -16,12 +16,12 @@ export interface Hit {
   tags: string[];
 }
 export interface Stats {
-  total: number; drafts: number; deprecated: number;
+  total: number; deprecated: number;
   memos: number; agent_notes: number; links: number;
   embed_enabled: boolean; embedded: number;
 }
 export interface CareProposal { key: string; kind: string; a: string; b: string; detail: string }
-export interface HomeState { stats: Stats; notes: Hit[]; drafts: Hit[]; care: CareProposal[]; tags: [string, number][]; degraded: string[] }
+export interface HomeState { stats: Stats; notes: Hit[]; care: CareProposal[]; tags: [string, number][]; degraded: string[] }
 export interface SearchOutcome { hits: Hit[]; related: [string, string | null][]; degraded: string[] }
 export interface NoteView {
   id: string;
@@ -71,7 +71,7 @@ const demoNotes: NoteView[] = [
     tags: ["手続き", "税金"], generated_at: "2026-07-02T05:00:00Z", body: "medical 費の領収書を集める。\n", related: [], attachments: [], vault_root: "(demo)",
   },
   {
-    id: "notes/沖縄旅行の持ち物リスト", title: "沖縄旅行の持ち物リスト", status: "draft", origin: "agent",
+    id: "notes/沖縄旅行の持ち物リスト", title: "沖縄旅行の持ち物リスト", status: "stable", origin: "agent",
     tags: ["旅行"], generated_at: "2026-08-10T06:00:00Z",
     body: "会話でまとめた持ち物:\n\n- 日焼け止め\n- モバイルバッテリー\n- 子どもの浮き輪\n", related: [], attachments: [], vault_root: "(demo)",
   },
@@ -117,15 +117,14 @@ export const api = {
   },
   homeState(): Promise<HomeState> {
     if (!inTauri) {
-      const drafts = demoNotes.filter((n) => n.status === "draft").map(demoHit);
       return demo({
         stats: {
-          total: demoNotes.length, drafts: drafts.length, deprecated: 0,
+          total: demoNotes.length, deprecated: 0,
           memos: demoNotes.filter((n) => n.origin !== "agent").length,
           agent_notes: demoNotes.filter((n) => n.origin === "agent").length,
           links: 2, embed_enabled: true, embedded: demoNotes.length,
         },
-        notes: demoNotes.map(demoHit), drafts, care: demoCare,
+        notes: demoNotes.map(demoHit), care: demoCare,
         tags: [["手続き", 2], ["旅行", 1], ["税金", 1]], degraded: [],
       });
     }
@@ -214,14 +213,6 @@ export const api = {
     }
     return invoke("care_dismiss", { key });
   },
-  draftConfirm(id: string): Promise<void> {
-    if (!inTauri) {
-      const n = demoNotes.find((x) => x.id === id);
-      if (n) n.status = "stable";
-      return demo(undefined);
-    }
-    return invoke("draft_confirm", { id });
-  },
   graphData(): Promise<GraphData> {
     if (!inTauri) {
       const edges: [string, string][] = [];
@@ -266,13 +257,5 @@ export const api = {
   launchAi(note: string | null): Promise<void> {
     if (!inTauri) return demo(undefined);
     return invoke("launch_ai", { note });
-  },
-  draftReject(id: string): Promise<void> {
-    if (!inTauri) {
-      const n = demoNotes.find((x) => x.id === id);
-      if (n) n.status = "deprecated";
-      return demo(undefined);
-    }
-    return invoke("draft_reject", { id });
   },
 };

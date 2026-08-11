@@ -65,7 +65,6 @@ fn onboard() -> CmdResult<SetupState> {
 struct HomeState {
     stats: Stats,
     notes: Vec<Hit>,
-    drafts: Vec<Hit>,
     care: Vec<kb_core::care::CareProposal>,
     tags: Vec<(String, usize)>,
     degraded: Vec<String>,
@@ -79,7 +78,6 @@ fn home_state() -> CmdResult<HomeState> {
     let (conn, degraded) = synced_conn(&vault)?;
     let degraded = degraded.or(pull_degraded);
     let notes = recent(&conn, 500).map_err(err)?;
-    let drafts = notes.iter().filter(|h| h.status == "draft").cloned().collect();
     // お手入れの検知(FR-C7 最小形)。失敗しても画面は出す(fail-open)
     let _ = kb_core::care::detect(&conn, &vault);
     let care = kb_core::care::list_open(&conn).unwrap_or_default();
@@ -87,7 +85,6 @@ fn home_state() -> CmdResult<HomeState> {
     Ok(HomeState {
         stats: stats(&conn).map_err(err)?,
         notes,
-        drafts,
         care,
         tags,
         degraded: degraded.into_iter().collect(),
@@ -241,19 +238,7 @@ fn note_search(query: String) -> CmdResult<SearchOutcome> {
     Ok(out)
 }
 
-/// 受信箱: 下書きの確定(「追加する」)。
-#[tauri::command]
-fn draft_confirm(id: String) -> CmdResult<()> {
-    let vault = default_vault()?;
-    vault.confirm(&id, OWNER_ACTOR).map_err(err)
-}
 
-/// 受信箱: 下書きの差し戻し(「やめておく」= deprecated)。
-#[tauri::command]
-fn draft_reject(id: String) -> CmdResult<()> {
-    let vault = default_vault()?;
-    vault.archive(&id).map_err(err)
-}
 
 #[derive(Serialize)]
 struct SmartSearchState {
@@ -422,8 +407,6 @@ pub fn run() {
             note_delete,
             note_make_mine,
             note_search,
-            draft_confirm,
-            draft_reject,
             care_accept,
             care_dismiss,
             graph_data,
