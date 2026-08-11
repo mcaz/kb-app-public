@@ -23,6 +23,7 @@ const state = {
   listScroll: 0,
   noteScroll: null as { id: string; top: number } | null,
   localGraph: localStorage.getItem("kb.localGraph") !== "off",
+  graphFocus: null as string | null,
   vaultName: "kb",
   home: null as HomeState | null,
   selected: null as NoteView | null,
@@ -215,7 +216,11 @@ function render() {
   app.replaceChildren(shell);
   document.getElementById("nav-home")!.addEventListener("click", () => { state.view = "home"; render(); });
   document.getElementById("nav-notes")!.addEventListener("click", () => { state.view = "notes"; render(); });
-  document.getElementById("nav-graph")!.addEventListener("click", () => { state.view = "graph"; render(); });
+  document.getElementById("nav-graph")!.addEventListener("click", () => {
+    state.view = "graph";
+    state.graphFocus = null; // ナビからは全体表示
+    render();
+  });
   document.getElementById("nav-connect")!.addEventListener("click", () => { state.view = "connect"; render(); });
   shell.querySelectorAll<HTMLElement>("[data-fav]").forEach((f) =>
     f.addEventListener("click", (e) => {
@@ -480,7 +485,7 @@ function renderNoteView(box: HTMLElement) {
      <div class="note-main">
       <div class="title-row">
         <div class="title">${esc(n.title)}</div>
-        <button class="quiet small" id="lg-toggle" title="つながりのグラフ">${state.localGraph ? "🕸️ 隠す" : "🕸️ 表示"}</button>
+        <button class="quiet small" id="lg-toggle" title="関連パネル">${state.localGraph ? "🔗 隠す" : "🔗 表示"}</button>
       </div>
       <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${tagChips}</div>
       ${careBars}
@@ -489,8 +494,7 @@ function renderNoteView(box: HTMLElement) {
       <div class="preview">${marked.parse(n.body) as string}</div>
      </div>
      ${state.localGraph ? `<div class="local-graph" id="local-graph">
-        <div class="lg-head">🕸️ つながりの地図</div>
-        <div class="lg-body" id="lg-body"><div class="lg-empty">読み込み中…</div></div>
+        <button class="graph-link" id="graph-link">🕸️ グラフで見る</button>
         <div class="rel-list">
           <div class="lg-head">🔗 つながっているノート</div>
           ${n.related.length
@@ -511,8 +515,11 @@ function renderNoteView(box: HTMLElement) {
     localStorage.setItem("kb.localGraph", state.localGraph ? "on" : "off");
     render();
   });
-  const lgBody = box.querySelector<HTMLElement>("#lg-body");
-  if (lgBody) void renderLocalGraph(lgBody, n.id);
+  box.querySelector("#graph-link")?.addEventListener("click", () => {
+    state.graphFocus = n.id;   // グラフページをこのノート中心で開く
+    state.view = "graph";
+    render();
+  });
 
   if (state.noteScroll?.id === n.id) box.scrollTop = state.noteScroll.top;
   box.onscroll = () => { state.noteScroll = { id: n.id, top: box.scrollTop }; };
@@ -674,17 +681,36 @@ let graphSim: Simulation<GNode, SimulationLinkDatum<GNode>> | null = null;
 
 function renderGraph(pane: HTMLElement) {
   graphSim?.stop();
-  const wrap = el(`
-    <div class="graph-wrap">
-      <canvas></canvas>
-      <div class="graph-legend">
-        <span class="hint">クリックで開く / ドラッグで動かす / ホイールで拡大</span>
+  const focus = state.graphFocus;
+  const box = el(`
+    <div class="graph-page">
+      ${focus ? `<div class="graph-bar"><span id="focus-label">…</span><button class="quiet small" id="graph-all">全体を表示</button></div>` : ""}
+      <div class="graph-wrap">
+        <canvas></canvas>
+        <div class="graph-legend">
+          <span class="hint">クリックで開く / ドラッグで動かす / ホイールで拡大</span>
+        </div>
       </div>
     </div>
   `);
-  pane.replaceChildren(wrap);
+  pane.replaceChildren(box);
+  box.querySelector("#graph-all")?.addEventListener("click", () => {
+    state.graphFocus = null;
+    render();
+  });
+  const wrap = box.querySelector<HTMLElement>(".graph-wrap")!;
   const canvas = wrap.querySelector("canvas")!;
-  void api.graphData().then((data) => startGraph(wrap, canvas, data));
+  void api.graphData().then((data) => {
+    if (!focus) {
+      startGraph(wrap, canvas, data);
+      return;
+    }
+    const center = data.nodes.find((n) => n.id === focus);
+    const label = box.querySelector<HTMLElement>("#focus-label");
+    if (label) label.textContent = `「${center?.title ?? focus}」のまわり`;
+    const sub = subgraph(data, focus, 2);
+    startGraph(wrap, canvas, sub, focus);
+  });
 }
 
 function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphData, centerId?: string) {
@@ -857,26 +883,6 @@ function subgraph(data: GraphData, centerId: string, hops = 2): GraphData {
     nodes: data.nodes.filter((n) => keep.has(n.id)),
     edges: data.edges.filter(([a, b]) => keep.has(a) && keep.has(b)),
   };
-}
-
-/// ノート閲覧ビュー横のローカルグラフ(選択ノートを中心にした近傍)。
-async function renderLocalGraph(box: HTMLElement, centerId: string) {
-  if (!state.graphCache) {
-    try {
-      state.graphCache = await api.graphData();
-    } catch {
-      box.replaceChildren(el(`<div class="lg-empty">グラフを読み込めませんでした</div>`));
-      return;
-    }
-  }
-  const sub = subgraph(state.graphCache, centerId, 2);
-  if (sub.nodes.length <= 1) {
-    box.replaceChildren(el(`<div class="lg-empty">つながりはまだありません</div>`));
-    return;
-  }
-  const wrap = el(`<div class="lg-canvas"><canvas></canvas></div>`);
-  box.replaceChildren(wrap);
-  requestAnimationFrame(() => startGraph(wrap, wrap.querySelector("canvas")!, sub, centerId));
 }
 
 // ---- 繋ぐ ----
