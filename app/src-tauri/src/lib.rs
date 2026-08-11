@@ -118,6 +118,21 @@ fn home_state() -> CmdResult<HomeState> {
 }
 
 
+#[derive(Serialize)]
+struct TagOverview {
+    tags: Vec<kb_core::search::TagInfo>,
+    glossary_note: Option<String>,
+}
+
+/// ホームのタグ一覧(説明は KB の「タグ運用」ノート由来)。
+#[tauri::command]
+fn tag_overview() -> CmdResult<TagOverview> {
+    let vault = default_vault()?;
+    let (conn, _) = synced_conn(&vault)?;
+    let (tags, glossary_note) = kb_core::search::tag_overview(&conn).map_err(err)?;
+    Ok(TagOverview { tags, glossary_note })
+}
+
 #[tauri::command]
 fn care_dismiss(key: String) -> CmdResult<()> {
     let vault = default_vault()?;
@@ -432,6 +447,7 @@ pub fn run() {
             note_make_mine,
             note_search,
             care_dismiss,
+            tag_overview,
             graph_data,
             favorites_list,
             favorite_add,

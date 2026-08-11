@@ -682,6 +682,8 @@ function renderHome(pane: HTMLElement) {
         <div class="tile"><div class="num">${s.embed_enabled ? `${s.embedded}/${s.total}` : "オフ"}</div><div class="lbl">✨ かしこい検索</div></div>
         <div class="tile" id="tile-sync"><div class="num">…</div><div class="lbl">☁️ バックアップ</div></div>
       </div>
+      <div class="dash-head">🏷 タグ</div>
+      <div class="dash-tags" id="dash-tags"><div class="lg-empty">読み込み中…</div></div>
       <div class="dash-head">最近のノート</div>
       <div class="dash-recent"></div>
     </div>
@@ -714,6 +716,36 @@ function renderHome(pane: HTMLElement) {
     row.addEventListener("click", () => void openNote(h.id));
     recentBox.appendChild(row);
   }
+
+  // タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)
+  void api.tagOverview().then((ov) => {
+    const tagsBox = tiles.querySelector<HTMLElement>("#dash-tags")!;
+    if (!ov.tags.length) {
+      tagsBox.replaceChildren(el(`<div class="lg-empty">まだタグがありません。</div>`));
+      return;
+    }
+    tagsBox.replaceChildren();
+    for (const t of ov.tags) {
+      const row = el(`
+        <button class="tag-row">
+          <span class="tg">${esc(t.tag)}</span>
+          <span class="tc">${t.count}</span>
+          <span class="td">${t.description ? esc(t.description) : "<i>説明なし</i>"}</span>
+        </button>
+      `);
+      row.addEventListener("click", () => {
+        state.view = "notes";
+        state.selectedTags = [t.tag];
+        render();
+      });
+      tagsBox.appendChild(row);
+    }
+    const foot = ov.glossary_note
+      ? el(`<button class="tag-foot">📄 タグ運用ノートを開く</button>`)
+      : el(`<div class="tag-foot-hint">タグの役割は Claude との会話で決めて「タグ運用」ノートに記録すると、ここに説明が並びます。</div>`);
+    if (ov.glossary_note) foot.addEventListener("click", () => void openNote(ov.glossary_note!));
+    tagsBox.appendChild(foot);
+  });
 
   void api.connectState().then((c) => {
     const tile = tiles.querySelector<HTMLElement>("#tile-sync")!;

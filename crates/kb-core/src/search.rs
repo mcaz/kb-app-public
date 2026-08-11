@@ -257,6 +257,74 @@ pub fn tag_counts(conn: &Connection, limit: usize) -> Result<Vec<(String, usize)
     Ok(v)
 }
 
+/// タグの一覧(使用数+説明)。**説明はアプリが持たず KB の「タグ運用」ノートから読む**
+/// (タグの意味づけは AI とユーザーの会話で決まる — 2026-08-10 方針)。
+/// 表(| タグ | 説明 |)と箇条書き(- タグ — 説明 / - タグ: 説明)の両方を拾う。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TagInfo {
+    pub tag: String,
+    pub count: usize,
+    pub description: Option<String>,
+}
+
+pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)> {
+    let glossary: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id, body FROM notes
+             WHERE status != 'deprecated' AND (title LIKE '%タグ運用%' OR title LIKE '%タグの運用%')
+             LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    let mut desc: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Some((_, body)) = &glossary {
+        for line in body.lines() {
+            let line = line.trim();
+            let parsed = if line.starts_with('|') {
+                let cells: Vec<&str> = line.trim_matches('|').split('|').map(|c| c.trim()).collect();
+                (cells.len() >= 2).then(|| (cells[0].to_string(), cells[1].to_string()))
+            } else if line.starts_with("- ") || line.starts_with("* ") {
+                let rest = &line[2..];
+                rest.split_once(" — ")
+                    .or_else(|| rest.split_once(" - "))
+                    .or_else(|| rest.split_once(": "))
+                    .or_else(|| rest.split_once(":"))
+                    .map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))
+            } else {
+                None
+            };
+            if let Some((tag, d)) = parsed {
+                let tag = tag.trim_matches(|c| c == '*' || c == '`' || c == '#' || c == ' ').to_string();
+                if tag.is_empty()
+                    || d.is_empty()
+                    || d.chars().all(|c| c == '-' || c == ':')
+                    || matches!(tag.as_str(), "タグ" | "tag" | "名前" | "---")
+                {
+                    continue;
+                }
+                desc.entry(tag).or_insert(d);
+            }
+        }
+    }
+    let counts = tag_counts(conn, 500)?;
+    let mut out: Vec<TagInfo> = counts
+        .into_iter()
+        .map(|(tag, count)| {
+            let description = desc.get(&tag).cloned();
+            TagInfo { tag, count, description }
+        })
+        .collect();
+    // 合意済みだがまだ使われていないタグも見せる(語彙として存在するため)
+    for (tag, d) in desc {
+        if !out.iter().any(|t| t.tag == tag) {
+            out.push(TagInfo { tag, count: 0, description: Some(d) });
+        }
+    }
+    out.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
+    Ok((out, glossary.map(|(id, _)| id)))
+}
+
 /// 指定ノートと意味が近いノート(自分自身・リンク済み・退役は除く)。
 /// リンクされていない関連 = Obsidian の unlinked mentions に相当し、埋め込みならではの発見。
 pub fn similar_notes(

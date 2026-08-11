@@ -40,6 +40,9 @@ export interface NoteView {
   vault_root: string;
 }
 
+export interface TagInfo { tag: string; count: number; description: string | null }
+export interface TagOverview { tags: TagInfo[]; glossary_note: string | null }
+
 export interface Favorite { name: string; tags: string[] }
 
 export interface GraphData {
@@ -105,6 +108,19 @@ let demoFavorites: Favorite[] = [{ name: "手続きまわり", tags: ["手続き
 
 // ---- API ----
 export const api = {
+  tagOverview(): Promise<TagOverview> {
+    if (!inTauri) {
+      return demo({
+        tags: [
+          { tag: "手続き", count: 2, description: "役所・契約など、期限がある手続きの記録" },
+          { tag: "税金", count: 1, description: "確定申告まわり" },
+          { tag: "旅行", count: 1, description: null },
+        ],
+        glossary_note: "notes/タグ運用",
+      });
+    }
+    return invoke("tag_overview");
+  },
   favoritesList(): Promise<Favorite[]> {
     if (!inTauri) return demo(demoFavorites);
     return invoke("favorites_list");
