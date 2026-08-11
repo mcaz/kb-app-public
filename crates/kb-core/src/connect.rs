@@ -126,7 +126,8 @@ fn stderr_of(out: &std::process::Output) -> String {
 /// merge driver の設定はリポジトリローカルなので、clone した側でも毎回冪等に張り直す。
 fn ensure_merge_config(vault: &Vault) -> Result<()> {
     let attrs = vault.root.join(".gitattributes");
-    let want = "index.md merge=ours\nlog.md merge=union\n";
+    // eol=lf: Windows(autocrlf)混在でも差分が全行化しない
+    let want = "* text=auto eol=lf\nindex.md merge=ours\nlog.md merge=union\n";
     let current = fs::read_to_string(&attrs).unwrap_or_default();
     if current != want {
         fs::write(&attrs, want)?;

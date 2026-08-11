@@ -20,7 +20,7 @@
 html, body, #app { height: 100%; }
 body {
   margin: 0; background: var(--ground); color: var(--ink);
-  font-family: "Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic","Noto Sans JP",sans-serif;
+  font-family: "Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic","Meiryo","Noto Sans JP",sans-serif;
   font-size: 14px; line-height: 1.7;
 }
 button {

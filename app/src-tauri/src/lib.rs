@@ -423,15 +423,55 @@ fn launch_ai(note: Option<String>) -> CmdResult<()> {
     if let Some(id) = note {
         kb_core::connect::set_current_note(&vault, &id).map_err(err)?;
     }
-    let ok = std::process::Command::new("open")
-        .args(["-a", "Claude"])
-        .status()
-        .map_err(err)?
-        .success();
-    if !ok {
-        return Err("Claude Desktop を起動できなかった(インストール確認を)".into());
-    }
+    launch_claude_desktop()?;
     Ok(())
+}
+
+/// Claude Desktop を前面に出す(OS ごとの起動方法)。
+fn launch_claude_desktop() -> CmdResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let ok = std::process::Command::new("open")
+            .args(["-a", "Claude"])
+            .status()
+            .map_err(err)?
+            .success();
+        if !ok {
+            return Err("Claude Desktop を起動できなかった(インストール確認を)".into());
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // 既定のインストール先 → だめならプロトコルハンドラ経由
+        if let Some(local) = dirs::data_local_dir() {
+            let exe = local.join("AnthropicClaude").join("claude.exe");
+            if exe.exists() && std::process::Command::new(&exe).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "start", "", "claude://"])
+            .status()
+            .map_err(err)?
+            .success();
+        if !ok {
+            return Err("Claude Desktop を起動できなかった(インストール確認を)".into());
+        }
+        return Ok(());
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let ok = std::process::Command::new("xdg-open")
+            .arg("claude://")
+            .status()
+            .map_err(err)?
+            .success();
+        if !ok {
+            return Err("Claude Desktop を起動できなかった(インストール確認を)".into());
+        }
+        Ok(())
+    }
 }
 
 pub fn run() {
