@@ -658,6 +658,7 @@ async function openBeside(id: string) {
 async function openNote(id: string) {
   try {
     state.selected = await api.noteGet(id);
+    state.secondary = null; // 主ノートが変わったら並べ表示は畳む(前のノートの関連が残らないように)
     state.view = "notes";
     render();
   } catch {
