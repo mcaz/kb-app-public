@@ -428,8 +428,14 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
     .map((t) => `<span class="tsel-chip">${esc(t)}<button class="chip-x" data-tag="${esc(t)}">×</button></span>`)
     .join("");
   const saveBtn = state.selectedTags.length ? `<button class="fav-save" id="fav-save" title="この組み合わせをお気に入りに保存">★</button>` : "";
-  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>${saveBtn}`;
+  const clearBtn = state.selectedTags.length >= 2 ? `<button class="tsel-clear" id="tsel-clear" title="タグをすべて解除">全解除</button>` : "";
+  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>${clearBtn}${saveBtn}`;
   box.querySelector("#fav-save")?.addEventListener("click", () => void saveFavorite());
+  box.querySelector("#tsel-clear")?.addEventListener("click", () => {
+    state.selectedTags = [];
+    state.page.list = 0;
+    render();
+  });
   const input = box.querySelector<HTMLInputElement>("#tag-input")!;
   const dd = box.querySelector<HTMLElement>("#tag-dd")!;
 

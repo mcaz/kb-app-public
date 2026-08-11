@@ -106,6 +106,12 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
   width: 100%; border: none; background: transparent; padding: 3px 4px; font-size: 12px;
 }
 .tsel-wrap input:focus { outline: none; }
+.tsel-clear {
+  border: 1px solid var(--line); background: transparent; color: var(--muted);
+  border-radius: 7px; padding: 1px 8px; font-size: 11px; cursor: pointer; line-height: 1.6;
+}
+.tsel-clear:hover { color: var(--danger); border-color: var(--danger); }
+
 .fav-save {
   border: 1px solid var(--line); background: var(--chip); color: var(--prop);
   border-radius: 7px; padding: 1px 8px; font-size: 12px; cursor: pointer; line-height: 1.5;
