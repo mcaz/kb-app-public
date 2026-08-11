@@ -1,19 +1,8 @@
 import type { LucideIcon } from "lucide-react";
-import { tv } from "tailwind-variants";
 
 import { Icon } from "@/components/atoms/Icon";
 
-const tile = tv({
-  slots: {
-    root: "border-line bg-panel rounded-xl border px-4 py-3.5 text-left",
-    num: "text-[22px] leading-tight font-bold",
-    label: "text-muted mt-0.5 flex items-center gap-1.5 text-xs",
-  },
-  variants: {
-    amber: { true: { root: "border-prop", num: "text-prop" } },
-    clickable: { true: { root: "w-full cursor-pointer hover:bg-sel" } },
-  },
-});
+import { statTileVariants } from "./variants";
 
 export interface StatTileProps {
   value: React.ReactNode;
@@ -25,7 +14,7 @@ export interface StatTileProps {
 
 /** ホームの数値タイル。 */
 export function StatTile({ value, label, icon, amber, onClick }: StatTileProps) {
-  const s = tile({ amber, clickable: Boolean(onClick) });
+  const s = statTileVariants({ amber, clickable: Boolean(onClick) });
   const body = (
     <>
       <div className={s.num()}>{value}</div>

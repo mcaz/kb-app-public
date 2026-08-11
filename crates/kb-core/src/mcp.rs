@@ -189,7 +189,8 @@ fn tool_definitions() -> Value {
                 "title": {"type": "string", "description": "内容が一意に分かるタイトル"},
                 "body": {"type": "string", "description": "本文(自己完結)"},
                 "description": {"type": "string", "description": "一文要約"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙に揃える)"}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙のみ。英小文字ケバブ)"},
+                "allow_new_tags": {"type": "boolean", "description": "語彙にない新語を許す(2本目のノートが見えたときだけ)"}
             }, "required": ["title", "body", "tags"]}
         },
         {
@@ -200,7 +201,8 @@ fn tool_definitions() -> Value {
                 "title": {"type": "string"},
                 "body": {"type": "string", "description": "本文全体の置換"},
                 "description": {"type": "string"},
-                "tags": {"type": "array", "items": {"type": "string"}}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "既存語彙のみ(全消し・5個以上は不可)"},
+                "allow_new_tags": {"type": "boolean", "description": "語彙にない新語を許す"}
             }, "required": ["note"]}
         },
         {
@@ -337,33 +339,21 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                         .collect()
                 })
                 .unwrap_or_default();
+            // 語彙外タグは**書く前に**弾く(契約1の強制点)。以前は起票後に
+            // 「新しいタグを導入した」と教えるだけだったため語彙が膨らみ続けた
+            // (60ノートに112語・1回きり61%)。2026-08-12 に事前拒否へ引き上げ。
+            let allow_new = args
+                .get("allow_new_tags")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            crate::tags::check_vocabulary(&conn, &tags, allow_new)?;
             let id = vault.propose(title, body, description, &tags, client)?;
-            // 語彙合わせは文章への期待でなく機構で: 新出タグを検出して既存語彙を機械的に提示
-            let vocab: Vec<String> = crate::search::tag_counts(&conn, 100)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(t, _)| t)
-                .collect();
-            let new_tags: Vec<&String> = tags.iter().filter(|t| !vocab.contains(t)).collect();
-            let vocab_note = if new_tags.is_empty() {
-                String::new()
+            let added = if allow_new {
+                "\n新語を追加した。語彙の合意は「タグ運用」ノートに反映すること。"
             } else {
-                format!(
-                    "\n注意: 新しいタグ {} を導入した。既存語彙: {}。統合できるなら update で揃えること。",
-                    new_tags
-                        .iter()
-                        .map(|t| format!("「{t}」"))
-                        .collect::<Vec<_>>()
-                        .join("、"),
-                    vocab
-                        .iter()
-                        .take(20)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(" / ")
-                )
+                ""
             };
-            Ok(format!("起票した: {id}。{vocab_note}"))
+            Ok(format!("起票した: {id}。{added}"))
         }
         "update" => {
             let id = args
@@ -375,6 +365,13 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     .filter_map(|t| t.as_str().map(String::from))
                     .collect()
             });
+            if let Some(ts) = tags.as_deref() {
+                let allow_new = args
+                    .get("allow_new_tags")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                crate::tags::check_vocabulary(&conn, ts, allow_new)?;
+            }
             vault.agent_update_note(
                 id,
                 args.get("title").and_then(|v| v.as_str()),

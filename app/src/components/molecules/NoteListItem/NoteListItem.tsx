@@ -1,24 +1,9 @@
 import { Wrench } from "lucide-react";
-import { tv } from "tailwind-variants";
 
 import { Icon } from "@/components/atoms/Icon";
 import type { Hit } from "@/lib/api";
 
-const item = tv({
-  slots: {
-    root: "w-full cursor-pointer border-l-2 px-3.5 py-2 text-left",
-    title: "line-clamp-2 font-semibold",
-    snippet: "line-clamp-2 text-[11.5px] text-muted",
-    dates: "mt-0.5 text-[10.5px] leading-snug text-muted opacity-85",
-  },
-  variants: {
-    selected: {
-      true: { root: "border-l-grow bg-sel" },
-      false: { root: "border-l-transparent hover:bg-sel/50" },
-    },
-  },
-  defaultVariants: { selected: false },
-});
+import { noteListItemVariants } from "./variants";
 
 export interface NoteListItemProps {
   hit: Hit;
@@ -38,7 +23,7 @@ export function NoteListItem({
   updatedLabel,
   onOpen,
 }: NoteListItemProps) {
-  const s = item({ selected });
+  const s = noteListItemVariants({ selected });
   return (
     <button type="button" className={s.root()} onClick={onOpen} aria-current={selected}>
       <div className={s.title()}>

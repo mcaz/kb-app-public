@@ -14,6 +14,7 @@ pub mod index;
 pub mod mcp;
 pub mod registry;
 pub mod search;
+pub mod tags;
 pub mod tokenize;
 pub mod vault;
 

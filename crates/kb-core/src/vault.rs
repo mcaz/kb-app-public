@@ -122,10 +122,9 @@ impl Vault {
                 tags.len()
             );
         }
-        if let Some(bad) = tags.iter().find(|t| {
-            t.trim().is_empty() || t.chars().count() > 20 || t.contains(char::is_whitespace)
-        }) {
-            bail!("契約: タグは空白を含まない20文字以内の語(不正: 「{bad}」)");
+        // 形式(英小文字ケバブ)は tags モジュールが正本 — 語彙外タグの拒否と同じ検証を使う
+        for t in tags {
+            crate::tags::validate_shape(t)?;
         }
         Ok(())
     }
