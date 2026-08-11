@@ -18,6 +18,9 @@ type View = "home" | "notes" | "graph" | "connect";
 const state = {
   view: "notes" as View,
   selectedTags: [] as string[],
+  period: "all" as "all" | "7" | "30" | "90",
+  sort: "updated" as "updated" | "created" | "title",
+  filterOpen: localStorage.getItem("kb.filterOpen") === "on",
   favorites: [] as Favorite[],
   graphCache: null as GraphData | null,
   listScroll: 0,
@@ -235,6 +238,11 @@ function render() {
       const fav = state.favorites.find((x) => x.name === f.dataset.fav);
       if (!fav) return;
       state.selectedTags = [...fav.tags];
+      state.query = fav.query ?? "";
+      state.searching = !!state.query.trim();
+      state.period = (fav.period as typeof state.period) ?? "all";
+      state.sort = (fav.sort as typeof state.sort) ?? "updated";
+      state.page.list = 0;
       state.view = "notes";
       render();
     })
@@ -268,8 +276,27 @@ function careIds(): Set<string> {
   return s;
 }
 
-function matchFilter(h: { tags: string[] }): boolean {
-  return state.selectedTags.every((t) => h.tags.includes(t));
+function matchFilter(h: { tags: string[]; updated?: string | null }): boolean {
+  if (!state.selectedTags.every((t) => h.tags.includes(t))) return false;
+  if (state.period !== "all") {
+    const days = Number(state.period);
+    const t = h.updated ? new Date(h.updated).getTime() : 0;
+    if (!t || Date.now() - t > days * 86400000) return false;
+  }
+  return true;
+}
+
+/// 有効な絞り込みの数(タグ+期間)。トグルの見出しに出す。
+function activeFilterCount(): number {
+  return state.selectedTags.length + (state.period === "all" ? 0 : 1);
+}
+
+function sortHits<T extends { title: string | null; id: string; created: string | null; updated: string | null }>(hits: T[]): T[] {
+  const key = (h: T) => (state.sort === "created" ? h.created : h.updated) ?? "";
+  if (state.sort === "title") {
+    return [...hits].sort((a, b) => (a.title ?? a.id).localeCompare(b.title ?? b.id, "ja"));
+  }
+  return [...hits].sort((a, b) => key(b).localeCompare(key(a)));
 }
 
 /// 一覧のページャ。total 件を size ずつ見せ、現在ページと移動ボタンを返す。
@@ -321,7 +348,27 @@ function renderNotes(pane: HTMLElement) {
   const list = el(`
     <div class="list">
       <div class="searchbox"><input id="search" placeholder="🔍 ノートを検索" value="${esc(state.query)}" /></div>
-      <div class="tag-select" id="tag-select"></div>
+      <button class="filter-toggle" id="filter-toggle">
+        <span>${state.filterOpen ? "▾" : "▸"} フィルター</span>
+        ${activeFilterCount() ? `<span class="fbadge">${activeFilterCount()}</span>` : ""}
+      </button>
+      <div class="filters" id="filters" ${state.filterOpen ? "" : "hidden"}>
+        <div class="tag-select" id="tag-select"></div>
+        <div class="f-row">
+          <label>更新</label>
+          <select id="f-period">
+            ${[["all", "全期間"], ["7", "7日以内"], ["30", "30日以内"], ["90", "90日以内"]]
+              .map(([v, l]) => `<option value="${v}" ${state.period === v ? "selected" : ""}>${l}</option>`).join("")}
+          </select>
+        </div>
+        <div class="f-row">
+          <label>並び</label>
+          <select id="f-sort">
+            ${[["updated", "更新が新しい順"], ["created", "作成が新しい順"], ["title", "タイトル順"]]
+              .map(([v, l]) => `<option value="${v}" ${state.sort === v ? "selected" : ""}>${l}</option>`).join("")}
+          </select>
+        </div>
+      </div>
       <div class="items" id="items"></div>
       <div class="list-foot">
         <select id="page-size">
@@ -332,6 +379,20 @@ function renderNotes(pane: HTMLElement) {
     </div>
   `);
   buildTagSelect(list.querySelector<HTMLElement>("#tag-select")!, home.tags.map(([t]) => t));
+  list.querySelector("#filter-toggle")!.addEventListener("click", () => {
+    state.filterOpen = !state.filterOpen;
+    localStorage.setItem("kb.filterOpen", state.filterOpen ? "on" : "off");
+    render();
+  });
+  list.querySelector<HTMLSelectElement>("#f-period")!.addEventListener("change", (e) => {
+    state.period = (e.target as HTMLSelectElement).value as typeof state.period;
+    state.page.list = 0;
+    render();
+  });
+  list.querySelector<HTMLSelectElement>("#f-sort")!.addEventListener("change", (e) => {
+    state.sort = (e.target as HTMLSelectElement).value as typeof state.sort;
+    render();
+  });
   list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 260}px`;
   const splitter = makeSplitter(list, "kb.listWidth", 180, 520);
 
@@ -357,7 +418,7 @@ function renderNotes(pane: HTMLElement) {
     allHits: { id: string; title: string | null; status: string; snippet: string; tags: string[]; created: string | null; updated: string | null }[],
     searchMode: boolean
   ) => {
-    const hits = allHits.filter((h) => matchFilter(h));
+    const hits = sortHits(allHits.filter((h) => matchFilter(h)));
     const PAGE = state.pageSize;
     const maxPage = Math.max(0, Math.ceil(hits.length / PAGE) - 1);
     if (state.page.list > maxPage) state.page.list = maxPage;
@@ -427,7 +488,8 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
   const selectedChips = state.selectedTags
     .map((t) => `<span class="tsel-chip">${esc(t)}<button class="chip-x" data-tag="${esc(t)}">×</button></span>`)
     .join("");
-  const saveBtn = state.selectedTags.length ? `<button class="fav-save" id="fav-save" title="この組み合わせをお気に入りに保存">★</button>` : "";
+  const canSave = state.selectedTags.length > 0 || state.query.trim().length > 0;
+  const saveBtn = canSave ? `<button class="fav-save" id="fav-save" title="いまの絞り込みをお気に入りに保存">★</button>` : "";
   const clearBtn = state.selectedTags.length >= 2 ? `<button class="tsel-clear" id="tsel-clear" title="タグをすべて解除">全解除</button>` : "";
   box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>${clearBtn}${saveBtn}`;
   box.querySelector("#fav-save")?.addEventListener("click", () => void saveFavorite());
@@ -489,12 +551,21 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
 function saveFavorite(): Promise<void> {
   return new Promise((resolve) => {
     const tags = [...state.selectedTags];
+    const query = state.query.trim();
+    const period = state.period;
+    const sort = state.sort;
+    const parts = [
+      tags.length ? tags.join(" / ") : "",
+      query ? `検索「${query}」` : "",
+      period !== "all" ? `${period}日以内` : "",
+      sort !== "updated" ? (sort === "created" ? "作成順" : "タイトル順") : "",
+    ].filter(Boolean);
     const overlay = el(`
       <div class="modal-overlay">
         <div class="modal">
           <div class="modal-title">お気に入りに保存</div>
-          <div class="modal-desc">${tags.map((t) => esc(t)).join(" / ")}</div>
-          <input id="fav-name" placeholder="名前(例: 開発まわり)" value="${esc(tags.join("・"))}" />
+          <div class="modal-desc">${esc(parts.join(" ・ "))}</div>
+          <input id="fav-name" placeholder="名前(例: 開発まわり)" value="${esc(parts.join("・").slice(0, 40))}" />
           <div class="modal-row">
             <button class="primary" id="fav-ok">保存</button>
             <button class="quiet" id="fav-cancel">やめる</button>
@@ -508,7 +579,7 @@ function saveFavorite(): Promise<void> {
       const name = input.value.trim();
       if (!name) { toast("名前を入れてください"); return; }
       try {
-        await api.favoriteAdd(name, tags);
+        await api.favoriteAdd({ name, tags, query: query || null, period, sort });
         state.favorites = await api.favoritesList();
         done();
         render();

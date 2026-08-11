@@ -31,8 +31,8 @@ fn favorites_list() -> CmdResult<Vec<kb_core::favorites::Favorite>> {
 }
 
 #[tauri::command]
-fn favorite_add(name: String, tags: Vec<String>) -> CmdResult<()> {
-    kb_core::favorites::add(&current_vault_name()?, &name, &tags).map_err(err)
+fn favorite_add(fav: kb_core::favorites::Favorite) -> CmdResult<()> {
+    kb_core::favorites::add(&current_vault_name()?, fav).map_err(err)
 }
 
 #[tauri::command]

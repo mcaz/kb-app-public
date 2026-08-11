@@ -8,10 +8,19 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+/// 名前付きの絞り込みセット。タグだけでなく検索語・期間・並び順も保存する
+/// (2026-08-11: 「お気に入り = 画面の絞り込み状態そのもの」に拡張)。
+/// 旧形式(name/tags のみ)も読めるよう追加項目はすべて default。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Favorite {
     pub name: String,
     pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
 }
 
 type Store = BTreeMap<String, Vec<Favorite>>;
@@ -44,19 +53,19 @@ pub fn list(vault: &str) -> Vec<Favorite> {
     load().get(vault).cloned().unwrap_or_default()
 }
 
-/// 追加(同名は上書き)。タグ空は不可。
-pub fn add(vault: &str, name: &str, tags: &[String]) -> Result<()> {
-    let name = name.trim();
+/// 追加(同名は上書き)。絞り込みが空(タグも検索語も無し)なら不可。
+pub fn add(vault: &str, fav: Favorite) -> Result<()> {
+    let name = fav.name.trim().to_string();
     if name.is_empty() {
         bail!("お気に入りの名前が空");
     }
-    if tags.is_empty() {
-        bail!("タグを1つ以上選んでから保存する");
+    if fav.tags.is_empty() && fav.query.as_deref().unwrap_or("").trim().is_empty() {
+        bail!("タグか検索語を指定してから保存する");
     }
     let mut store = load();
     let favs = store.entry(vault.to_string()).or_default();
     favs.retain(|f| f.name != name);
-    favs.push(Favorite { name: name.to_string(), tags: tags.to_vec() });
+    favs.push(Favorite { name, ..fav });
     save(&store)
 }
 

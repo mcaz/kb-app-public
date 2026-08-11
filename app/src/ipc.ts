@@ -43,7 +43,13 @@ export interface NoteView {
 export interface TagInfo { tag: string; count: number; description: string | null }
 export interface TagOverview { tags: TagInfo[]; glossary_note: string | null }
 
-export interface Favorite { name: string; tags: string[] }
+export interface Favorite {
+  name: string;
+  tags: string[];
+  query?: string | null;
+  period?: string | null;
+  sort?: string | null;
+}
 
 export interface GraphData {
   nodes: { id: string; title: string; origin: string | null; status: string; degree: number }[];
@@ -125,12 +131,12 @@ export const api = {
     if (!inTauri) return demo(demoFavorites);
     return invoke("favorites_list");
   },
-  favoriteAdd(name: string, tags: string[]): Promise<void> {
+  favoriteAdd(fav: Favorite): Promise<void> {
     if (!inTauri) {
-      demoFavorites = demoFavorites.filter((f) => f.name !== name).concat([{ name, tags }]);
+      demoFavorites = demoFavorites.filter((f) => f.name !== fav.name).concat([fav]);
       return demo(undefined);
     }
-    return invoke("favorite_add", { name, tags });
+    return invoke("favorite_add", { fav });
   },
   favoriteRemove(name: string): Promise<void> {
     if (!inTauri) {
