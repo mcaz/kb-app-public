@@ -72,6 +72,25 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         }
     }
 
+    // ③ 語彙表に読めない行(沈黙しない — fail-open を選んだ経路は劣化を可視化する)。
+    // 語彙表の行を黙って捨てると、合意したはずのタグが一覧から消えたまま気づけない。
+    if added < budget
+        && let Ok(g) = crate::tags::glossary(conn)
+        && !g.skipped.is_empty()
+        && let Some(note) = g.note_id.clone()
+    {
+        let key = format!("glossary:{note}:{}", g.skipped.len());
+        let detail = format!(
+            "「タグ運用」ノートの語彙表に、タグとして読めない行が {} 行あります({})。\
+形は英小文字・数字・ハイフンです。",
+            g.skipped.len(),
+            g.skipped.join("、")
+        );
+        if insert_new(conn, &key, "glossary", &note, "", &detail)? {
+            added += 1;
+        }
+    }
+
     // ② リンク切れ(未執筆の知識の気づき。エラーではない — OKF §6.1)
     let broken: Vec<(String, String)> = {
         let mut stmt = conn.prepare_cached(

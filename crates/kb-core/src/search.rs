@@ -278,51 +278,11 @@ pub struct TagInfo {
 }
 
 pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)> {
-    let glossary: Option<(String, String)> = conn
-        .query_row(
-            "SELECT id, body FROM notes
-             WHERE status != 'deprecated' AND (title LIKE '%タグ運用%' OR title LIKE '%タグの運用%')
-             LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .ok();
-    let mut desc: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    if let Some((_, body)) = &glossary {
-        for line in body.lines() {
-            let line = line.trim();
-            let parsed = if line.starts_with('|') {
-                let cells: Vec<&str> = line
-                    .trim_matches('|')
-                    .split('|')
-                    .map(|c| c.trim())
-                    .collect();
-                (cells.len() >= 2).then(|| (cells[0].to_string(), cells[1].to_string()))
-            } else if line.starts_with("- ") || line.starts_with("* ") {
-                let rest = &line[2..];
-                rest.split_once(" — ")
-                    .or_else(|| rest.split_once(" - "))
-                    .or_else(|| rest.split_once(": "))
-                    .or_else(|| rest.split_once(":"))
-                    .map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))
-            } else {
-                None
-            };
-            if let Some((tag, d)) = parsed {
-                let tag = tag
-                    .trim_matches(|c| c == '*' || c == '`' || c == '#' || c == ' ')
-                    .to_string();
-                if tag.is_empty()
-                    || d.is_empty()
-                    || d.chars().all(|c| c == '-' || c == ':')
-                    || matches!(tag.as_str(), "タグ" | "tag" | "名前" | "---")
-                {
-                    continue;
-                }
-                desc.entry(tag).or_insert(d);
-            }
-        }
-    }
+    // 読み取りは tags::glossary が正本(`## 語彙` 節の表だけ・形式検証つき)。
+    // 以前はこの関数が本文全体を舐めており、普通の箇条書きや URL が偽タグとして
+    // 一覧に出た(2026-08-12)。
+    let glossary = crate::tags::glossary(conn)?;
+    let (desc, note_id) = (glossary.entries, glossary.note_id);
     let counts = tag_counts(conn, 500)?;
     let mut out: Vec<TagInfo> = counts
         .into_iter()
@@ -346,7 +306,7 @@ pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)>
         }
     }
     out.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
-    Ok((out, glossary.map(|(id, _)| id)))
+    Ok((out, note_id))
 }
 
 /// 指定ノートと意味が近いノート(自分自身・リンク済み・退役は除く)。
