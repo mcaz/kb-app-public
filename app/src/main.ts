@@ -323,12 +323,11 @@ function renderNotes(pane: HTMLElement) {
       <div class="searchbox"><input id="search" placeholder="🔍 ノートを検索" value="${esc(state.query)}" /></div>
       <div class="tag-select" id="tag-select"></div>
       <div class="items" id="items"></div>
-      <div class="pager-slot" id="list-pager"></div>
-      <div class="page-size">
-        <span>表示件数</span>
+      <div class="list-foot">
         <select id="page-size">
           ${[30, 50, 100, 200].map((n) => `<option value="${n}" ${state.pageSize === n ? "selected" : ""}>${n}</option>`).join("")}
         </select>
+        <div class="pager-slot" id="list-pager"></div>
       </div>
     </div>
   `);
