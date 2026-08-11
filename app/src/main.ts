@@ -19,6 +19,8 @@ const state = {
   view: "notes" as View,
   selectedTags: [] as string[],
   favorites: [] as Favorite[],
+  graphCache: null as GraphData | null,
+  localGraph: localStorage.getItem("kb.localGraph") !== "off",
   vaultName: "kb",
   home: null as HomeState | null,
   selected: null as NoteView | null,
@@ -477,9 +479,11 @@ function renderNoteView(box: HTMLElement) {
         .join("")}</ul></div>`
     : "";
   box.replaceChildren(el(`
-    <div>
+    <div class="note-split">
+     <div class="note-main">
       <div class="title-row">
         <div class="title">${esc(n.title)}</div>
+        <button class="quiet small" id="lg-toggle" title="つながりのグラフ">${state.localGraph ? "🕸️ 隠す" : "🕸️ 表示"}</button>
       </div>
       <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${tagChips}</div>
       ${careBars}
@@ -487,14 +491,24 @@ function renderNoteView(box: HTMLElement) {
       <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
       <div class="preview">${marked.parse(n.body) as string}</div>
       ${relatedSection}
+     </div>
+     ${state.localGraph ? `<div class="local-graph" id="local-graph"><div class="lg-head">🕸️ つながり</div><div class="lg-body" id="lg-body"><div class="lg-empty">読み込み中…</div></div></div>` : ""}
     </div>
   `));
+  box.querySelector("#lg-toggle")!.addEventListener("click", () => {
+    state.localGraph = !state.localGraph;
+    localStorage.setItem("kb.localGraph", state.localGraph ? "on" : "off");
+    render();
+  });
+  const lgBody = box.querySelector<HTMLElement>("#lg-body");
+  if (lgBody) void renderLocalGraph(lgBody, n.id);
 
   box.querySelectorAll<HTMLButtonElement>("[data-care-ok]").forEach((b) =>
     b.addEventListener("click", async () => {
       const c = myCare[Number(b.dataset.careOk)];
       try {
         await api.careAccept(c.key);
+        state.graphCache = null;
         await refreshHome();
         state.selected = await api.noteGet(n.id);
         render();
@@ -659,9 +673,10 @@ function renderGraph(pane: HTMLElement) {
   void api.graphData().then((data) => startGraph(wrap, canvas, data));
 }
 
-function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphData) {
+function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphData, centerId?: string) {
   const css = getComputedStyle(document.documentElement);
   const colNode = css.getPropertyValue("--grow").trim() || "#3E7550";
+  const colCenter = css.getPropertyValue("--prop").trim() || "#A97B2F";
   const colLine = css.getPropertyValue("--line").trim() || "#888";
   const colInk = css.getPropertyValue("--ink").trim() || "#222";
   const ctx = canvas.getContext("2d")!;
@@ -679,7 +694,8 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
   size();
   new ResizeObserver(() => { size(); draw(); }).observe(wrap);
 
-  const radius = (n: GNode) => 3.5 + Math.min(6, Math.sqrt(n.degree) * 1.6);
+  const radius = (n: GNode) =>
+    n.id === centerId ? 7 : 3.5 + Math.min(6, Math.sqrt(n.degree) * 1.6);
 
   const sim = forceSimulation(nodes)
     .force("link", forceLink<GNode, SimulationLinkDatum<GNode>>(links).id((d) => d.id).distance(70).strength(0.5))
@@ -711,14 +727,14 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
       if (n.x == null) continue;
       ctx.beginPath();
       ctx.arc(n.x!, n.y!, radius(n), 0, Math.PI * 2);
-      ctx.fillStyle = colNode;
+      ctx.fillStyle = n.id === centerId ? colCenter : colNode;
       ctx.fill();
       if (n === hovered) {
         ctx.strokeStyle = colInk;
         ctx.lineWidth = 2 / t.k;
         ctx.stroke();
       }
-      if (t.k > 1.05 || n === hovered) {
+      if (centerId || t.k > 1.05 || n === hovered) {
         ctx.fillStyle = colInk;
         ctx.font = `${10.5 / t.k}px sans-serif`;
         const label = n.title.length > 16 ? `${n.title.slice(0, 16)}…` : n.title;
@@ -797,6 +813,56 @@ function startGraph(wrap: HTMLElement, canvas: HTMLCanvasElement, data: GraphDat
       draw();
     }
   });
+}
+
+/// 中心ノートから hops ホップ以内の部分グラフを取り出す(ローカルグラフ用)。
+function subgraph(data: GraphData, centerId: string, hops = 2): GraphData {
+  const adj = new Map<string, Set<string>>();
+  for (const [a, b] of data.edges) {
+    if (!adj.has(a)) adj.set(a, new Set());
+    if (!adj.has(b)) adj.set(b, new Set());
+    adj.get(a)!.add(b);
+    adj.get(b)!.add(a);
+  }
+  const keep = new Set<string>([centerId]);
+  let frontier = [centerId];
+  for (let h = 0; h < hops; h++) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const nb of adj.get(id) ?? []) {
+        if (!keep.has(nb)) {
+          keep.add(nb);
+          next.push(nb);
+        }
+      }
+    }
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  return {
+    nodes: data.nodes.filter((n) => keep.has(n.id)),
+    edges: data.edges.filter(([a, b]) => keep.has(a) && keep.has(b)),
+  };
+}
+
+/// ノート閲覧ビュー横のローカルグラフ(選択ノートを中心にした近傍)。
+async function renderLocalGraph(box: HTMLElement, centerId: string) {
+  if (!state.graphCache) {
+    try {
+      state.graphCache = await api.graphData();
+    } catch {
+      box.replaceChildren(el(`<div class="lg-empty">グラフを読み込めませんでした</div>`));
+      return;
+    }
+  }
+  const sub = subgraph(state.graphCache, centerId, 2);
+  if (sub.nodes.length <= 1) {
+    box.replaceChildren(el(`<div class="lg-empty">つながりはまだありません</div>`));
+    return;
+  }
+  const wrap = el(`<div class="lg-canvas"><canvas></canvas></div>`);
+  box.replaceChildren(wrap);
+  requestAnimationFrame(() => startGraph(wrap, wrap.querySelector("canvas")!, sub, centerId));
 }
 
 // ---- 繋ぐ ----

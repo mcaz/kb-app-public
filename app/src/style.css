@@ -173,6 +173,20 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .status-pill.deprecated { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .status-pill.agent { background: var(--prop-soft); color: var(--prop); white-space: nowrap; }
 
+/* ノート閲覧 + ローカルグラフの2カラム */
+.note-split { display: flex; gap: 16px; flex: 1; min-height: 0; }
+.note-main { flex: 1; min-width: 340px; }
+.local-graph {
+  width: 260px; flex: none; display: flex; flex-direction: column;
+  border-left: 1px solid var(--line); padding-left: 14px;
+}
+.local-graph .lg-head { font-size: 11.5px; color: var(--muted); letter-spacing: .08em; margin-bottom: 6px; }
+.local-graph .lg-body { flex: 1; min-height: 240px; position: relative; }
+.lg-canvas { position: absolute; inset: 0; }
+.lg-canvas canvas { width: 100%; height: 100%; display: block; }
+.lg-empty { color: var(--muted); font-size: 12px; }
+@media (max-width: 1200px) { .local-graph { display: none; } }
+
 /* つながり(ノート末尾・Obsidian 風) */
 .related-section { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); max-width: 46em; }
 .related-section .head { font-size: 12px; color: var(--muted); letter-spacing: .08em; margin-bottom: 8px; }
