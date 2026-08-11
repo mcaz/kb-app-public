@@ -321,6 +321,7 @@ body.dragover .editor { outline: 2px dashed var(--grow); outline-offset: -8px; b
 .tile.amber { border-color: var(--prop); }
 .tile.amber .num { color: var(--prop); }
 .dash-tags { display: flex; flex-direction: column; gap: 4px; max-width: 60em; }
+.tag-row.ph, .dash-note.ph { visibility: hidden; pointer-events: none; }
 .tag-row {
   display: grid; grid-template-columns: minmax(90px, auto) 34px 1fr; gap: 10px; align-items: baseline;
   text-align: left; font: inherit; font-size: 12.5px; cursor: pointer;

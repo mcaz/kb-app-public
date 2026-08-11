@@ -8,7 +8,7 @@ import {
   type Simulation, type SimulationLinkDatum, type SimulationNodeDatum,
 } from "d3-force";
 import { marked } from "marked";
-import { api, type ConnectState, type Favorite, type GraphData, type HomeState, type NoteView } from "./ipc";
+import { api, type ConnectState, type Favorite, type GraphData, type HomeState, type NoteView, type TagOverview } from "./ipc";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 
@@ -23,6 +23,8 @@ const state = {
   listScroll: 0,
   noteScroll: {} as Record<string, number>,
   page: { list: 0, recent: 0, tags: 0 },
+  tagOv: null as TagOverview | null,
+  dashScroll: 0,
   secondary: null as NoteView | null,
   graphFocus: null as string | null,
   vaultName: "kb",
@@ -706,6 +708,8 @@ function renderHome(pane: HTMLElement) {
   const s = home.stats;
   const box = el(`<div class="dash"></div>`);
   pane.replaceChildren(box);
+  requestAnimationFrame(() => { box.scrollTop = state.dashScroll; });
+  box.onscroll = () => { state.dashScroll = box.scrollTop; };
   const warnings = [...home.degraded];
   const tiles = el(`
     <div>
@@ -740,39 +744,50 @@ function renderHome(pane: HTMLElement) {
     })
   );
 
+  // 区画ごとに差し替える(ページャで全体を再描画しない = スクロールが飛ばない)
   const recentBox = tiles.querySelector<HTMLElement>(".dash-recent")!;
-  const RECENT = 6;
-  const recentMax = Math.max(0, Math.ceil(home.notes.length / RECENT) - 1);
-  if (state.page.recent > recentMax) state.page.recent = recentMax;
   const recentPagerBox = tiles.querySelector<HTMLElement>("#recent-pager")!;
-  const rpg = pager(home.notes.length, RECENT, state.page.recent, (p) => {
-    state.page.recent = p;
-    render();
-  });
-  if (rpg) recentPagerBox.appendChild(rpg);
-  for (const h of home.notes.slice(state.page.recent * RECENT, (state.page.recent + 1) * RECENT)) {
-    const row = el(`
-      <button class="dash-note">
-        <span class="t">${esc(h.title ?? h.id)}</span>
-        <span class="d">${esc(h.snippet.slice(0, 60))}</span>
-        <span class="dates">作成 ${fmtDay(h.created)} · 更新 ${fmtDay(h.updated)}</span>
-      </button>
-    `);
-    row.addEventListener("click", () => void openNote(h.id));
-    recentBox.appendChild(row);
-  }
+  const RECENT = 6;
+  const fillRecent = () => {
+    const maxPage = Math.max(0, Math.ceil(home.notes.length / RECENT) - 1);
+    if (state.page.recent > maxPage) state.page.recent = maxPage;
+    recentBox.replaceChildren();
+    for (const h of home.notes.slice(state.page.recent * RECENT, (state.page.recent + 1) * RECENT)) {
+      const row = el(`
+        <button class="dash-note">
+          <span class="t">${esc(h.title ?? h.id)}</span>
+          <span class="d">${esc(h.snippet.slice(0, 60))}</span>
+          <span class="dates">作成 ${fmtDay(h.created)} · 更新 ${fmtDay(h.updated)}</span>
+        </button>
+      `);
+      row.addEventListener("click", () => void openNote(h.id));
+      recentBox.appendChild(row);
+    }
+    const shownRecent = home.notes.slice(state.page.recent * RECENT, (state.page.recent + 1) * RECENT).length;
+    if (home.notes.length > RECENT) {
+      for (let i = shownRecent; i < RECENT; i++) {
+        recentBox.appendChild(el(`<div class="dash-note ph" aria-hidden="true"><span class="t">&nbsp;</span><span class="d"></span><span class="dates"></span></div>`));
+      }
+    }
+    recentPagerBox.replaceChildren();
+    const pg = pager(home.notes.length, RECENT, state.page.recent, (p) => {
+      state.page.recent = p;
+      fillRecent();
+    });
+    if (pg) recentPagerBox.appendChild(pg);
+  };
+  fillRecent();
 
-  // タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)
-  void api.tagOverview().then((ov) => {
-    const tagsBox = tiles.querySelector<HTMLElement>("#dash-tags")!;
+  const tagsBox = tiles.querySelector<HTMLElement>("#dash-tags")!;
+  const TAGS = 12;
+  const fillTags = (ov: TagOverview) => {
+    tagsBox.replaceChildren();
     if (!ov.tags.length) {
-      tagsBox.replaceChildren(el(`<div class="lg-empty">まだタグがありません。</div>`));
+      tagsBox.appendChild(el(`<div class="lg-empty">まだタグがありません。</div>`));
       return;
     }
-    tagsBox.replaceChildren();
-    const TAGS = 12;
-    const tagMax = Math.max(0, Math.ceil(ov.tags.length / TAGS) - 1);
-    if (state.page.tags > tagMax) state.page.tags = tagMax;
+    const maxPage = Math.max(0, Math.ceil(ov.tags.length / TAGS) - 1);
+    if (state.page.tags > maxPage) state.page.tags = maxPage;
     for (const t of ov.tags.slice(state.page.tags * TAGS, (state.page.tags + 1) * TAGS)) {
       const row = el(`
         <button class="tag-row">
@@ -784,13 +799,21 @@ function renderHome(pane: HTMLElement) {
       row.addEventListener("click", () => {
         state.view = "notes";
         state.selectedTags = [t.tag];
+        state.page.list = 0;
         render();
       });
       tagsBox.appendChild(row);
     }
+    // 端数ページでも高さを保つ(レイアウトシフト防止)
+    const shownTags = ov.tags.slice(state.page.tags * TAGS, (state.page.tags + 1) * TAGS).length;
+    if (ov.tags.length > TAGS) {
+      for (let i = shownTags; i < TAGS; i++) {
+        tagsBox.appendChild(el(`<div class="tag-row ph" aria-hidden="true"><span class="tg">&nbsp;</span><span class="tc"></span><span class="td"></span></div>`));
+      }
+    }
     const tpg = pager(ov.tags.length, TAGS, state.page.tags, (p) => {
       state.page.tags = p;
-      render();
+      fillTags(ov);
     });
     if (tpg) tagsBox.appendChild(tpg);
     const foot = ov.glossary_note
@@ -798,6 +821,12 @@ function renderHome(pane: HTMLElement) {
       : el(`<div class="tag-foot-hint">タグの役割は Claude との会話で決めて「タグ運用」ノートに記録すると、ここに説明が並びます。</div>`);
     if (ov.glossary_note) foot.addEventListener("click", () => void openNote(ov.glossary_note!));
     tagsBox.appendChild(foot);
+  };
+  // 取得済みなら即描画(再描画のたびに空 → 再充填でガタつくのを防ぐ)
+  if (state.tagOv) fillTags(state.tagOv);
+  void api.tagOverview().then((ov) => {
+    state.tagOv = ov;
+    fillTags(ov);
   });
 
   void api.connectState().then((c) => {
