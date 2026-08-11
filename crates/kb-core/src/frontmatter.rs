@@ -78,7 +78,13 @@ impl Frontmatter {
             .get("legacy")
             .and_then(|v| v.get("created"))
             .and_then(|v| v.as_str())
-            .map(|d| if d.len() == 10 { format!("{d}T00:00:00Z") } else { d.to_string() })
+            .map(|d| {
+                if d.len() == 10 {
+                    format!("{d}T00:00:00Z")
+                } else {
+                    d.to_string()
+                }
+            })
     }
 
     /// 最終更新(generated.at)。
@@ -93,8 +99,11 @@ impl Frontmatter {
 
     /// verified に検証イベントを追記。bare mapping は1要素リストへ正規化(OKF §5.2)。
     pub fn append_verified(&mut self, by: &str, at: &str) {
-        let event = serde_yaml::to_value(Generated { by: by.into(), at: at.into() })
-            .expect("verified event serializes");
+        let event = serde_yaml::to_value(Generated {
+            by: by.into(),
+            at: at.into(),
+        })
+        .expect("verified event serializes");
         let list = match self.verified.take() {
             None => vec![event],
             Some(serde_yaml::Value::Sequence(mut seq)) => {
@@ -140,7 +149,10 @@ impl Note {
         if front.kind.trim().is_empty() {
             bail!("type が空(OKF 必須キー)");
         }
-        Ok(Note { front, body: body.to_string() })
+        Ok(Note {
+            front,
+            body: body.to_string(),
+        })
     }
 }
 
@@ -179,9 +191,11 @@ mod tests {
 
     #[test]
     fn verified_bare_mapping_becomes_list() {
-        let src = "---\ntype: Note\nverified: { by: 'human:o', at: '2026-01-01T00:00:00Z' }\n---\n\nx\n";
+        let src =
+            "---\ntype: Note\nverified: { by: 'human:o', at: '2026-01-01T00:00:00Z' }\n---\n\nx\n";
         let mut note = Note::parse(src).unwrap();
-        note.front.append_verified("human:o", "2026-02-01T00:00:00Z");
+        note.front
+            .append_verified("human:o", "2026-02-01T00:00:00Z");
         match note.front.verified {
             Some(serde_yaml::Value::Sequence(ref s)) => assert_eq!(s.len(), 2),
             ref other => panic!("expected sequence, got {other:?}"),

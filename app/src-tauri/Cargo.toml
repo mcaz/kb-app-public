@@ -13,7 +13,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
-kb-core = { path = "../../crates/kb-core" }
+kb-core = { path = "../../crates/kb-core", features = ["specta"] }
+# TS 型と invoke ラッパの生成(app/src/lib/bindings.ts)。手書きの型合わせを廃止する
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

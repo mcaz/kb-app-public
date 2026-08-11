@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// (2026-08-11: 「お気に入り = 画面の絞り込み状態そのもの」に拡張)。
 /// 旧形式(name/tags のみ)も読めるよう追加項目はすべて default。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Favorite {
     pub name: String,
     pub tags: Vec<String>,

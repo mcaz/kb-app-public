@@ -52,7 +52,10 @@ pub fn install_model() -> Result<()> {
     }
     let dir = model_dir();
     fs::create_dir_all(&dir)?;
-    for (url, name) in [(TOKENIZER_URL, "tokenizer.json"), (MODEL_URL, "model_int8.onnx")] {
+    for (url, name) in [
+        (TOKENIZER_URL, "tokenizer.json"),
+        (MODEL_URL, "model_int8.onnx"),
+    ] {
         let dest = dir.join(name);
         if dest.exists() {
             continue;
@@ -103,29 +106,54 @@ impl Embedder {
             .commit_from_file(dir.join("model_int8.onnx")),
             "model load"
         )?;
-        let input_names: Vec<String> = session.inputs().iter().map(|i| i.name().to_string()).collect();
-        let output_names: Vec<String> = session.outputs().iter().map(|o| o.name().to_string()).collect();
+        let input_names: Vec<String> = session
+            .inputs()
+            .iter()
+            .map(|i| i.name().to_string())
+            .collect();
+        let output_names: Vec<String> = session
+            .outputs()
+            .iter()
+            .map(|o| o.name().to_string())
+            .collect();
         let needs_token_type_ids = input_names.iter().any(|n| n == "token_type_ids");
         let hidden_output_name = output_names
             .iter()
             .find(|n| n.contains("last_hidden_state"))
             .cloned()
             .unwrap_or_else(|| output_names[0].clone());
-        Ok(Self { session, tokenizer, needs_token_type_ids, hidden_output_name })
+        Ok(Self {
+            session,
+            tokenizer,
+            needs_token_type_ids,
+            hidden_output_name,
+        })
     }
 
     /// 単文埋め込み。L2 正規化済み 1024 次元(dense = 最終層 [CLS])。
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
         let text: String = text.chars().take(MAX_EMBED_CHARS).collect();
-        let enc = self.tokenizer.encode(text.as_str(), true).map_err(|e| anyhow!("encode: {e}"))?;
+        let enc = self
+            .tokenizer
+            .encode(text.as_str(), true)
+            .map_err(|e| anyhow!("encode: {e}"))?;
         let ids: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         let mask: Vec<i64> = enc.get_attention_mask().iter().map(|&i| i as i64).collect();
         let len = ids.len();
         let zeros: Vec<i64> = vec![0; len];
-        let t_ids = ort_err!(TensorRef::from_array_view(([1usize, len], &*ids)), "ids tensor")?;
-        let t_mask = ort_err!(TensorRef::from_array_view(([1usize, len], &*mask)), "mask tensor")?;
+        let t_ids = ort_err!(
+            TensorRef::from_array_view(([1usize, len], &*ids)),
+            "ids tensor"
+        )?;
+        let t_mask = ort_err!(
+            TensorRef::from_array_view(([1usize, len], &*mask)),
+            "mask tensor"
+        )?;
         let outputs = if self.needs_token_type_ids {
-            let t_tt = ort_err!(TensorRef::from_array_view(([1usize, len], &*zeros)), "tt tensor")?;
+            let t_tt = ort_err!(
+                TensorRef::from_array_view(([1usize, len], &*zeros)),
+                "tt tensor"
+            )?;
             ort_err!(
                 self.session.run(ort::inputs![
                     "input_ids" => t_ids,
@@ -184,10 +212,13 @@ fn state() -> &'static Mutex<Option<Loaded>> {
 
 fn spawn_janitor() {
     JANITOR.get_or_init(|| {
-        std::thread::spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_secs(60));
-            if let Ok(mut g) = state().lock() {
-                if g.as_ref().is_some_and(|l| l.last_used.elapsed().as_secs() > IDLE_UNLOAD_SECS) {
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                if let Ok(mut g) = state().lock()
+                    && g.as_ref()
+                        .is_some_and(|l| l.last_used.elapsed().as_secs() > IDLE_UNLOAD_SECS)
+                {
                     *g = None; // モデル解放(次回使用時に再ロード)
                 }
             }
@@ -201,7 +232,10 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>> {
     }
     let mut g = state().lock().map_err(|_| anyhow!("embedder lock"))?;
     if g.is_none() {
-        *g = Some(Loaded { emb: Embedder::load()?, last_used: std::time::Instant::now() });
+        *g = Some(Loaded {
+            emb: Embedder::load()?,
+            last_used: std::time::Instant::now(),
+        });
         spawn_janitor();
     }
     let l = g.as_mut().expect("loaded above");
@@ -216,7 +250,9 @@ pub fn to_blob(v: &[f32]) -> Vec<u8> {
 }
 
 pub fn from_blob(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 /// 未埋め込み・旧スタンプのノートを埋め込む(最大 `cap` 件)。残件数を返す。

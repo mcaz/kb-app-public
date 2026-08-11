@@ -1,0 +1,35 @@
+{
+  "ai": {
+    "name": "AI アプリ(Claude)",
+    "desc": "会話の中からあなたの知識ベースが引かれ、会話で得た知見が下書きとして届くようになります。",
+    "connected": "接続済み",
+    "notFound": "Claude Desktop が見つかりません",
+    "notConnected": "未接続",
+    "connect": "接続する",
+    "done": "接続しました。Claude Desktop を再起動すると使えます",
+    "failed": "接続できませんでした: {{error}}"
+  },
+  "smartSearch": {
+    "name": "かしこい検索",
+    "desc": "言い回しが違っても意味で見つかる検索。オンにするだけで、外部送信はありません(初回のみ検索用データ 約560MB を取得)。",
+    "enabled": "有効({{embedded}}/{{total}} 件)",
+    "downloading": "ダウンロード中…",
+    "off": "オフ",
+    "enable": "オンにする",
+    "preparing": "かしこい検索を準備中…(数分かかります)",
+    "done": "かしこい検索が有効になりました"
+  },
+  "backup": {
+    "name": "バックアップ",
+    "desc": "ノートは変わるたびに自動で控えられ、他の端末で書いた分も取り込まれます。非公開のまま、対象はノートだけです。",
+    "connected": "接続済み",
+    "unset": "未設定",
+    "pending": "まだ送れていない変更が {{count}} 件あります。",
+    "error": "{{error}}",
+    "urlPlaceholder": "GitHub リポジトリの URL(git@github.com:…)",
+    "syncNow": "今すぐ同期",
+    "connect": "接続する",
+    "needUrl": "リポジトリの URL を入れてください",
+    "done": "バックアップ先を設定し、初回の控えを送りました"
+  }
+}

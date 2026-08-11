@@ -71,7 +71,12 @@ pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle(vault: &Vault, client: &str, method: &str, params: Option<&Value>) -> Result<Option<Value>> {
+fn handle(
+    vault: &Vault,
+    client: &str,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<Option<Value>> {
     match method {
         "initialize" => {
             let requested = params
@@ -91,9 +96,12 @@ fn handle(vault: &Vault, client: &str, method: &str, params: Option<&Value>) -> 
         // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
         "prompts/list" => Ok(Some(json!({"prompts": prompt_definitions()}))),
         "prompts/get" => {
-            let name = params.and_then(|p| p.get("name")).and_then(|v| v.as_str()).unwrap_or("");
-            let text = prompt_text(name)
-                .ok_or_else(|| anyhow::anyhow!("unknown prompt: {name}"))?;
+            let name = params
+                .and_then(|p| p.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let text =
+                prompt_text(name).ok_or_else(|| anyhow::anyhow!("unknown prompt: {name}"))?;
             Ok(Some(json!({
                 "messages": [{"role": "user", "content": {"type": "text", "text": text}}]
             })))
@@ -265,7 +273,11 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             } else {
                 format!(
                     "(添付: {} — 本文からは /{id}.files/<名前> で参照)\n",
-                    attachments.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                    attachments
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             };
             // 関連を決めるのは AI(2026-08-11 方針)。判断材料として近いノートを添える
@@ -277,12 +289,18 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     "(近いノート — まだリンクされていない: {})\n",
                     similar
                         .iter()
-                        .map(|(sid, t, d)| format!("{sid}[{}] {d:.2}", t.as_deref().unwrap_or("無題")))
+                        .map(|(sid, t, d)| format!(
+                            "{sid}[{}] {d:.2}",
+                            t.as_deref().unwrap_or("無題")
+                        ))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
             };
-            Ok(format!("(note: {id})\n{attach_line}{sim_line}{}", note.to_file_string()?))
+            Ok(format!(
+                "(note: {id})\n{attach_line}{sim_line}{}",
+                note.to_file_string()?
+            ))
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
@@ -313,7 +331,11 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             let tags: Vec<String> = args
                 .get("tags")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let id = vault.propose(title, body, description, &tags, client)?;
             // 語彙合わせは文章への期待でなく機構で: 新出タグを検出して既存語彙を機械的に提示
@@ -328,18 +350,30 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             } else {
                 format!(
                     "\n注意: 新しいタグ {} を導入した。既存語彙: {}。統合できるなら update で揃えること。",
-                    new_tags.iter().map(|t| format!("「{t}」")).collect::<Vec<_>>().join("、"),
-                    vocab.iter().take(20).cloned().collect::<Vec<_>>().join(" / ")
+                    new_tags
+                        .iter()
+                        .map(|t| format!("「{t}」"))
+                        .collect::<Vec<_>>()
+                        .join("、"),
+                    vocab
+                        .iter()
+                        .take(20)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(" / ")
                 )
             };
-            Ok(format!(
-                "起票した: {id}。{vocab_note}"
-            ))
+            Ok(format!("起票した: {id}。{vocab_note}"))
         }
         "update" => {
-            let id = args.get("note").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let id = args
+                .get("note")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
             let tags: Option<Vec<String>> = args.get("tags").and_then(|v| v.as_array()).map(|a| {
-                a.iter().filter_map(|t| t.as_str().map(String::from)).collect()
+                a.iter()
+                    .filter_map(|t| t.as_str().map(String::from))
+                    .collect()
             });
             vault.agent_update_note(
                 id,
@@ -352,7 +386,10 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             Ok(format!("更新した: {id}"))
         }
         "remove" => {
-            let id = args.get("note").and_then(|v| v.as_str()).ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let id = args
+                .get("note")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
             vault.agent_delete_note(id, client)?;
             Ok(format!("削除した: {id}(履歴には残る)"))
         }

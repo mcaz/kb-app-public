@@ -5,14 +5,18 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use kb_core::OWNER_ACTOR;
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
 use kb_core::search::recent;
 use kb_core::vault::Vault;
-use kb_core::OWNER_ACTOR;
 
 #[derive(Parser)]
-#[command(name = "kb", version, about = "kb-app core CLI(そのままでも使えるナレッジベース)")]
+#[command(
+    name = "kb",
+    version,
+    about = "kb-app core CLI(そのままでも使えるナレッジベース)"
+)]
 struct Cli {
     /// 対象 vault(レジストリ名)。省略時は KB_VAULT か既定 vault
     #[arg(long, global = true)]
@@ -133,7 +137,9 @@ fn body_or_stdin(body: Option<String>) -> Result<String> {
         Some(b) => Ok(b),
         None => {
             let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf).context("stdin 読み取り")?;
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("stdin 読み取り")?;
             Ok(buf)
         }
     }
@@ -146,7 +152,10 @@ fn main() -> Result<()> {
             VaultCommand::Create { name, path } => {
                 let path = match path {
                     Some(p) => p,
-                    None => dirs::home_dir().context("home が特定できない")?.join("kb").join(&name),
+                    None => dirs::home_dir()
+                        .context("home が特定できない")?
+                        .join("kb")
+                        .join(&name),
                 };
                 let vault = Vault::create(&path)?;
                 let mut reg = Registry::load()?;
@@ -157,7 +166,11 @@ fn main() -> Result<()> {
             VaultCommand::List => {
                 let reg = Registry::load()?;
                 for v in &reg.vaults {
-                    let mark = if reg.default.as_deref() == Some(v.name.as_str()) { "*" } else { " " };
+                    let mark = if reg.default.as_deref() == Some(v.name.as_str()) {
+                        "*"
+                    } else {
+                        " "
+                    };
                     println!("{mark} {}\t{}", v.name, v.path.display());
                 }
             }
@@ -189,7 +202,13 @@ fn main() -> Result<()> {
                 println!("{}\t{}\t{}", h.id, h.status, h.title.unwrap_or_default());
             }
         }
-        Command::Propose { title, body, description, tags, client } => {
+        Command::Propose {
+            title,
+            body,
+            description,
+            tags,
+            client,
+        } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let body = body_or_stdin(body)?;
             let id = vault.propose(&title, &body, description.as_deref(), &tags, &client)?;
@@ -209,8 +228,16 @@ fn main() -> Result<()> {
                         Some((d, p)) => (d, p.to_string()),
                         None => (s.as_str(), String::new()),
                     };
-                    let label = if prefix.is_empty() { dir.to_string() } else { prefix.clone() };
-                    kb_core::import::Source { root: PathBuf::from(dir), label, prefix }
+                    let label = if prefix.is_empty() {
+                        dir.to_string()
+                    } else {
+                        prefix.clone()
+                    };
+                    kb_core::import::Source {
+                        root: PathBuf::from(dir),
+                        label,
+                        prefix,
+                    }
                 })
                 .collect();
             let report = kb_core::import::import(&vault, &parsed)?;
@@ -219,7 +246,11 @@ fn main() -> Result<()> {
                 println!("スキップ: {s}");
             }
             if !report.unresolved_links.is_empty() {
-                println!("未解決リンク({}件・原文のまま): {}", report.unresolved_links.len(), report.unresolved_links.join(", "));
+                println!(
+                    "未解決リンク({}件・原文のまま): {}",
+                    report.unresolved_links.len(),
+                    report.unresolved_links.join(", ")
+                );
             }
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
@@ -278,7 +309,11 @@ fn main() -> Result<()> {
                     let s = kb_core::search::stats(&conn)?;
                     println!(
                         "モデル: {} / 埋め込み済み: {}/{}",
-                        if s.embed_enabled { "導入済み" } else { "未導入" },
+                        if s.embed_enabled {
+                            "導入済み"
+                        } else {
+                            "未導入"
+                        },
                         s.embedded,
                         s.total
                     );

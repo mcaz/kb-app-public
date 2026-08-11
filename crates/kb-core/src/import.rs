@@ -44,12 +44,21 @@ fn scan(root: &Path) -> Vec<(String, PathBuf)> {
         let path = entry.path();
         if !entry.file_type().is_file()
             || path.extension().and_then(|e| e.to_str()) != Some("md")
-            || SKIP_NAMES.contains(&path.file_name().unwrap_or_default().to_string_lossy().as_ref())
+            || SKIP_NAMES.contains(
+                &path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .as_ref(),
+            )
         {
             continue;
         }
         if let Ok(rel) = path.strip_prefix(root) {
-            out.push((rel.with_extension("").to_string_lossy().to_string(), path.to_path_buf()));
+            out.push((
+                rel.with_extension("").to_string_lossy().to_string(),
+                path.to_path_buf(),
+            ));
         }
     }
     out.sort();
@@ -66,7 +75,11 @@ pub fn import(vault: &Vault, sources: &[Source]) -> Result<ImportReport> {
     let mut files: Vec<(usize, String, PathBuf)> = Vec::new();
     for (si, src) in sources.iter().enumerate() {
         for (rel, path) in scan(&src.root) {
-            let dest = if src.prefix.is_empty() { rel.clone() } else { format!("{}/{rel}", src.prefix) };
+            let dest = if src.prefix.is_empty() {
+                rel.clone()
+            } else {
+                format!("{}/{rel}", src.prefix)
+            };
             let id = Path::new(&rel)
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
@@ -106,14 +119,21 @@ pub fn import(vault: &Vault, sources: &[Source]) -> Result<ImportReport> {
         paths.push("index.md".into());
         paths.push("log.md".into());
         let refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
-        vault.commit(&refs, &format!("import: {} 本({})", written.len(), labels.join(" / ")))?;
+        vault.commit(
+            &refs,
+            &format!("import: {} 本({})", written.len(), labels.join(" / ")),
+        )?;
         crate::connect::auto_push(vault);
     }
     Ok(report)
 }
 
 /// 旧ノート1本を OKF v0.2 互換へ変換。
-fn convert(content: &str, link_map: &HashMap<String, String>, unresolved: &mut Vec<String>) -> Result<Note> {
+fn convert(
+    content: &str,
+    link_map: &HashMap<String, String>,
+    unresolved: &mut Vec<String>,
+) -> Result<Note> {
     let rest = content
         .strip_prefix("---\n")
         .context("frontmatter がない")?;
@@ -134,7 +154,11 @@ fn convert(content: &str, link_map: &HashMap<String, String>, unresolved: &mut V
         tags: old
             .get("tags")
             .and_then(|v| v.as_sequence())
-            .map(|s| s.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+            .map(|s| {
+                s.iter()
+                    .filter_map(|t| t.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
         status: match old_status.as_str() {
             "draft" => Some("draft".into()),
@@ -145,30 +169,49 @@ fn convert(content: &str, link_map: &HashMap<String, String>, unresolved: &mut V
             by: match &source {
                 Some(s) if s.starts_with("manual:") => "human:owner".into(),
                 Some(s) if s.starts_with("routine:") => {
-                    format!("process:{}", s.trim_start_matches("routine:").split_whitespace().next().unwrap_or("routine"))
+                    format!(
+                        "process:{}",
+                        s.trim_start_matches("routine:")
+                            .split_whitespace()
+                            .next()
+                            .unwrap_or("routine")
+                    )
                 }
                 _ => "claude-code/legacy-kb".into(),
             },
             at: format!(
                 "{}T00:00:00Z",
-                get("updated").or_else(|| get("created")).unwrap_or_else(crate::frontmatter::today)
+                get("updated")
+                    .or_else(|| get("created"))
+                    .unwrap_or_else(crate::frontmatter::today)
             ),
         }),
         verified: get("verified").map(|d| {
-            serde_yaml::to_value(vec![Generated { by: "human:owner".into(), at: format!("{d}T00:00:00Z") }])
-                .expect("verified serializes")
+            serde_yaml::to_value(vec![Generated {
+                by: "human:owner".into(),
+                at: format!("{d}T00:00:00Z"),
+            }])
+            .expect("verified serializes")
         }),
         sources: source.as_ref().map(|s| {
             serde_yaml::to_value(vec![BTreeMap::from([("resource".to_string(), s.clone())])])
                 .expect("sources serializes")
         }),
         stale_after: None,
-        created: get("created").map(|d| if d.len() == 10 { format!("{d}T00:00:00Z") } else { d }),
-        origin: Some(if source.as_deref().is_some_and(|s| s.starts_with("manual:")) {
-            "human".into()
-        } else {
-            "agent".into()
+        created: get("created").map(|d| {
+            if d.len() == 10 {
+                format!("{d}T00:00:00Z")
+            } else {
+                d
+            }
         }),
+        origin: Some(
+            if source.as_deref().is_some_and(|s| s.starts_with("manual:")) {
+                "human".into()
+            } else {
+                "agent".into()
+            },
+        ),
         extra: BTreeMap::new(),
     };
     // 旧メタを無損失で保持(id/scope/vault/status/share/index など)
@@ -176,18 +219,29 @@ fn convert(content: &str, link_map: &HashMap<String, String>, unresolved: &mut V
         .into_iter()
         .filter(|(k, _)| !matches!(k.as_str(), "title" | "tags" | "type"))
         .collect();
-    front.extra.insert("legacy".into(), serde_yaml::to_value(legacy)?);
+    front
+        .extra
+        .insert("legacy".into(), serde_yaml::to_value(legacy)?);
 
-    Ok(Note { front, body: rewrite_wikilinks(body, link_map, unresolved) })
+    Ok(Note {
+        front,
+        body: rewrite_wikilinks(body, link_map, unresolved),
+    })
 }
 
 /// `[[id]]` / `[[id|表示]]` / `[[id#節]]` → `[表示](/新パス.md)`。
 /// 解決できないものは原文のまま残す(未執筆の知識 — OKF §6.1 の精神)。
-fn rewrite_wikilinks(body: &str, map: &HashMap<String, String>, unresolved: &mut Vec<String>) -> String {
+fn rewrite_wikilinks(
+    body: &str,
+    map: &HashMap<String, String>,
+    unresolved: &mut Vec<String>,
+) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
     while let Some(start) = rest.find("[[") {
-        let Some(end_rel) = rest[start..].find("]]") else { break };
+        let Some(end_rel) = rest[start..].find("]]") else {
+            break;
+        };
         let inner = &rest[start + 2..start + end_rel];
         out.push_str(&rest[..start]);
         let (target, alias) = match inner.split_once('|') {
@@ -228,7 +282,10 @@ mod tests {
         let note = convert(src, &map, &mut unresolved).unwrap();
         assert_eq!(note.front.effective_status(), "stable");
         assert_eq!(note.front.origin.as_deref(), Some("agent"));
-        assert_eq!(note.front.generated.as_ref().unwrap().at, "2026-07-15T00:00:00Z");
+        assert_eq!(
+            note.front.generated.as_ref().unwrap().at,
+            "2026-07-15T00:00:00Z"
+        );
         assert!(note.front.extra.contains_key("legacy"));
         assert!(note.body.contains("[bar](/dev/bar.md)"));
         assert!(note.body.contains("[別名](/team/work/baz.md)"));
@@ -268,15 +325,27 @@ mod tests {
         let report = import(
             &vault,
             &[
-                Source { root: p, prefix: String::new(), label: "personal".into() },
-                Source { root: t, prefix: "team".into(), label: "team".into() },
+                Source {
+                    root: p,
+                    prefix: String::new(),
+                    label: "personal".into(),
+                },
+                Source {
+                    root: t,
+                    prefix: "team".into(),
+                    label: "team".into(),
+                },
             ],
         )
         .unwrap();
         assert_eq!(report.imported.len(), 2);
         assert!(report.unresolved_links.is_empty());
         let a = vault.read_note("dev/note-a").unwrap();
-        assert!(a.body.contains("[shared-b](/team/work/shared-b.md)"), "{}", a.body);
+        assert!(
+            a.body.contains("[shared-b](/team/work/shared-b.md)"),
+            "{}",
+            a.body
+        );
         let b = vault.read_note("team/work/shared-b").unwrap();
         assert_eq!(b.front.effective_status(), "deprecated");
     }

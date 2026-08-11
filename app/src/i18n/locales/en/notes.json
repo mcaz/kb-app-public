@@ -1,0 +1,71 @@
+{
+  "search": {
+    "placeholder": "Search notes"
+  },
+  "filter": {
+    "title": "Filters",
+    "tagPlaceholder": "Filter by tag",
+    "clearTags": "Clear all",
+    "clearTagsTitle": "Clear all tags",
+    "period": "Updated",
+    "periodAll": "Any time",
+    "periodDays": "Within {{count}} days",
+    "sort": "Sort",
+    "sortUpdated": "Recently updated",
+    "sortCreated": "Recently created",
+    "sortTitle": "By title"
+  },
+  "favorite": {
+    "save": "Save as favorite",
+    "title": "Favorites",
+    "empty": "Nothing saved yet. Save one from the filters in the note list.",
+    "noCondition": "(no conditions)",
+    "queryPart": "Search “{{query}}”",
+    "defaultName": "Favorite {{n}}",
+    "askSave": "Save as favorite",
+    "askRename": "Rename favorite",
+    "needName": "Please enter a name",
+    "needCondition": "Pick a tag or enter a search term first",
+    "saved": "Saved as favorite",
+    "updated": "Updated “{{name}}”"
+  },
+  "selection": {
+    "head": "Open",
+    "primary": "Main",
+    "secondary": "Side",
+    "makePrimary": "Make main"
+  },
+  "list": {
+    "notFound": "No matches",
+    "empty": "No notes match these filters",
+    "placeholder": "Pick a note on the left to read it here. Notes grow out of your conversations with Claude."
+  },
+  "related": {
+    "openGraph": "View in graph",
+    "linked": "Linked notes",
+    "linkedEmpty": "None yet",
+    "similar": "Similar notes",
+    "similarEmpty": "None found"
+  },
+  "note": {
+    "deprecated": "Archived",
+    "datesTitle": "Created / last updated",
+    "talk": "Talk to Claude about this note",
+    "opened": "Opened Claude",
+    "missing": "That note doesn’t exist yet",
+    "careConfirm": "Got it",
+    "careDismissed": "OK, leaving it as is"
+  },
+  "attachment": {
+    "label": "Attachments:",
+    "add": "Attach a file",
+    "added": "Attached",
+    "addedNamed": "Attached ({{name}})",
+    "addedCount": "Attached ({{count}})",
+    "removed": "Attachment removed (it stays in history)",
+    "tooLarge": "Files larger than 50MB can’t be attached",
+    "needNote": "Open a note before dropping files",
+    "failed": "Attachment failed: {{error}}",
+    "pasteFailed": "Paste failed: {{error}}"
+  }
+}

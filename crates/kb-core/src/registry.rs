@@ -50,7 +50,10 @@ impl Registry {
         if self.vaults.iter().any(|v| v.name == name) {
             bail!("vault 名 {name} は登録済み");
         }
-        self.vaults.push(VaultEntry { name: name.into(), path });
+        self.vaults.push(VaultEntry {
+            name: name.into(),
+            path,
+        });
         if self.default.is_none() {
             self.default = Some(name.into());
         }

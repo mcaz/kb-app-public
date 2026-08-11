@@ -99,8 +99,14 @@ impl Vault {
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("human".into());
         front.created = Some(now_iso());
-        front.generated = Some(Generated { by: actor.into(), at: now_iso() });
-        let note = Note { front, body: body.to_string() };
+        front.generated = Some(Generated {
+            by: actor.into(),
+            at: now_iso(),
+        });
+        let note = Note {
+            front,
+            body: body.to_string(),
+        };
         let id = self.write_new_note(title, &note)?;
         self.append_log(&format!("**Creation**: [{title}](/{id}.md) を作成。"))?;
         self.write_index_md()?;
@@ -111,9 +117,14 @@ impl Vault {
     /// アプリ契約1(docs/contract.md): タグは1〜4個。
     fn validate_tags(tags: &[String]) -> Result<()> {
         if tags.is_empty() || tags.len() > 4 {
-            bail!("契約: ノートにはタグを1〜4個付ける(いまは {} 個)。既存の語彙に揃えること", tags.len());
+            bail!(
+                "契約: ノートにはタグを1〜4個付ける(いまは {} 個)。既存の語彙に揃えること",
+                tags.len()
+            );
         }
-        if let Some(bad) = tags.iter().find(|t| t.trim().is_empty() || t.chars().count() > 20 || t.contains(char::is_whitespace)) {
+        if let Some(bad) = tags.iter().find(|t| {
+            t.trim().is_empty() || t.chars().count() > 20 || t.contains(char::is_whitespace)
+        }) {
             bail!("契約: タグは空白を含まない20文字以内の語(不正: 「{bad}」)");
         }
         Ok(())
@@ -136,12 +147,18 @@ impl Vault {
         front.created = Some(now_iso());
         front.description = description.map(|s| s.to_string());
         front.tags = tags.to_vec();
-        front.generated = Some(Generated { by: client.into(), at: now_iso() });
+        front.generated = Some(Generated {
+            by: client.into(),
+            at: now_iso(),
+        });
         front.sources = Some(serde_yaml::from_str(&format!(
             "[{{ resource: \"conversation:{client}/{}\" }}]",
             today()
         ))?);
-        let note = Note { front, body: body.to_string() };
+        let note = Note {
+            front,
+            body: body.to_string(),
+        };
         let id = self.write_new_note(title, &note)?;
         self.append_log(&format!(
             "**Proposal**: [{title}](/{id}.md) を起票(via {client})。"
@@ -171,7 +188,10 @@ impl Vault {
             "AI のノートは AI が管理する(編集したいときは Claude に依頼するか「自分のメモにする」で引き取る)",
         )?;
         note.front.title = Some(title.to_string());
-        note.front.generated = Some(Generated { by: actor.into(), at: now_iso() });
+        note.front.generated = Some(Generated {
+            by: actor.into(),
+            at: now_iso(),
+        });
         note.body = body.to_string();
         self.write_note(id, &note)?;
         self.write_index_md()?;
@@ -181,13 +201,21 @@ impl Vault {
 
     /// ノートの削除(GUI/CLI = 人間側)。AI のノートは削除不可(AI 自身が remove する)。
     pub fn delete_note(&self, id: &str) -> Result<()> {
-        self.require_origin(id, "human", "AI のノートは AI が管理する(削除したいときは Claude に依頼)")?;
+        self.require_origin(
+            id,
+            "human",
+            "AI のノートは AI が管理する(削除したいときは Claude に依頼)",
+        )?;
         self.delete_note_inner(id, &format!("note: delete {id}"))
     }
 
     /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
     pub fn agent_delete_note(&self, id: &str, client: &str) -> Result<()> {
-        self.require_origin(id, "agent", "ユーザーのメモは削除できない(読むだけ — 原則9)")?;
+        self.require_origin(
+            id,
+            "agent",
+            "ユーザーのメモは削除できない(読むだけ — 原則9)",
+        )?;
         self.delete_note_inner(id, &format!("note: delete {id} (via {client})"))
     }
 
@@ -201,7 +229,11 @@ impl Vault {
         tags: Option<&[String]>,
         client: &str,
     ) -> Result<()> {
-        let mut note = self.require_origin(id, "agent", "ユーザーのメモは編集できない(読むだけ — 原則9)")?;
+        let mut note = self.require_origin(
+            id,
+            "agent",
+            "ユーザーのメモは編集できない(読むだけ — 原則9)",
+        )?;
         if let Some(t) = title {
             note.front.title = Some(t.to_string());
         }
@@ -215,10 +247,15 @@ impl Vault {
         if let Some(b) = body {
             note.body = b.to_string();
         }
-        note.front.generated = Some(Generated { by: client.into(), at: now_iso() });
+        note.front.generated = Some(Generated {
+            by: client.into(),
+            at: now_iso(),
+        });
         self.write_note(id, &note)?;
         let t = note.front.title.as_deref().unwrap_or(id);
-        self.append_log(&format!("**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"))?;
+        self.append_log(&format!(
+            "**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"
+        ))?;
         self.write_index_md()?;
         self.commit_note_op(id, &format!("note: update {id} (via {client})"))?;
         Ok(())
@@ -231,7 +268,9 @@ impl Vault {
         note.front.origin = Some("human".into());
         self.write_note(id, &note)?;
         let t = note.front.title.clone().unwrap_or_else(|| id.to_string());
-        self.append_log(&format!("**Ownership**: [{t}](/{id}.md) を自分のメモにした。"))?;
+        self.append_log(&format!(
+            "**Ownership**: [{t}](/{id}.md) を自分のメモにした。"
+        ))?;
         self.commit_note_op(id, &format!("note: make-mine {id}"))?;
         Ok(())
     }
@@ -275,16 +314,28 @@ impl Vault {
     }
 
     /// 添付を追加。戻り値 = (保存名, サイズ警告)。
-    pub fn add_attachment(&self, id: &str, name: &str, data: &[u8]) -> Result<(String, Option<String>)> {
+    pub fn add_attachment(
+        &self,
+        id: &str,
+        name: &str,
+        data: &[u8],
+    ) -> Result<(String, Option<String>)> {
         if !self.note_path(id).exists() {
             bail!("ノートが無い: {id}");
         }
         let size = data.len() as u64;
         if size > ATTACH_MAX_BYTES {
-            bail!("50MB を超えるファイルは添付できない({} MB)", size / 1024 / 1024);
+            bail!(
+                "50MB を超えるファイルは添付できない({} MB)",
+                size / 1024 / 1024
+            );
         }
-        let warning = (size > ATTACH_WARN_BYTES)
-            .then(|| format!("大きな添付({} MB)— 同期に時間がかかることがある", size / 1024 / 1024));
+        let warning = (size > ATTACH_WARN_BYTES).then(|| {
+            format!(
+                "大きな添付({} MB)— 同期に時間がかかることがある",
+                size / 1024 / 1024
+            )
+        });
         // パス潜り対策: ファイル名成分のみ使用
         let base = Path::new(name)
             .file_name()
@@ -299,15 +350,29 @@ impl Vault {
             n += 1;
             let p = Path::new(&base);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-            let ext = p.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!(".{e}"))
+                .unwrap_or_default();
             saved = format!("{stem}-{n}{ext}");
         }
         fs::write(dir.join(&saved), data)?;
         self.touch_note(id); // 添付変更を索引の mtime 検知に乗せる
-        let title = self.read_note(id).ok().and_then(|n| n.front.title).unwrap_or_else(|| id.into());
-        self.append_log(&format!("**Attachment**: [{title}](/{id}.md) に {saved} を添付。"))?;
+        let title = self
+            .read_note(id)
+            .ok()
+            .and_then(|n| n.front.title)
+            .unwrap_or_else(|| id.into());
+        self.append_log(&format!(
+            "**Attachment**: [{title}](/{id}.md) に {saved} を添付。"
+        ))?;
         self.commit(
-            &[&format!("{id}.files/{saved}"), &format!("{id}.md"), "log.md"],
+            &[
+                &format!("{id}.files/{saved}"),
+                &format!("{id}.md"),
+                "log.md",
+            ],
             &format!("note: attach {id} {saved}"),
         )?;
         crate::connect::auto_push(self);
@@ -331,7 +396,10 @@ impl Vault {
 
     /// 添付の削除(git 履歴には残る)。
     pub fn remove_attachment(&self, id: &str, name: &str) -> Result<()> {
-        let base = Path::new(name).file_name().and_then(|f| f.to_str()).unwrap_or_default();
+        let base = Path::new(name)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default();
         let path = self.attach_dir(id).join(base);
         if !path.exists() {
             bail!("添付が無い: {base}");
@@ -345,7 +413,10 @@ impl Vault {
             index.write()?;
         }
         self.append_log(&format!("**Attachment**: /{id}.md の添付 {base} を削除。"))?;
-        self.commit(&[&format!("{id}.md"), "log.md"], &format!("note: detach {id} {base}"))?;
+        self.commit(
+            &[&format!("{id}.md"), "log.md"],
+            &format!("note: detach {id} {base}"),
+        )?;
         crate::connect::auto_push(self);
         Ok(())
     }
@@ -370,7 +441,9 @@ impl Vault {
             .flatten()
         {
             let path = entry.path();
-            if !entry.file_type().is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
+            if !entry.file_type().is_file()
+                || path.extension().and_then(|e| e.to_str()) != Some("md")
+            {
                 continue;
             }
             let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -397,8 +470,12 @@ impl Vault {
             String::new(),
         ];
         for (id, path) in self.list_note_files() {
-            let Ok(content) = fs::read_to_string(&path) else { continue };
-            let Ok(note) = Note::parse(&content) else { continue };
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(note) = Note::parse(&content) else {
+                continue;
+            };
             let title = note.front.title.as_deref().unwrap_or(&id);
             let desc = note.front.description.as_deref().unwrap_or("");
             let sep = if desc.is_empty() { "" } else { " - " };
@@ -418,7 +495,11 @@ impl Vault {
             format!("# Update Log\n\n{today_heading}\n* {entry}\n")
         } else if let Some(pos) = existing.find(&today_heading) {
             let insert_at = pos + today_heading.len();
-            format!("{}\n* {entry}{}", &existing[..insert_at], &existing[insert_at..])
+            format!(
+                "{}\n* {entry}{}",
+                &existing[..insert_at],
+                &existing[insert_at..]
+            )
         } else {
             // 新しい日付セクションをタイトル行の直後(=先頭側)へ
             match existing.find("\n## ") {
@@ -473,7 +554,11 @@ pub fn slugify(title: &str) -> String {
         }
     }
     let out = out.trim_matches('-').to_string();
-    if out.is_empty() { "note".to_string() } else { out }
+    if out.is_empty() {
+        "note".to_string()
+    } else {
+        out
+    }
 }
 
 #[cfg(test)]
@@ -491,7 +576,9 @@ mod tests {
     fn attachment_roundtrip_and_guard() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        let id = vault.new_human_note("添付テスト", "本文。", "human:o").unwrap();
+        let id = vault
+            .new_human_note("添付テスト", "本文。", "human:o")
+            .unwrap();
         // 追加(同名は連番)・一覧
         let (a, warn) = vault.add_attachment(&id, "図.png", b"png-bytes").unwrap();
         assert_eq!(a, "図.png");
@@ -506,7 +593,11 @@ mod tests {
         let big = vec![0u8; (ATTACH_MAX_BYTES + 1) as usize];
         assert!(vault.add_attachment(&id, "big.bin", &big).is_err());
         // 添付ディレクトリはノート走査に映らない(OKF 互換の保全)
-        std::fs::write(vault.attach_dir(&id).join("紛れ.md"), "---\ntype: Note\n---\nx").unwrap();
+        std::fs::write(
+            vault.attach_dir(&id).join("紛れ.md"),
+            "---\ntype: Note\n---\nx",
+        )
+        .unwrap();
         assert_eq!(vault.list_note_files().len(), 1);
         // 削除(残り = 図.png・passwd・紛れ.md の3つ。紛れ.md は「添付」としては見える)
         vault.remove_attachment(&id, "図-2.png").unwrap();
@@ -518,26 +609,56 @@ mod tests {
     fn ownership_symmetry() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        let mine = vault.new_human_note("俺のメモ", "本文", "human:owner").unwrap();
-        let ai = vault.propose("AI の知見", "本文", None, &["dev".into()], "claude/x").unwrap();
+        let mine = vault
+            .new_human_note("俺のメモ", "本文", "human:owner")
+            .unwrap();
+        let ai = vault
+            .propose("AI の知見", "本文", None, &["dev".into()], "claude/x")
+            .unwrap();
 
         // human ノート: 人間は可・AI は不可
-        assert!(vault.edit_note(&mine, "俺のメモ", "編集後", "human:owner").is_ok());
-        assert!(vault.agent_update_note(&mine, None, Some("侵入"), None, None, "claude/x").is_err());
+        assert!(
+            vault
+                .edit_note(&mine, "俺のメモ", "編集後", "human:owner")
+                .is_ok()
+        );
+        assert!(
+            vault
+                .agent_update_note(&mine, None, Some("侵入"), None, None, "claude/x")
+                .is_err()
+        );
         assert!(vault.agent_delete_note(&mine, "claude/x").is_err());
 
         // agent ノート: AI は可・人間は不可
-        assert!(vault.edit_note(&ai, "AI の知見", "人間の編集", "human:owner").is_err());
+        assert!(
+            vault
+                .edit_note(&ai, "AI の知見", "人間の編集", "human:owner")
+                .is_err()
+        );
         assert!(vault.delete_note(&ai).is_err());
-        assert!(vault.agent_update_note(&ai, Some("AI の知見 v2"), None, None, None, "claude/x").is_ok());
+        assert!(
+            vault
+                .agent_update_note(&ai, Some("AI の知見 v2"), None, None, None, "claude/x")
+                .is_ok()
+        );
 
         // 越境: 自分のメモにする → 領分が反転
         vault.make_mine(&ai).unwrap();
-        assert!(vault.edit_note(&ai, "引き取り", "人間の編集", "human:owner").is_ok());
-        assert!(vault.agent_update_note(&ai, None, Some("もう触れない"), None, None, "claude/x").is_err());
+        assert!(
+            vault
+                .edit_note(&ai, "引き取り", "人間の編集", "human:owner")
+                .is_ok()
+        );
+        assert!(
+            vault
+                .agent_update_note(&ai, None, Some("もう触れない"), None, None, "claude/x")
+                .is_err()
+        );
 
         // AI は自分のノートを消せる
-        let ai2 = vault.propose("捨てる知見", "本文", None, &["dev".into()], "claude/x").unwrap();
+        let ai2 = vault
+            .propose("捨てる知見", "本文", None, &["dev".into()], "claude/x")
+            .unwrap();
         assert!(vault.agent_delete_note(&ai2, "claude/x").is_ok());
     }
 
@@ -546,7 +667,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let id = vault
-            .propose("テスト起票", "本文です。", Some("説明"), &["dev".into()], "test-client/model")
+            .propose(
+                "テスト起票",
+                "本文です。",
+                Some("説明"),
+                &["dev".into()],
+                "test-client/model",
+            )
             .unwrap();
         let note = vault.read_note(&id).unwrap();
         // draft という特別な状態は持たない(2026-08-11 改定)

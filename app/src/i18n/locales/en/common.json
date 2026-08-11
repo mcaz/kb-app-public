@@ -1,0 +1,48 @@
+{
+  "nav": {
+    "home": "Home",
+    "notes": "Notes",
+    "graph": "Graph",
+    "connect": "Connect",
+    "favorites": "Favorites",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "settings": "Settings"
+  },
+  "action": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "rename": "Rename",
+    "delete": "Delete",
+    "update": "Update",
+    "saveAs": "Save as new"
+  },
+  "date": {
+    "created": "Created {{value}}",
+    "updated": "Updated {{value}}",
+    "createdUpdated": "Created {{created}} · Updated {{updated}}",
+    "unknown": "Unknown",
+    "none": "—"
+  },
+  "toast": {
+    "deleted": "Deleted",
+    "renamed": "Renamed"
+  },
+  "state": {
+    "loading": "Loading…",
+    "checking": "Checking…"
+  },
+  "settings": {
+    "title": "Settings",
+    "appearance": "Appearance",
+    "theme": "Theme",
+    "themeSystem": "Match the system",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "language": "Language",
+    "languageJa": "日本語",
+    "languageEn": "English",
+    "note": "These settings are stored on this device only (they never go into your notes)."
+  }
+}
