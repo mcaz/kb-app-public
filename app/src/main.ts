@@ -220,7 +220,7 @@ function render() {
             <span class="ico">${state.sideCollapsed ? "»" : "«"}</span><span class="lbl">畳む</span>
           </button>
         </nav>
-        <div id="pane"></div>
+        <div id="pane" class="pane-${state.view}"></div>
       </div>
     </div>
   `);

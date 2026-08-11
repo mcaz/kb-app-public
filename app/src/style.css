@@ -54,13 +54,15 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 /* 3ペイン */
 .shell { display: flex; flex-direction: column; height: 100%; }
 .app { display: flex; flex: 1; min-height: 0; }
-/* サイドバー以外は横スクロール可能(パネルを跨いで左右に動かせる) */
-#pane { overflow-x: auto; overflow-y: hidden; }
-#pane > * { flex: none; }
-#pane > .editor { flex: 1 0 auto; min-width: 420px; }
-#pane::-webkit-scrollbar { height: 10px; }
-#pane::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
-#pane::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+/* ノート画面のみ横スクロール可能(パネルを跨いで左右に動かせる)。
+   他の画面は単一ペインなので flex:1 のまま — ここを潰すと幅0になり画面が消える */
+#pane { display: flex; flex: 1; min-width: 0; }
+#pane.pane-notes { overflow-x: auto; overflow-y: hidden; }
+#pane.pane-notes > * { flex: none; }
+#pane.pane-notes > .editor { flex: 1 0 auto; min-width: 420px; }
+#pane.pane-notes::-webkit-scrollbar { height: 10px; }
+#pane.pane-notes::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+#pane.pane-notes::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 .side {
   width: 176px; flex: none; border-right: 1px solid var(--line); background: var(--panel-2);
   padding: 14px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 2px;
