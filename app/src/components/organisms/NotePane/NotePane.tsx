@@ -9,6 +9,7 @@ import { Button } from "@/components/atoms/ui/button";
 import { AttachmentBar } from "@/components/molecules/AttachmentBar";
 import { CareBar } from "@/components/molecules/CareBar";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
+import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useCareDismiss, useHomeState, useLaunchAi, useNote } from "@/lib/queries";
@@ -31,6 +32,7 @@ export function NotePane({ noteId, secondary = false }: NotePaneProps) {
   const addTag = useSession((s) => s.addTag);
   const closeSecondary = useSession((s) => s.closeSecondary);
   const promoteSecondary = useSession((s) => s.promoteSecondary);
+  const errorText = useErrorText();
   const careDismiss = useCareDismiss();
   const launchAi = useLaunchAi();
   const { addFiles, removeFile } = useAttachmentActions(noteId);
@@ -96,7 +98,7 @@ export function NotePane({ noteId, secondary = false }: NotePaneProps) {
           onClick={() => {
             launchAi.mutate(note.id, {
               onSuccess: () => toast(t("note.opened")),
-              onError: (e) => toast(String(e)),
+              onError: (e) => toast(errorText(e)),
             });
           }}
         >

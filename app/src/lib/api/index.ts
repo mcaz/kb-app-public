@@ -1,5 +1,9 @@
 import { commands } from "@/lib/bindings";
 
+import { KbError } from "./error";
+
+import type { AppError } from "@/lib/bindings";
+
 import type {
   ConnectState,
   Favorite,
@@ -12,19 +16,21 @@ import type {
 } from "./types";
 
 export * from "./types";
+export * from "./error";
 
 /** Tauri の中で動いているか(外はブラウザプレビュー = デモデータ)。 */
 export const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-type Result<T> = { status: "ok"; data: T } | { status: "error"; error: string };
+type Result<T> = { status: "ok"; data: T } | { status: "error"; error: AppError };
 
 /**
  * コアの Result を素の値に開き、失敗は例外にする。
  * TanStack Query がエラー状態として拾えるようにするため。
+ * エラーは種類を保ったまま運ぶ(画面は code で訳し分ける)。
  */
 async function unwrap<T>(promise: Promise<Result<T>>): Promise<T> {
   const res = await promise;
-  if (res.status === "error") throw new Error(res.error);
+  if (res.status === "error") throw new KbError(res.error);
   return res.data;
 }
 

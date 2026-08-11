@@ -17,7 +17,8 @@
     "off": "Off",
     "enable": "Turn on",
     "preparing": "Setting up smart search… (this takes a few minutes)",
-    "done": "Smart search is on"
+    "done": "Smart search is on",
+    "progress": "Preparing… {{embedded}}/{{total}}"
   },
   "backup": {
     "name": "Backup",

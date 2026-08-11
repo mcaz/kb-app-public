@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+import { useErrorText } from "@/hooks/useErrorText";
 import { useAttachmentAdd, useAttachmentRemove } from "@/lib/queries";
 
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -17,6 +18,7 @@ function toBase64(file: File): Promise<string> {
 /** NotePane 私物: 添付の追加・削除と、その通知。 */
 export function useAttachmentActions(noteId: string) {
   const { t } = useTranslation("notes");
+  const errorText = useErrorText();
   const add = useAttachmentAdd();
   const remove = useAttachmentRemove();
 
@@ -34,7 +36,7 @@ export function useAttachmentActions(noteId: string) {
         });
         if (warning) toast(`⚠ ${warning}`);
       } catch (e) {
-        toast(t("attachment.failed", { error: String(e) }));
+        toast(t("attachment.failed", { error: errorText(e) }));
         return false;
       }
     }
@@ -46,7 +48,7 @@ export function useAttachmentActions(noteId: string) {
       await remove.mutateAsync({ id: noteId, name });
       toast(t("attachment.removed"));
     } catch (e) {
-      toast(t("attachment.failed", { error: String(e) }));
+      toast(t("attachment.failed", { error: errorText(e) }));
     }
   };
 

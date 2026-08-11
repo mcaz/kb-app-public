@@ -44,5 +44,14 @@
     "languageJa": "日本語",
     "languageEn": "English",
     "note": "この設定はこの端末にだけ保存されます(ノートには入りません)。"
+  },
+  "errors": {
+    "noteNotFound": "そのノートはまだありません",
+    "attachmentTooLarge": "{{limit}}MB を超えるファイルは添付できません",
+    "claudeDesktopNotFound": "Claude Desktop が見つかりません",
+    "claudeDesktopLaunchFailed": "Claude Desktop を起動できませんでした(インストールを確認してください)",
+    "backupFailed": "バックアップに失敗しました: {{message}}",
+    "embedFailed": "かしこい検索の準備に失敗しました: {{message}}",
+    "vaultUnavailable": "ノートの保管場所を開けませんでした: {{message}}"
   }
 }
