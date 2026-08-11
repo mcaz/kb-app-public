@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+# GUI(Tauri)向けに TS 型を生成するときだけ有効化する。CLI には持ち込まない。
+specta = ["dep:specta"]
+
 [dependencies]
+specta = { version = "=2.0.0-rc.25", optional = true, features = ["derive"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 lindera = { version = "5.0.2", features = ["embed-ipadic"] }
 ort = { version = "=2.0.0-rc.13", features = ["download-binaries", "ndarray"] }

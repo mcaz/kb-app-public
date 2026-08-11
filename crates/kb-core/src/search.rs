@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use crate::tokenize::match_expr;
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Hit {
     pub id: String,
     pub title: Option<String>,
@@ -28,6 +29,7 @@ pub struct Hit {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct SearchOutcome {
     pub hits: Vec<Hit>,
     /// 上位ヒットから1ホップのリンク先・被リンク(id, title)
@@ -76,7 +78,11 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
     }
 
     let related = related_of(conn, hits.first().map(|h| h.id.as_str())).unwrap_or_default();
-    SearchOutcome { hits, related, degraded }
+    SearchOutcome {
+        hits,
+        related,
+        degraded,
+    }
 }
 
 fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Result<Vec<Hit>> {
@@ -238,7 +244,10 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
 }
 
 fn split_tags(t: Option<String>) -> Vec<String> {
-    t.unwrap_or_default().split_whitespace().map(String::from).collect()
+    t.unwrap_or_default()
+        .split_whitespace()
+        .map(String::from)
+        .collect()
 }
 
 /// タグの使用数(deprecated 除く・多い順)。一覧のフィルタチップ用。
@@ -261,6 +270,7 @@ pub fn tag_counts(conn: &Connection, limit: usize) -> Result<Vec<(String, usize)
 /// (タグの意味づけは AI とユーザーの会話で決まる — 2026-08-10 方針)。
 /// 表(| タグ | 説明 |)と箇条書き(- タグ — 説明 / - タグ: 説明)の両方を拾う。
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct TagInfo {
     pub tag: String,
     pub count: usize,
@@ -282,7 +292,11 @@ pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)>
         for line in body.lines() {
             let line = line.trim();
             let parsed = if line.starts_with('|') {
-                let cells: Vec<&str> = line.trim_matches('|').split('|').map(|c| c.trim()).collect();
+                let cells: Vec<&str> = line
+                    .trim_matches('|')
+                    .split('|')
+                    .map(|c| c.trim())
+                    .collect();
                 (cells.len() >= 2).then(|| (cells[0].to_string(), cells[1].to_string()))
             } else if line.starts_with("- ") || line.starts_with("* ") {
                 let rest = &line[2..];
@@ -295,7 +309,9 @@ pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)>
                 None
             };
             if let Some((tag, d)) = parsed {
-                let tag = tag.trim_matches(|c| c == '*' || c == '`' || c == '#' || c == ' ').to_string();
+                let tag = tag
+                    .trim_matches(|c| c == '*' || c == '`' || c == '#' || c == ' ')
+                    .to_string();
                 if tag.is_empty()
                     || d.is_empty()
                     || d.chars().all(|c| c == '-' || c == ':')
@@ -312,13 +328,21 @@ pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)>
         .into_iter()
         .map(|(tag, count)| {
             let description = desc.get(&tag).cloned();
-            TagInfo { tag, count, description }
+            TagInfo {
+                tag,
+                count,
+                description,
+            }
         })
         .collect();
     // 合意済みだがまだ使われていないタグも見せる(語彙として存在するため)
     for (tag, d) in desc {
         if !out.iter().any(|t| t.tag == tag) {
-            out.push(TagInfo { tag, count: 0, description: Some(d) });
+            out.push(TagInfo {
+                tag,
+                count: 0,
+                description: Some(d),
+            });
         }
     }
     out.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
@@ -340,7 +364,9 @@ pub fn similar_notes(
             |r| r.get(0),
         )
         .ok();
-    let Some(blob) = blob else { return Ok(Vec::new()) }; // 未埋め込み・段0 は空
+    let Some(blob) = blob else {
+        return Ok(Vec::new());
+    }; // 未埋め込み・段0 は空
     let me = embed::from_blob(&blob);
     let linked: std::collections::HashSet<String> = {
         let mut stmt = conn.prepare_cached(
@@ -350,9 +376,8 @@ pub fn similar_notes(
         rows.filter_map(|r| r.ok()).collect()
     };
     let mut out = Vec::new();
-    let mut stmt = conn.prepare_cached(
-        "SELECT title FROM notes WHERE id = ?1 AND status != 'deprecated'",
-    )?;
+    let mut stmt =
+        conn.prepare_cached("SELECT title FROM notes WHERE id = ?1 AND status != 'deprecated'")?;
     for (nid, dist) in embed::knn(conn, &me, limit + linked.len() + 5)? {
         if out.len() >= limit {
             break;
@@ -382,6 +407,7 @@ pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Op
 
 /// 健全性の要約(FR-A2 ホーム表示用)。
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Stats {
     pub total: usize,
     pub deprecated: usize,
@@ -454,9 +480,23 @@ mod tests {
     fn setup() -> (tempfile::TempDir, Vault, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        vault.new_human_note("認証設計メモ", "認証フローの見直しを行った。監査ログも整備する。", "human:o").unwrap();
-        vault.new_human_note("運用ノート", "本番環境の運用手順とバックアップのライフサイクルを記録。", "human:o").unwrap();
-        vault.new_human_note("無関係", "昨日の打ち合わせ内容を整理する。", "human:o").unwrap();
+        vault
+            .new_human_note(
+                "認証設計メモ",
+                "認証フローの見直しを行った。監査ログも整備する。",
+                "human:o",
+            )
+            .unwrap();
+        vault
+            .new_human_note(
+                "運用ノート",
+                "本番環境の運用手順とバックアップのライフサイクルを記録。",
+                "human:o",
+            )
+            .unwrap();
+        vault
+            .new_human_note("無関係", "昨日の打ち合わせ内容を整理する。", "human:o")
+            .unwrap();
         let conn = open_db(&vault).unwrap();
         sync(&vault, &conn).unwrap();
         (dir, vault, conn)

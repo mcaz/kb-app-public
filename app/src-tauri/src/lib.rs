@@ -1,7 +1,6 @@
 //! 管理アプリの Tauri 層 — コア(kb-core)の薄い GUI(NFR-M2 相当: 統治ロジックを
 //! アプリ側に実装しない)。全コマンドは kb-core の API を呼ぶだけ。
 
-use kb_core::OWNER_ACTOR;
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
 use kb_core::search::{Hit, SearchOutcome, Stats, recent, related_of, search, stats};
@@ -26,16 +25,19 @@ fn current_vault_name() -> CmdResult<String> {
 }
 
 #[tauri::command]
+#[specta::specta]
 fn favorites_list() -> CmdResult<Vec<kb_core::favorites::Favorite>> {
     Ok(kb_core::favorites::list(&current_vault_name()?))
 }
 
 #[tauri::command]
+#[specta::specta]
 fn favorite_add(fav: kb_core::favorites::Favorite) -> CmdResult<()> {
     kb_core::favorites::add(&current_vault_name()?, fav).map_err(err)
 }
 
 #[tauri::command]
+#[specta::specta]
 fn favorite_remove(name: String) -> CmdResult<()> {
     kb_core::favorites::remove(&current_vault_name()?, &name).map_err(err)
 }
@@ -56,7 +58,7 @@ fn synced_conn(vault: &Vault) -> CmdResult<(kb_core::rusqlite::Connection, Optio
     Ok((conn, degraded))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct SetupState {
     needs_onboarding: bool,
     vault_name: Option<String>,
@@ -64,22 +66,35 @@ struct SetupState {
 }
 
 #[tauri::command]
+#[specta::specta]
 fn setup_state() -> CmdResult<SetupState> {
     let reg = Registry::load().map_err(err)?;
     match reg.resolve(None) {
         Ok(path) => Ok(SetupState {
             needs_onboarding: false,
-            vault_name: reg.vaults.iter().find(|v| v.path == path).map(|v| v.name.clone()),
+            vault_name: reg
+                .vaults
+                .iter()
+                .find(|v| v.path == path)
+                .map(|v| v.name.clone()),
             vault_path: Some(path.display().to_string()),
         }),
-        Err(_) => Ok(SetupState { needs_onboarding: true, vault_name: None, vault_path: None }),
+        Err(_) => Ok(SetupState {
+            needs_onboarding: true,
+            vault_name: None,
+            vault_path: None,
+        }),
     }
 }
 
 /// オンボーディング: 最初の vault を自動作成(FR-A1。既定名「わたしのノート」実体 my-notes)。
 #[tauri::command]
+#[specta::specta]
 fn onboard() -> CmdResult<SetupState> {
-    let path = dirs::home_dir().ok_or("home が特定できない")?.join("kb").join("my-notes");
+    let path = dirs::home_dir()
+        .ok_or("home が特定できない")?
+        .join("kb")
+        .join("my-notes");
     let vault = Vault::create(&path).map_err(err)?;
     let mut reg = Registry::load().map_err(err)?;
     reg.add("my-notes", vault.root.clone()).map_err(err)?;
@@ -87,7 +102,7 @@ fn onboard() -> CmdResult<SetupState> {
     setup_state()
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct HomeState {
     stats: Stats,
     notes: Vec<Hit>,
@@ -97,6 +112,7 @@ struct HomeState {
 }
 
 #[tauri::command]
+#[specta::specta]
 fn home_state() -> CmdResult<HomeState> {
     let vault = default_vault()?;
     // 画面更新の際にも他デバイスの変化を取り込む(スロットリング付き・fail-open)
@@ -117,8 +133,7 @@ fn home_state() -> CmdResult<HomeState> {
     })
 }
 
-
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct TagOverview {
     tags: Vec<kb_core::search::TagInfo>,
     glossary_note: Option<String>,
@@ -126,21 +141,26 @@ struct TagOverview {
 
 /// ホームのタグ一覧(説明は KB の「タグ運用」ノート由来)。
 #[tauri::command]
+#[specta::specta]
 fn tag_overview() -> CmdResult<TagOverview> {
     let vault = default_vault()?;
     let (conn, _) = synced_conn(&vault)?;
     let (tags, glossary_note) = kb_core::search::tag_overview(&conn).map_err(err)?;
-    Ok(TagOverview { tags, glossary_note })
+    Ok(TagOverview {
+        tags,
+        glossary_note,
+    })
 }
 
 #[tauri::command]
+#[specta::specta]
 fn care_dismiss(key: String) -> CmdResult<()> {
     let vault = default_vault()?;
     let conn = open_db(&vault).map_err(err)?;
     kb_core::care::dismiss(&conn, &key).map_err(err)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct NoteView {
     id: String,
     title: String,
@@ -157,6 +177,7 @@ struct NoteView {
 }
 
 #[tauri::command]
+#[specta::specta]
 fn note_get(id: String) -> CmdResult<NoteView> {
     let vault = default_vault()?;
     let note = vault.read_note(&id).map_err(err)?;
@@ -181,7 +202,12 @@ fn note_get(id: String) -> CmdResult<NoteView> {
 
 /// 添付の追加(FR-C8)。データは base64。戻り値 = (保存名, 警告)。
 #[tauri::command]
-fn attachment_add(id: String, name: String, data_base64: String) -> CmdResult<(String, Option<String>)> {
+#[specta::specta]
+fn attachment_add(
+    id: String,
+    name: String,
+    data_base64: String,
+) -> CmdResult<(String, Option<String>)> {
     use base64::Engine;
     let vault = default_vault()?;
     let data = base64::engine::general_purpose::STANDARD
@@ -191,6 +217,7 @@ fn attachment_add(id: String, name: String, data_base64: String) -> CmdResult<(S
 }
 
 #[tauri::command]
+#[specta::specta]
 fn attachment_remove(id: String, name: String) -> CmdResult<()> {
     let vault = default_vault()?;
     vault.remove_attachment(&id, &name).map_err(err)
@@ -199,11 +226,15 @@ fn attachment_remove(id: String, name: String) -> CmdResult<()> {
 /// パス指定で添付(ドラッグ&ドロップ用)。Tauri はファイルドロップを DOM に渡さず
 /// 自前イベントでパスをくれるので、Rust 側で直接読む(base64 経由より大きいファイルに強い)。
 #[tauri::command]
+#[specta::specta]
 fn attachment_add_from_path(id: String, path: String) -> CmdResult<(String, Option<String>)> {
     let p = std::path::Path::new(&path);
     let size = std::fs::metadata(p).map_err(err)?.len();
     if size > kb_core::vault::ATTACH_MAX_BYTES {
-        return Err(format!("50MB を超えるファイルは添付できない({} MB)", size / 1024 / 1024));
+        return Err(format!(
+            "50MB を超えるファイルは添付できない({} MB)",
+            size / 1024 / 1024
+        ));
     }
     let data = std::fs::read(p).map_err(err)?;
     let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("file");
@@ -216,14 +247,16 @@ fn attachment_add_from_path(id: String, path: String) -> CmdResult<(String, Opti
 /// Rust 側で NSPasteboard から直接読む(prompt 無効と同じ「実機でだけ落ちる」型の対策)。
 /// 画像が無ければ Ok(None)(テキストペーストの邪魔をしない)。
 #[tauri::command]
+#[specta::specta]
 fn attachment_paste(id: String) -> CmdResult<Option<(String, Option<String>)>> {
     let mut cb = arboard::Clipboard::new().map_err(err)?;
     let img = match cb.get_image() {
         Ok(i) => i,
         Err(_) => return Ok(None),
     };
-    let rgba = image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
-        .ok_or("クリップボード画像の変換に失敗")?;
+    let rgba =
+        image::RgbaImage::from_raw(img.width as u32, img.height as u32, img.bytes.into_owned())
+            .ok_or("クリップボード画像の変換に失敗")?;
     let mut png: Vec<u8> = Vec::new();
     image::DynamicImage::ImageRgba8(rgba)
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
@@ -239,36 +272,13 @@ fn attachment_paste(id: String) -> CmdResult<Option<(String, Option<String>)>> {
         .map_err(err)
 }
 
-#[tauri::command]
-fn note_save(id: String, title: String, body: String) -> CmdResult<()> {
-    let vault = default_vault()?;
-    vault.edit_note(&id, &title, &body, OWNER_ACTOR).map_err(err)
-}
-
-/// ノート削除(本体+添付。git 履歴には残る)。MCP には公開しない — 人の操作のみ。
-#[tauri::command]
-fn note_delete(id: String) -> CmdResult<()> {
-    let vault = default_vault()?;
-    vault.delete_note(&id).map_err(err)?;
-    let (conn, _) = synced_conn(&vault)?;
-    let _ = conn; // 索引から即時に消す(sync が削除を検知)
-    Ok(())
-}
-
-/// 越境(原則9): AI のノートを「自分のメモにする」(origin → human)。
-#[tauri::command]
-fn note_make_mine(id: String) -> CmdResult<()> {
-    let vault = default_vault()?;
-    vault.make_mine(&id).map_err(err)
-}
+// note_save / note_new / note_delete / note_make_mine は 2026-08-10 の一本化
+// (メモ機能の廃止・書き換えは Claude 経由)で GUI から呼ばれなくなったため撤去した。
+// 対応するコア API(edit_note / new_human_note / delete_note / make_mine)は
+// CLI・MCP 経路で使われるため kb-core には残っている。
 
 #[tauri::command]
-fn note_new(title: String) -> CmdResult<String> {
-    let vault = default_vault()?;
-    vault.new_human_note(&title, "", OWNER_ACTOR).map_err(err)
-}
-
-#[tauri::command]
+#[specta::specta]
 fn note_search(query: String) -> CmdResult<SearchOutcome> {
     let vault = default_vault()?;
     let (conn, degraded) = synced_conn(&vault)?;
@@ -277,16 +287,24 @@ fn note_search(query: String) -> CmdResult<SearchOutcome> {
     Ok(out)
 }
 
+/// 生成される TS では "not_installed" | "downloading" | "enabled" の union になる
+/// (JSON 表現は従来の文字列のまま)。
+#[derive(Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+enum SmartSearchPhase {
+    NotInstalled,
+    Downloading,
+    Enabled,
+}
 
-
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct SmartSearchState {
-    state: &'static str, // "not_installed" | "downloading" | "enabled"
+    state: SmartSearchPhase,
     embedded: usize,
     total: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct ConnectState {
     desktop: kb_core::connect::DesktopStatus,
     backup: kb_core::connect::BackupStatus,
@@ -295,6 +313,7 @@ struct ConnectState {
 }
 
 #[tauri::command]
+#[specta::specta]
 fn connect_state() -> CmdResult<ConnectState> {
     let vault = default_vault()?;
     let desktop = kb_core::connect::claude_desktop_config_path()
@@ -304,11 +323,11 @@ fn connect_state() -> CmdResult<ConnectState> {
     let s = stats(&conn).map_err(err)?;
     let smart_search = SmartSearchState {
         state: if s.embed_enabled {
-            "enabled"
+            SmartSearchPhase::Enabled
         } else if kb_core::embed::downloading() {
-            "downloading"
+            SmartSearchPhase::Downloading
         } else {
-            "not_installed"
+            SmartSearchPhase::NotInstalled
         },
         embedded: s.embedded,
         total: s.total,
@@ -321,7 +340,7 @@ fn connect_state() -> CmdResult<ConnectState> {
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct GraphNode {
     id: String,
     title: String,
@@ -330,7 +349,7 @@ struct GraphNode {
     degree: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, specta::Type)]
 struct GraphData {
     nodes: Vec<GraphNode>,
     edges: Vec<(String, String)>,
@@ -338,6 +357,7 @@ struct GraphData {
 
 /// グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。
 #[tauri::command]
+#[specta::specta]
 fn graph_data() -> CmdResult<GraphData> {
     let vault = default_vault()?;
     let (conn, _) = synced_conn(&vault)?;
@@ -369,13 +389,17 @@ fn graph_data() -> CmdResult<GraphData> {
             .collect()
     };
     for n in &mut nodes {
-        n.degree = edges.iter().filter(|(s, d)| *s == n.id || *d == n.id).count();
+        n.degree = edges
+            .iter()
+            .filter(|(s, d)| *s == n.id || *d == n.id)
+            .count();
     }
     Ok(GraphData { nodes, edges })
 }
 
 /// かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
 #[tauri::command]
+#[specta::specta]
 async fn embed_enable() -> CmdResult<()> {
     let vault = default_vault()?;
     kb_core::embed::install_model().map_err(err)?;
@@ -389,12 +413,14 @@ async fn embed_enable() -> CmdResult<()> {
 }
 
 #[tauri::command]
+#[specta::specta]
 fn backup_set_remote(url: String) -> CmdResult<()> {
     let vault = default_vault()?;
     kb_core::connect::set_backup_remote(&vault, &url).map_err(err)
 }
 
 #[tauri::command]
+#[specta::specta]
 fn connect_desktop() -> CmdResult<()> {
     let reg = Registry::load().map_err(err)?;
     let path = reg.resolve(None).map_err(err)?;
@@ -404,13 +430,14 @@ fn connect_desktop() -> CmdResult<()> {
         .find(|v| v.path == path)
         .map(|v| v.name.clone())
         .ok_or("vault 名が特定できない")?;
-    let cfg = kb_core::connect::claude_desktop_config_path()
-        .ok_or("設定ディレクトリが特定できない")?;
+    let cfg =
+        kb_core::connect::claude_desktop_config_path().ok_or("設定ディレクトリが特定できない")?;
     let exe = std::env::current_exe().map_err(err)?;
     kb_core::connect::connect_desktop_at(&cfg, &exe, &name).map_err(err)
 }
 
 #[tauri::command]
+#[specta::specta]
 fn backup_now() -> CmdResult<String> {
     let vault = default_vault()?;
     kb_core::connect::backup_push(&vault).map_err(err)
@@ -418,6 +445,7 @@ fn backup_now() -> CmdResult<String> {
 
 /// FR-A5 最小: 現在ノートを記録して Claude Desktop を前面に。
 #[tauri::command]
+#[specta::specta]
 fn launch_ai(note: Option<String>) -> CmdResult<()> {
     let vault = default_vault()?;
     if let Some(id) = note {
@@ -428,6 +456,8 @@ fn launch_ai(note: Option<String>) -> CmdResult<()> {
 }
 
 /// Claude Desktop を前面に出す(OS ごとの起動方法)。
+// cfg で分岐しているため各ブロック末尾の return が必要(どれか1つだけが残る)
+#[allow(clippy::needless_return)]
 fn launch_claude_desktop() -> CmdResult<()> {
     #[cfg(target_os = "macos")]
     {
@@ -474,35 +504,67 @@ fn launch_claude_desktop() -> CmdResult<()> {
     }
 }
 
+/// GUI が呼べるコマンドの全集合。ここが TS 側 `lib/bindings.ts` の正本になる。
+fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
+    tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
+        setup_state,
+        onboard,
+        home_state,
+        note_get,
+        note_search,
+        care_dismiss,
+        tag_overview,
+        graph_data,
+        favorites_list,
+        favorite_add,
+        favorite_remove,
+        connect_state,
+        connect_desktop,
+        backup_now,
+        backup_set_remote,
+        embed_enable,
+        attachment_add,
+        attachment_add_from_path,
+        attachment_remove,
+        attachment_paste,
+        launch_ai,
+    ])
+}
+
+/// 型と invoke ラッパの書き出し。`cargo test` からも呼び、CI では生成物に差分が
+/// 出ないことを検査する(手書きの型合わせを廃止した — ADR-0002)。
+fn export_bindings() -> Result<(), Box<dyn std::error::Error>> {
+    specta_builder()
+        // usize / u64 が通るのは「件数」と「添付のバイト数(上限 50MB)」だけで、
+        // JSON 上も元から number。2^53 を超える値はこの境界に存在しない
+        .dangerously_cast_bigints_to_number()
+        .export(
+            specta_typescript::Typescript::default().header(
+                "// このファイルは tauri-specta の生成物です。手で編集しないこと(ADR-0002)。",
+            ),
+            "../src/lib/bindings.ts",
+        )?;
+    Ok(())
+}
+
 pub fn run() {
+    let builder = specta_builder();
+
+    #[cfg(debug_assertions)]
+    export_bindings().expect("bindings.ts の生成に失敗");
+
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            setup_state,
-            onboard,
-            home_state,
-            note_get,
-            note_save,
-            note_new,
-            note_delete,
-            note_make_mine,
-            note_search,
-            care_dismiss,
-            tag_overview,
-            graph_data,
-            favorites_list,
-            favorite_add,
-            favorite_remove,
-            connect_state,
-            connect_desktop,
-            backup_now,
-            backup_set_remote,
-            embed_enable,
-            attachment_add,
-            attachment_add_from_path,
-            attachment_remove,
-            attachment_paste,
-            launch_ai,
-        ])
+        .invoke_handler(builder.invoke_handler())
         .run(tauri::generate_context!())
         .expect("tauri run");
+}
+
+#[cfg(test)]
+mod tests {
+    /// TS 側の型を生成し直す。CI はこの後 `git diff --exit-code` で
+    /// 「コアを変えたのに bindings.ts を更新し忘れた」を落とす。
+    #[test]
+    fn bindings_are_up_to_date() {
+        super::export_bindings().expect("bindings.ts の生成に失敗");
+    }
 }

@@ -17,6 +17,7 @@ use crate::vault::Vault;
 const MAX_OPEN_PROPOSALS: usize = 5;
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CareProposal {
     pub key: String,
     pub kind: String, // "broken"(リンク切れ)| "untagged"(タグ無し=契約違反状態)
@@ -64,7 +65,8 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
             break;
         }
         let key = format!("untagged:{id}");
-        let detail = format!("「{title}」にタグがありません(契約: 1〜4個)。Claude に整理を頼めます。");
+        let detail =
+            format!("「{title}」にタグがありません(契約: 1〜4個)。Claude に整理を頼めます。");
         if insert_new(conn, &key, "untagged", &id, "", &detail)? {
             added += 1;
         }
@@ -87,9 +89,14 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         }
         let key = format!("broken:{src}:{dst}");
         let title: String = conn
-            .query_row("SELECT coalesce(title, id) FROM notes WHERE id=?1", [&src], |r| r.get(0))
+            .query_row(
+                "SELECT coalesce(title, id) FROM notes WHERE id=?1",
+                [&src],
+                |r| r.get(0),
+            )
             .unwrap_or_else(|_| src.clone());
-        let detail = format!("「{title}」の中のリンク先「{dst}」がまだありません(未執筆の知識かも)。");
+        let detail =
+            format!("「{title}」の中のリンク先「{dst}」がまだありません(未執筆の知識かも)。");
         if insert_new(conn, &key, "broken", &src, &dst, &detail)? {
             added += 1;
         }
@@ -97,7 +104,14 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
     Ok(added)
 }
 
-fn insert_new(conn: &Connection, key: &str, kind: &str, a: &str, b: &str, detail: &str) -> Result<bool> {
+fn insert_new(
+    conn: &Connection,
+    key: &str,
+    kind: &str,
+    a: &str,
+    b: &str,
+    detail: &str,
+) -> Result<bool> {
     let n = conn.execute(
         "INSERT OR IGNORE INTO care_proposals(key, kind, a, b, detail) VALUES(?1,?2,?3,?4,?5)",
         rusqlite::params![key, kind, a, b, detail],
@@ -111,14 +125,23 @@ pub fn list_open(conn: &Connection) -> Result<Vec<CareProposal>> {
         "SELECT key, kind, a, b, detail FROM care_proposals WHERE status='open' ORDER BY key",
     )?;
     let rows = stmt.query_map([], |r| {
-        Ok(CareProposal { key: r.get(0)?, kind: r.get(1)?, a: r.get(2)?, b: r.get(3)?, detail: r.get(4)? })
+        Ok(CareProposal {
+            key: r.get(0)?,
+            kind: r.get(1)?,
+            a: r.get(2)?,
+            b: r.get(3)?,
+            detail: r.get(4)?,
+        })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 /// 「いいえ(このまま)」— 同じ提案は二度と出ない。
 pub fn dismiss(conn: &Connection, key: &str) -> Result<()> {
-    conn.execute("UPDATE care_proposals SET status='dismissed' WHERE key=?1", [key])?;
+    conn.execute(
+        "UPDATE care_proposals SET status='dismissed' WHERE key=?1",
+        [key],
+    )?;
     Ok(())
 }
 
@@ -133,7 +156,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         vault
-            .new_human_note("親", "まだ無い [子ノート](/notes/子ノート.md) を参照。", "human:o")
+            .new_human_note(
+                "親",
+                "まだ無い [子ノート](/notes/子ノート.md) を参照。",
+                "human:o",
+            )
             .unwrap();
         let conn = open_db(&vault).unwrap();
         sync(&vault, &conn).unwrap();
@@ -142,7 +169,10 @@ mod tests {
         assert_eq!(added, 2);
         let open = list_open(&conn).unwrap();
         let kinds: Vec<&str> = open.iter().map(|p| p.kind.as_str()).collect();
-        assert!(kinds.contains(&"broken") && kinds.contains(&"untagged"), "{kinds:?}");
+        assert!(
+            kinds.contains(&"broken") && kinds.contains(&"untagged"),
+            "{kinds:?}"
+        );
         // 再検知しても増えない
         assert_eq!(detect(&conn, &vault).unwrap(), 0);
         // 「このまま」→ 消えて、二度と出ない
@@ -152,5 +182,4 @@ mod tests {
         assert!(list_open(&conn).unwrap().is_empty());
         assert_eq!(detect(&conn, &vault).unwrap(), 0);
     }
-
 }

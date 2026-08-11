@@ -15,6 +15,7 @@ use crate::vault::Vault;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub enum DesktopStatus {
     /// Claude Desktop の設定ファイルが見つからない(未インストールか未起動)
     NotFound,
@@ -50,11 +51,10 @@ pub fn connect_desktop_at(config: &Path, exe: &Path, vault_name: &str) -> Result
         .context("設定がオブジェクトでない")?
         .entry("mcpServers")
         .or_insert_with(|| serde_json::json!({}));
-    let servers = servers.as_object_mut().context("mcpServers がオブジェクトでない")?;
-    let backup = config.with_file_name(format!(
-        "claude_desktop_config.json.bak-kbapp-{}",
-        today()
-    ));
+    let servers = servers
+        .as_object_mut()
+        .context("mcpServers がオブジェクトでない")?;
+    let backup = config.with_file_name(format!("claude_desktop_config.json.bak-kbapp-{}", today()));
     fs::copy(config, &backup).context("バックアップ作成")?;
     servers.insert(
         "kb-app".to_string(),
@@ -68,6 +68,7 @@ pub fn connect_desktop_at(config: &Path, exe: &Path, vault_name: &str) -> Result
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct BackupStatus {
     /// origin の URL(未設定なら None = 未接続)
     pub remote: Option<String>,
@@ -146,7 +147,9 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
     let is_github = url.starts_with("git@github.com:") || url.starts_with("https://github.com/");
     let is_local = url.starts_with("file://") || Path::new(url).is_absolute();
     if !is_github && !is_local {
-        bail!("バックアップ先は GitHub リポジトリの URL を指定(git@github.com:… か https://github.com/…)");
+        bail!(
+            "バックアップ先は GitHub リポジトリの URL を指定(git@github.com:… か https://github.com/…)"
+        );
     }
     let repo = git2::Repository::open(&vault.root)?;
     match repo.find_remote("origin") {
@@ -258,7 +261,9 @@ pub fn pull_if_stale(vault: &Vault) -> Option<String> {
         return None;
     }
     if epoch_now().saturating_sub(sync_state(vault).last_pull_epoch) < PULL_THROTTLE_SECS {
-        return sync_state(vault).last_error.map(|e| format!("同期エラー(前回): {e}"));
+        return sync_state(vault)
+            .last_error
+            .map(|e| format!("同期エラー(前回): {e}"));
     }
     pull_now(vault).err().map(|e| e.to_string())
 }
@@ -318,8 +323,12 @@ mod tests {
         assert_eq!(desktop_status_at(&cfg), DesktopStatus::NotConnected);
         connect_desktop_at(&cfg, Path::new("/usr/bin/true"), "try").unwrap();
         assert_eq!(desktop_status_at(&cfg), DesktopStatus::Connected);
-        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&cfg).unwrap()).unwrap();
-        assert!(v["mcpServers"]["vault"].is_object(), "既存サーバーが保持される");
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&cfg).unwrap()).unwrap();
+        assert!(
+            v["mcpServers"]["vault"].is_object(),
+            "既存サーバーが保持される"
+        );
         assert_eq!(v["mcpServers"]["kb-app"]["args"][2], "try");
         // バックアップが残る
         assert!(fs::read_dir(dir.path()).unwrap().count() >= 2);
@@ -341,34 +350,67 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bare = dir.path().join("backup.git");
         let run = |cwd: &Path, args: &[&str]| {
-            let out = std::process::Command::new("git").args(args).current_dir(cwd).output().unwrap();
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         run(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
 
         // デバイス A: vault 作成 → バックアップ先設定(初回 push)→ ノート追加(随時 push)
         let a = Vault::create(dir.path().join("a")).unwrap();
         set_backup_remote(&a, bare.to_str().unwrap()).unwrap();
-        a.new_human_note("同期テスト", "デバイス A で書いた。", "human:o").unwrap();
-        assert_eq!(backup_status(&a).unwrap().pending, 0, "随時 push 済みなら滞留ゼロ");
+        a.new_human_note("同期テスト", "デバイス A で書いた。", "human:o")
+            .unwrap();
+        assert_eq!(
+            backup_status(&a).unwrap().pending,
+            0,
+            "随時 push 済みなら滞留ゼロ"
+        );
 
         // bare の HEAD を A のブランチ名に合わせる(git2 と system git の
         // 既定ブランチ名差で clone が空チェックアウトになるのを防ぐ)
-        let branch = git2::Repository::open(&a.root).unwrap().head().unwrap().shorthand().unwrap().to_string();
-        run(&bare, &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")]);
+        let branch = git2::Repository::open(&a.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+        run(
+            &bare,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+        );
 
         // デバイス B: clone で復元 → 会話(pull)で A の変化を受け取る
         run(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
         let b = Vault::open(dir.path().join("b")).unwrap();
         assert_eq!(b.list_note_files().len(), 1);
-        a.new_human_note("追加分", "A の2本目。", "human:o").unwrap();
+        a.new_human_note("追加分", "A の2本目。", "human:o")
+            .unwrap();
         pull_now(&b).unwrap();
-        assert_eq!(b.list_note_files().len(), 2, "B が pull で A の追加分を受け取る");
+        assert_eq!(
+            b.list_note_files().len(),
+            2,
+            "B が pull で A の追加分を受け取る"
+        );
 
         // B 側で書いても push が通る(非 fast-forward 時の rebase 再試行経路)
-        a.new_human_note("三本目", "A の3本目(B の pull 後)。", "human:o").unwrap();
-        b.new_human_note("B のメモ", "デバイス B で書いた。", "human:o").unwrap();
-        assert_eq!(backup_status(&b).unwrap().pending, 0, "rebase 再試行で push が通る");
+        a.new_human_note("三本目", "A の3本目(B の pull 後)。", "human:o")
+            .unwrap();
+        b.new_human_note("B のメモ", "デバイス B で書いた。", "human:o")
+            .unwrap();
+        assert_eq!(
+            backup_status(&b).unwrap().pending,
+            0,
+            "rebase 再試行で push が通る"
+        );
     }
 
     #[test]
