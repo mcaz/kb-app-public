@@ -393,6 +393,7 @@ function renderNotes(pane: HTMLElement) {
             : `<button class="small" id="fav-save">★ お気に入りに保存</button>`}
         </div>
       </div>
+      <div class="sel-strip" id="sel-strip"></div>
       <div class="items" id="items"></div>
       <div class="list-foot">
         <select id="page-size">
@@ -447,6 +448,40 @@ function renderNotes(pane: HTMLElement) {
     state.page.list = 0;
     render();
   });
+
+  // 選択中のノート(絞り込みで一覧から消えても、ここには残る)
+  const strip = list.querySelector<HTMLElement>("#sel-strip")!;
+  const fillStrip = () => {
+    strip.replaceChildren();
+    const rows: [NoteView, boolean][] = [];
+    if (state.selected) rows.push([state.selected, false]);
+    if (state.secondary) rows.push([state.secondary, true]);
+    if (!rows.length) return;
+    strip.appendChild(el(`<div class="sel-head">選択中</div>`));
+    for (const [n, isSecondary] of rows) {
+      const row = el(`
+        <div class="sel-item ${isSecondary ? "sec" : ""}">
+          <span class="sel-mark">${isSecondary ? "副" : "主"}</span>
+          <span class="sel-title">${esc(n.title)}</span>
+          ${isSecondary ? `<button class="sel-x" title="閉じる">×</button>` : ""}
+        </div>
+      `);
+      row.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).classList.contains("sel-x")) {
+          state.secondary = null;
+          render();
+          return;
+        }
+        if (isSecondary) {
+          state.selected = n; // 副 → 主へ
+          state.secondary = null;
+        }
+        render();
+      });
+      strip.appendChild(row);
+    }
+  };
+  fillStrip();
 
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
   // 再描画で DOM を作り直すため、位置を明示的に持ち越す(選択でリストが先頭に戻らないように)
