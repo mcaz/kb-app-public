@@ -22,6 +22,7 @@ const state = {
   graphCache: null as GraphData | null,
   listScroll: 0,
   noteScroll: {} as Record<string, number>,
+  page: { list: 0, recent: 0, tags: 0 },
   secondary: null as NoteView | null,
   graphFocus: null as string | null,
   vaultName: "kb",
@@ -269,6 +270,24 @@ function matchFilter(h: { tags: string[] }): boolean {
   return state.selectedTags.every((t) => h.tags.includes(t));
 }
 
+/// 一覧のページャ。total 件を size ずつ見せ、現在ページと移動ボタンを返す。
+function pager(total: number, size: number, page: number, onChange: (p: number) => void): HTMLElement | null {
+  const pages = Math.ceil(total / size);
+  if (pages <= 1) return null;
+  const from = page * size + 1;
+  const to = Math.min(total, (page + 1) * size);
+  const box = el(`
+    <div class="pager">
+      <button class="pg-prev" ${page === 0 ? "disabled" : ""}>‹</button>
+      <span class="pg-info">${from}–${to} / ${total}</span>
+      <button class="pg-next" ${page >= pages - 1 ? "disabled" : ""}>›</button>
+    </div>
+  `);
+  box.querySelector(".pg-prev")!.addEventListener("click", () => onChange(page - 1));
+  box.querySelector(".pg-next")!.addEventListener("click", () => onChange(page + 1));
+  return box;
+}
+
 /// パネル幅のドラッグ調整。key ごとに localStorage へ記憶する。
 function makeSplitter(target: HTMLElement, key: string, min: number, max: number): HTMLElement {
   const sp = el(`<div class="splitter"></div>`);
@@ -302,6 +321,7 @@ function renderNotes(pane: HTMLElement) {
       <div class="searchbox"><input id="search" placeholder="🔍 ノートを検索" value="${esc(state.query)}" /></div>
       <div class="tag-select" id="tag-select"></div>
       <div class="items" id="items"></div>
+      <div class="pager-slot" id="list-pager"></div>
     </div>
   `);
   buildTagSelect(list.querySelector<HTMLElement>("#tag-select")!, home.tags.map(([t]) => t));
@@ -324,12 +344,25 @@ function renderNotes(pane: HTMLElement) {
     searchMode: boolean
   ) => {
     const hits = allHits.filter((h) => matchFilter(h));
+    const PAGE = 25;
+    const maxPage = Math.max(0, Math.ceil(hits.length / PAGE) - 1);
+    if (state.page.list > maxPage) state.page.list = maxPage;
+    const shown = hits.slice(state.page.list * PAGE, (state.page.list + 1) * PAGE);
+    const pagerBox = list.querySelector<HTMLElement>("#list-pager")!;
+    pagerBox.replaceChildren();
+    const pg = pager(hits.length, PAGE, state.page.list, (p) => {
+      state.page.list = p;
+      state.listScroll = 0;
+      showItems(allHits, searchMode);
+      itemsBox.scrollTop = 0;
+    });
+    if (pg) pagerBox.appendChild(pg);
     itemsBox.replaceChildren();
     if (!hits.length) {
       itemsBox.appendChild(el(`<div class="empty">${searchMode ? "見つかりませんでした" : "該当するノートがありません"}</div>`));
     }
     const care = careIds();
-    for (const h of hits) {
+    for (const h of shown) {
       const on = state.selected?.id === h.id ? "on" : "";
       const marks = care.has(h.id) ? " 🔧" : "";
       const item = el(`
@@ -351,6 +384,7 @@ function renderNotes(pane: HTMLElement) {
   let timer: number | undefined;
   search.addEventListener("input", () => {
     state.query = search.value;
+    state.page.list = 0;
     window.clearTimeout(timer);
     timer = window.setTimeout(async () => {
       if (!state.query.trim()) {
@@ -387,6 +421,7 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
 
   const addTag = (t: string) => {
     if (!state.selectedTags.includes(t)) state.selectedTags.push(t);
+    state.page.list = 0;
     render();
   };
   box.querySelectorAll<HTMLButtonElement>(".chip-x").forEach((b) =>
@@ -686,6 +721,7 @@ function renderHome(pane: HTMLElement) {
       <div class="dash-tags" id="dash-tags"><div class="lg-empty">読み込み中…</div></div>
       <div class="dash-head">最近のノート</div>
       <div class="dash-recent"></div>
+      <div class="pager-slot" id="recent-pager"></div>
     </div>
   `);
   box.appendChild(tiles);
@@ -705,7 +741,16 @@ function renderHome(pane: HTMLElement) {
   );
 
   const recentBox = tiles.querySelector<HTMLElement>(".dash-recent")!;
-  for (const h of home.notes.slice(0, 6)) {
+  const RECENT = 6;
+  const recentMax = Math.max(0, Math.ceil(home.notes.length / RECENT) - 1);
+  if (state.page.recent > recentMax) state.page.recent = recentMax;
+  const recentPagerBox = tiles.querySelector<HTMLElement>("#recent-pager")!;
+  const rpg = pager(home.notes.length, RECENT, state.page.recent, (p) => {
+    state.page.recent = p;
+    render();
+  });
+  if (rpg) recentPagerBox.appendChild(rpg);
+  for (const h of home.notes.slice(state.page.recent * RECENT, (state.page.recent + 1) * RECENT)) {
     const row = el(`
       <button class="dash-note">
         <span class="t">${esc(h.title ?? h.id)}</span>
@@ -725,7 +770,10 @@ function renderHome(pane: HTMLElement) {
       return;
     }
     tagsBox.replaceChildren();
-    for (const t of ov.tags) {
+    const TAGS = 12;
+    const tagMax = Math.max(0, Math.ceil(ov.tags.length / TAGS) - 1);
+    if (state.page.tags > tagMax) state.page.tags = tagMax;
+    for (const t of ov.tags.slice(state.page.tags * TAGS, (state.page.tags + 1) * TAGS)) {
       const row = el(`
         <button class="tag-row">
           <span class="tg">${esc(t.tag)}</span>
@@ -740,6 +788,11 @@ function renderHome(pane: HTMLElement) {
       });
       tagsBox.appendChild(row);
     }
+    const tpg = pager(ov.tags.length, TAGS, state.page.tags, (p) => {
+      state.page.tags = p;
+      render();
+    });
+    if (tpg) tagsBox.appendChild(tpg);
     const foot = ov.glossary_note
       ? el(`<button class="tag-foot">📄 タグ運用ノートを開く</button>`)
       : el(`<div class="tag-foot-hint">タグの役割は Claude との会話で決めて「タグ運用」ノートに記録すると、ここに説明が並びます。</div>`);
