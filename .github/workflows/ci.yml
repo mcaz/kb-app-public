@@ -46,6 +46,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
             libappindicator3-dev librsvg2-dev libxdo-dev patchelf
+      # 同期のテストは `git pull --rebase` を通る(rebase はコミットを作るので
+      # 識別子が要る)。開発機では個人の設定が効いているため気づけない
+      - name: git の識別子を設定
+        run: |
+          git config --global user.email "ci@kb-app.invalid"
+          git config --global user.name "kb-app CI"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
