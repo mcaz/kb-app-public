@@ -21,7 +21,8 @@ const state = {
   favorites: [] as Favorite[],
   graphCache: null as GraphData | null,
   listScroll: 0,
-  noteScroll: null as { id: string; top: number } | null,
+  noteScroll: {} as Record<string, number>,
+  secondary: null as NoteView | null,
   localGraph: localStorage.getItem("kb.localGraph") !== "off",
   graphFocus: null as string | null,
   vaultName: "kb",
@@ -294,7 +295,12 @@ function renderNotes(pane: HTMLElement) {
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
   });
-  pane.replaceChildren(list, splitter, el(`<div class="editor" id="editor"></div>`));
+  pane.replaceChildren(
+    list,
+    splitter,
+    state.localGraph && state.selected ? el(`<div class="rel-panel" id="rel-panel"></div>`) : el(`<span hidden></span>`),
+    el(`<div class="editor" id="editor"></div>`),
+  );
 
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
   // 再描画で DOM を作り直すため、位置を明示的に持ち越す(選択でリストが先頭に戻らないように)
@@ -347,7 +353,9 @@ function renderNotes(pane: HTMLElement) {
     void api.noteSearch(state.query.trim()).then((out) => showItems(out.hits, true));
   }
 
-  renderNoteView(document.getElementById("editor")!);
+  const relPanel = document.getElementById("rel-panel");
+  if (relPanel && state.selected) renderRelatedPanel(relPanel, state.selected);
+  renderEditor(document.getElementById("editor")!);
 }
 
 /// タグのオートコンプリート複数選択(検索フィールドの下)。
@@ -453,24 +461,58 @@ function saveFavorite(): Promise<void> {
   });
 }
 
-function renderNoteView(box: HTMLElement) {
+/// 関連パネル(ノート一覧の右)。開いているノートのリンク・近いノート・グラフ入口。
+/// 項目クリックで本文の横に並べて開く(副ペイン)。
+function renderRelatedPanel(box: HTMLElement, n: NoteView) {
+  box.replaceChildren(el(`
+    <div class="rel-inner">
+      <button class="graph-link" id="graph-link">🕸️ グラフで見る</button>
+      <div class="rel-list">
+        <div class="lg-head">🔗 つながっているノート</div>
+        ${n.related.length
+          ? n.related.map(([id, t]) => `<button class="rel ${state.secondary?.id === id ? "on" : ""}" data-id="${esc(id)}">${esc(t ?? id)}</button>`).join("")
+          : `<div class="lg-empty">まだありません</div>`}
+        <div class="lg-head" style="margin-top:12px">✨ 近いノート</div>
+        ${n.similar.length
+          ? n.similar
+              .map(([id, t, d]) => `<button class="rel sim ${state.secondary?.id === id ? "on" : ""}" data-id="${esc(id)}">${esc(t ?? id)}<span class="rd">${d.toFixed(2)}</span></button>`)
+              .join("")
+          : `<div class="lg-empty">見つかりませんでした</div>`}
+      </div>
+    </div>
+  `));
+  box.querySelector("#graph-link")!.addEventListener("click", () => {
+    state.graphFocus = n.id;
+    state.view = "graph";
+    render();
+  });
+  box.querySelectorAll<HTMLElement>(".rel").forEach((a) =>
+    a.addEventListener("click", () => void openBeside(a.dataset.id!)));
+}
+
+/// 本文エリア。主ノート(+ 並べて開いた副ノート)を横に並べる。
+function renderEditor(box: HTMLElement) {
   const n = state.selected;
   if (!n) {
     box.replaceChildren(el(`<div class="placeholder">左の一覧からノートを選ぶと、ここに表示されます。ノートは Claude との会話から育ちます。</div>`));
     return;
   }
+  box.replaceChildren();
+  box.appendChild(notePane(n, false));
+  if (state.secondary) box.appendChild(notePane(state.secondary, true));
+}
+
+/// 1ノート分のペイン(本文+操作)。副ペインは閉じる/主にするボタン付き。
+function notePane(n: NoteView, secondary: boolean): HTMLElement {
   const statusPill =
     n.status === "deprecated" ? `<span class="status-pill deprecated">しまってある</span>` : "";
-  const tagChips = n.tags.map((t) => {
-    return `<button class="tag-chip" data-tag="${esc(t)}">${esc(t)}</button>`;
-  }).join("");
+  const tagChips = n.tags.map((t) => `<button class="tag-chip" data-tag="${esc(t)}">${esc(t)}</button>`).join("");
   const attachChips = n.attachments
     .map(
       ([name, size]) =>
         `<span class="chip">📎 ${esc(name)} <i>${fmtSize(size)}</i><button class="chip-x" data-name="${esc(name)}">×</button></span>`
     )
     .join("");
-  // このノートへのお手入れ提案
   const myCare = state.home!.care.filter((c) => c.a === n.id || c.b === n.id);
   const careBars = myCare
     .map(
@@ -480,99 +522,42 @@ function renderNoteView(box: HTMLElement) {
       </div>`
     )
     .join("");
-  box.replaceChildren(el(`
-    <div class="note-split">
-     <div class="note-main">
+  const pane = el(`
+    <div class="note-pane ${secondary ? "secondary" : ""}">
       <div class="title-row">
         <div class="title">${esc(n.title)}</div>
-        <button class="quiet small" id="lg-toggle" title="関連パネル">${state.localGraph ? "🔗 隠す" : "🔗 表示"}</button>
+        ${secondary
+          ? `<button class="quiet small" data-act="main">主にする</button><button class="quiet small" data-act="close">×</button>`
+          : `<button class="quiet small" data-act="toggle-rel" title="関連パネル">${state.localGraph ? "🔗 隠す" : "🔗 表示"}</button>`}
       </div>
       <div class="meta">${fmtDate(n.generated_at)} ${statusPill} ${tagChips}</div>
       ${careBars}
-      <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
-      <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
+      <div style="margin: 2px 0 12px;"><button class="small" data-act="talk">🤖 このノートについて Claude と話す</button></div>
+      <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" data-act="attach">＋ ファイルを添付</button><input type="file" class="attach-file" multiple hidden /></div>
       <div class="preview">${marked.parse(n.body) as string}</div>
-     </div>
-     ${state.localGraph ? `<div class="local-graph" id="local-graph">
-        <button class="graph-link" id="graph-link">🕸️ グラフで見る</button>
-        <div class="rel-list">
-          <div class="lg-head">🔗 つながっているノート</div>
-          ${n.related.length
-            ? n.related.map(([id, t]) => `<button class="rel" data-id="${esc(id)}">${esc(t ?? id)}</button>`).join("")
-            : `<div class="lg-empty">まだありません</div>`}
-          <div class="lg-head" style="margin-top:12px">✨ 近いノート</div>
-          ${n.similar.length
-            ? n.similar
-                .map(([id, t, d]) => `<button class="rel sim" data-id="${esc(id)}">${esc(t ?? id)}<span class="rd">${d.toFixed(2)}</span></button>`)
-                .join("")
-            : `<div class="lg-empty">見つかりませんでした</div>`}
-        </div>
-      </div>` : ""}
     </div>
-  `));
-  box.querySelector("#lg-toggle")!.addEventListener("click", () => {
+  `);
+
+  const reload = async () => {
+    if (secondary) state.secondary = await api.noteGet(n.id);
+    else state.selected = await api.noteGet(n.id);
+  };
+
+  pane.querySelector('[data-act="toggle-rel"]')?.addEventListener("click", () => {
     state.localGraph = !state.localGraph;
     localStorage.setItem("kb.localGraph", state.localGraph ? "on" : "off");
     render();
   });
-  box.querySelector("#graph-link")?.addEventListener("click", () => {
-    state.graphFocus = n.id;   // グラフページをこのノート中心で開く
-    state.view = "graph";
+  pane.querySelector('[data-act="close"]')?.addEventListener("click", () => {
+    state.secondary = null;
     render();
   });
-
-  if (state.noteScroll?.id === n.id) box.scrollTop = state.noteScroll.top;
-  box.onscroll = () => { state.noteScroll = { id: n.id, top: box.scrollTop }; };
-
-  box.querySelectorAll<HTMLButtonElement>("[data-care-ok]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const c = myCare[Number(b.dataset.careOk)];
-      try {
-        await api.careAccept(c.key);
-        state.graphCache = null;
-        await refreshHome();
-        state.selected = await api.noteGet(n.id);
-        render();
-        toast("つなげました");
-      } catch (e) {
-        toast(`${e}`);
-      }
-    })
-  );
-  box.querySelectorAll<HTMLButtonElement>("[data-care-no]").forEach((b) =>
-    b.addEventListener("click", async () => {
-      const c = myCare[Number(b.dataset.careNo)];
-      await api.careDismiss(c.key);
-      await refreshHome();
-      render();
-      toast("了解、そのままにします");
-    })
-  );
-  box.querySelectorAll<HTMLButtonElement>(".tag-chip").forEach((b) =>
-    b.addEventListener("click", () => {
-      if (!state.selectedTags.includes(b.dataset.tag!)) state.selectedTags.push(b.dataset.tag!);
-      render();
-    })
-  );
-  const fileInput = box.querySelector<HTMLInputElement>("#attach-file")!;
-  box.querySelector("#attach-add")!.addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", async () => {
-    for (const f of Array.from(fileInput.files ?? [])) {
-      await addAttachmentFile(n.id, f);
-    }
-    state.selected = await api.noteGet(n.id);
+  pane.querySelector('[data-act="main"]')?.addEventListener("click", () => {
+    state.selected = n; // 副 → 主へ昇格(関連パネルもこのノートのものに切り替わる)
+    state.secondary = null;
     render();
-    toast("添付しました");
   });
-  box.querySelectorAll<HTMLButtonElement>(".chip-x").forEach((b) =>
-    b.addEventListener("click", async () => {
-      await api.attachmentRemove(n.id, b.dataset.name!);
-      state.selected = await api.noteGet(n.id);
-      render();
-      toast("添付を削除しました(履歴には残ります)");
-    })
-  );
-  document.getElementById("talk")!.addEventListener("click", async () => {
+  pane.querySelector('[data-act="talk"]')!.addEventListener("click", async () => {
     try {
       await api.launchAi(n.id);
       toast("Claude を開きました");
@@ -580,9 +565,57 @@ function renderNoteView(box: HTMLElement) {
       toast(`${e}`);
     }
   });
-  hydratePreview(box.querySelector<HTMLElement>(".preview")!, n);
-  box.querySelectorAll<HTMLElement>(".rel").forEach((a) =>
-    a.addEventListener("click", () => void openNote(a.dataset.id!)));
+  const fileInput = pane.querySelector<HTMLInputElement>(".attach-file")!;
+  pane.querySelector('[data-act="attach"]')!.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    for (const f of Array.from(fileInput.files ?? [])) await addAttachmentFile(n.id, f);
+    await reload();
+    render();
+    toast("添付しました");
+  });
+  pane.querySelectorAll<HTMLButtonElement>(".chip-x").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api.attachmentRemove(n.id, b.dataset.name!);
+      await reload();
+      render();
+      toast("添付を削除しました(履歴には残ります)");
+    })
+  );
+  pane.querySelectorAll<HTMLButtonElement>("[data-care-ok]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const c = myCare[Number(b.dataset.careOk)];
+      try {
+        await api.careAccept(c.key);
+        state.graphCache = null;
+        await refreshHome();
+        await reload();
+        render();
+        toast("つなげました");
+      } catch (e) {
+        toast(`${e}`);
+      }
+    })
+  );
+  pane.querySelectorAll<HTMLButtonElement>("[data-care-no]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      await api.careDismiss(myCare[Number(b.dataset.careNo)].key);
+      await refreshHome();
+      render();
+      toast("了解、そのままにします");
+    })
+  );
+  pane.querySelectorAll<HTMLButtonElement>(".tag-chip").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (!state.selectedTags.includes(b.dataset.tag!)) state.selectedTags.push(b.dataset.tag!);
+      render();
+    })
+  );
+  hydratePreview(pane.querySelector<HTMLElement>(".preview")!, n);
+
+  // ペインごとにスクロール位置を持ち越す(再描画で DOM を作り直すため)
+  requestAnimationFrame(() => { pane.scrollTop = state.noteScroll[n.id] ?? 0; });
+  pane.onscroll = () => { state.noteScroll[n.id] = pane.scrollTop; };
+  return pane;
 }
 
 /// プレビュー後処理: vault 内画像を asset プロトコルで表示し、ノートリンクを遷移可能に。
@@ -600,6 +633,21 @@ function hydratePreview(root: HTMLElement, n: NoteView) {
       if (href.endsWith(".md")) void openNote(href.replace(/^\//, "").replace(/\.md$/, ""));
     });
   });
+}
+
+/// 関連パネルからの「並べて開く」(副ペイン)。同じノートなら閉じる(トグル)。
+async function openBeside(id: string) {
+  if (state.secondary?.id === id) {
+    state.secondary = null;
+    render();
+    return;
+  }
+  try {
+    state.secondary = await api.noteGet(id);
+    render();
+  } catch {
+    toast("そのノートはまだありません");
+  }
 }
 
 async function openNote(id: string) {

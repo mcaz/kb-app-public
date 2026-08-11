@@ -180,22 +180,22 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
   width: 260px; flex: none; display: flex; flex-direction: column;
   border-left: 1px solid var(--line); padding-left: 14px;
 }
-.local-graph .lg-head { font-size: 11.5px; color: var(--muted); letter-spacing: .08em; margin-bottom: 6px; }
-.local-graph .graph-link {
+.rel-panel .lg-head, .local-graph .lg-head { font-size: 11.5px; color: var(--muted); letter-spacing: .08em; margin-bottom: 6px; }
+.rel-panel .graph-link, .local-graph .graph-link {
   width: 100%; font-size: 12.5px; padding: 6px 10px; text-align: left;
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
   color: var(--ink); cursor: pointer; margin-bottom: 10px;
 }
-.local-graph .graph-link:hover { background: var(--sel); border-color: var(--grow); }
-.local-graph .rel-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-.local-graph .rel-list .rel {
+.rel-panel .graph-link:hover, .local-graph .graph-link:hover { background: var(--sel); border-color: var(--grow); }
+.rel-panel .rel-list, .local-graph .rel-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.rel-panel .rel-list .rel, .local-graph .rel-list .rel {
   display: block; width: 100%; text-align: left; font-size: 12px; cursor: pointer;
   padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px;
   background: var(--panel); color: var(--grow);
 }
-.local-graph .rel-list .rel:hover { background: var(--sel); }
-.local-graph .rel-list .rel.sim { color: var(--ink); display: flex; justify-content: space-between; gap: 8px; }
-.local-graph .rel-list .rel .rd { color: var(--muted); font-size: 10.5px; }
+.rel-panel .rel-list .rel:hover, .local-graph .rel-list .rel:hover { background: var(--sel); }
+.rel-panel .rel-list .rel.sim, .local-graph .rel-list .rel.sim { color: var(--ink); display: flex; justify-content: space-between; gap: 8px; }
+.rel-panel .rel-list .rel .rd, .local-graph .rel-list .rel .rd { color: var(--muted); font-size: 10.5px; }
 .lg-canvas { position: absolute; inset: 0; }
 .lg-canvas canvas { width: 100%; height: 100%; display: block; }
 .lg-empty { color: var(--muted); font-size: 12px; }
@@ -338,3 +338,6 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
   pointer-events: none;
 }
 .toast.show { opacity: .92; }
+
+/* 関連パネルで開いている項目 */
+.rel-panel .rel.on { border-color: var(--grow); background: var(--sel); }
