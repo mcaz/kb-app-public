@@ -199,12 +199,18 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .rel-panel .rel-list, .local-graph .rel-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .rel-panel .rel-list .rel, .local-graph .rel-list .rel {
   display: block; width: 100%; text-align: left; font-size: 12px; cursor: pointer;
-  padding: 5px 9px; border: 1px solid var(--line); border-radius: 7px;
-  background: var(--panel); color: var(--grow);
+  padding: 5px 9px; border-radius: 7px;
+  /* つながっている = 確定した関係(緑系) */
+  background: var(--grow-soft); border: 1px solid var(--grow-soft); color: var(--grow);
 }
-.rel-panel .rel-list .rel:hover, .local-graph .rel-list .rel:hover { background: var(--sel); }
-.rel-panel .rel-list .rel.sim, .local-graph .rel-list .rel.sim { color: var(--ink); display: flex; justify-content: space-between; gap: 8px; }
-.rel-panel .rel-list .rel .rd, .local-graph .rel-list .rel .rd { color: var(--muted); font-size: 10.5px; }
+.rel-panel .rel-list .rel:hover, .local-graph .rel-list .rel:hover { border-color: var(--grow); }
+/* 近いノート = AI がまだ関連づけていない候補(琥珀系) */
+.rel-panel .rel-list .rel.sim, .local-graph .rel-list .rel.sim {
+  background: var(--prop-soft); border-color: var(--prop-soft); color: var(--prop);
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.rel-panel .rel-list .rel.sim:hover, .local-graph .rel-list .rel.sim:hover { border-color: var(--prop); }
+.rel-panel .rel-list .rel .rd, .local-graph .rel-list .rel .rd { color: var(--prop); opacity: .75; font-size: 10.5px; }
 .lg-canvas { position: absolute; inset: 0; }
 .lg-canvas canvas { width: 100%; height: 100%; display: block; }
 .lg-empty { color: var(--muted); font-size: 12px; }
@@ -349,4 +355,4 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 .toast.show { opacity: .92; }
 
 /* 関連パネルで開いている項目 */
-.rel-panel .rel.on { border-color: var(--grow); background: var(--sel); }
+.rel-panel .rel.on { border-color: var(--ink); font-weight: 600; }
