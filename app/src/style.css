@@ -78,7 +78,7 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
 .side .nav.fav:hover .fav-x { opacity: 1; }
 .side .nav.fav .fav-x:hover { color: var(--danger); }
 
-.list { width: 230px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; font-size: 13px; display: flex; flex-direction: column; min-height: 0; }
+.list { width: 230px; min-width: 200px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; font-size: 13px; display: flex; flex-direction: column; min-height: 0; }
 /* フィルタチップ(状態+タグ) */
 .list .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 10px 8px; }
 .list .chips .chip-f {
@@ -253,7 +253,7 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
   background: var(--panel-2);
 }
 .rel-inner { display: flex; flex-direction: column; height: 100%; }
-@media (max-width: 1100px) { .rel-panel { display: none; } }
+@media (max-width: 1040px) { .rel-panel { display: none; } }
 
 /* 本文エリア: 主ノート(+ 横に並べた副ノート) */
 .editor { display: flex; flex-direction: row; gap: 0; padding: 0; overflow: hidden; }
@@ -450,3 +450,9 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 
 /* 関連パネルで開いている項目 */
 .rel-panel .rel.on { border-color: var(--ink); font-weight: 600; }
+
+/* 900〜1040px の帯: サイドナビを細くして本文の幅を確保 */
+@media (max-width: 1040px) {
+  .side { width: 132px; }
+  .note-pane { padding: 16px 16px; }
+}
