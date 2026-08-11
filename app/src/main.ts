@@ -23,6 +23,7 @@ const state = {
   listScroll: 0,
   noteScroll: {} as Record<string, number>,
   page: { list: 0, recent: 0, tags: 0 },
+  pageSize: Number(localStorage.getItem("kb.pageSize")) || 30,
   tagOv: null as TagOverview | null,
   dashScroll: 0,
   secondary: null as NoteView | null,
@@ -57,8 +58,8 @@ function fmtDay(iso: string | null): string {
 function fmtDateTime(iso: string | null): string {
   if (!iso) return "不明";
   const d = new Date(iso);
-  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 function fmtSize(bytes: number): string {
@@ -191,7 +192,6 @@ function renderOnboarding() {
 // ---- 骨格 ----
 function render() {
   const home = state.home!;
-  const pendingCount = home.care.length;
   const degraded = home.degraded.length
     ? `<div class="degraded">⚠ ${home.degraded.map(esc).join(" / ")}</div>` : "";
   const shell = el(`
@@ -201,7 +201,7 @@ function render() {
         <nav class="side">
           <div class="nb">${esc(state.vaultName)}</div>
           <button class="nav ${state.view === "home" ? "on" : ""}" id="nav-home"><span>🏠 ホーム</span></button>
-          <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span>${pendingCount ? `<span class="badge">${pendingCount}</span>` : ""}</button>
+          <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span></button>
           <button class="nav ${state.view === "graph" ? "on" : ""}" id="nav-graph"><span>🕸️ グラフ</span></button>
           <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
           ${state.favorites.length ? `<div class="fav-head">★ お気に入り</div>` : ""}
@@ -324,6 +324,12 @@ function renderNotes(pane: HTMLElement) {
       <div class="tag-select" id="tag-select"></div>
       <div class="items" id="items"></div>
       <div class="pager-slot" id="list-pager"></div>
+      <div class="page-size">
+        <span>表示件数</span>
+        <select id="page-size">
+          ${[30, 50, 100, 200].map((n) => `<option value="${n}" ${state.pageSize === n ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
+      </div>
     </div>
   `);
   buildTagSelect(list.querySelector<HTMLElement>("#tag-select")!, home.tags.map(([t]) => t));
@@ -338,6 +344,13 @@ function renderNotes(pane: HTMLElement) {
   if (showRel) pane.replaceChildren(list, splitter, relPanelEl, relSplitter, editorEl);
   else pane.replaceChildren(list, splitter, editorEl);
 
+  list.querySelector<HTMLSelectElement>("#page-size")!.addEventListener("change", (e) => {
+    state.pageSize = Number((e.target as HTMLSelectElement).value);
+    localStorage.setItem("kb.pageSize", String(state.pageSize));
+    state.page.list = 0;
+    render();
+  });
+
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
   // 再描画で DOM を作り直すため、位置を明示的に持ち越す(選択でリストが先頭に戻らないように)
   itemsBox.addEventListener("scroll", () => { state.listScroll = itemsBox.scrollTop; });
@@ -346,7 +359,7 @@ function renderNotes(pane: HTMLElement) {
     searchMode: boolean
   ) => {
     const hits = allHits.filter((h) => matchFilter(h));
-    const PAGE = 25;
+    const PAGE = state.pageSize;
     const maxPage = Math.max(0, Math.ceil(hits.length / PAGE) - 1);
     if (state.page.list > maxPage) state.page.list = maxPage;
     const shown = hits.slice(state.page.list * PAGE, (state.page.list + 1) * PAGE);
@@ -371,7 +384,7 @@ function renderNotes(pane: HTMLElement) {
         <div class="item ${on}">
           <div class="t">${esc(h.title ?? h.id)}${marks}</div>
           <div class="d">${esc(h.snippet.slice(0, 80))}</div>
-          <div class="dates">作成 ${fmtDay(h.created)} · 更新 ${fmtDay(h.updated)}</div>
+          <div class="dates">作成 ${fmtDateTime(h.created)}<br>更新 ${fmtDateTime(h.updated)}</div>
         </div>
       `);
       item.addEventListener("click", () => void openNote(h.id));
