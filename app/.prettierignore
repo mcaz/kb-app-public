@@ -1,0 +1,7 @@
+dist
+node_modules
+src-tauri/target
+# Tauri の生成物
+src-tauri/gen
+# tauri-specta の生成物(整形しても次の生成で戻る)
+src/lib/bindings.ts
