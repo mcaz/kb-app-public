@@ -20,6 +20,8 @@ const state = {
   selectedTags: [] as string[],
   favorites: [] as Favorite[],
   graphCache: null as GraphData | null,
+  listScroll: 0,
+  noteScroll: null as { id: string; top: number } | null,
   localGraph: localStorage.getItem("kb.localGraph") !== "off",
   vaultName: "kb",
   home: null as HomeState | null,
@@ -290,6 +292,8 @@ function renderNotes(pane: HTMLElement) {
   pane.replaceChildren(list, splitter, el(`<div class="editor" id="editor"></div>`));
 
   const itemsBox = list.querySelector<HTMLElement>("#items")!;
+  // 再描画で DOM を作り直すため、位置を明示的に持ち越す(選択でリストが先頭に戻らないように)
+  itemsBox.addEventListener("scroll", () => { state.listScroll = itemsBox.scrollTop; });
   const showItems = (
     allHits: { id: string; title: string | null; status: string; snippet: string; tags: string[] }[],
     searchMode: boolean
@@ -312,6 +316,7 @@ function renderNotes(pane: HTMLElement) {
       item.addEventListener("click", () => void openNote(h.id));
       itemsBox.appendChild(item);
     }
+    itemsBox.scrollTop = state.listScroll; // 溢れなければブラウザが 0 に丸める
   };
 
   if (!state.searching) showItems(home.notes, false);
@@ -502,6 +507,9 @@ function renderNoteView(box: HTMLElement) {
   });
   const lgBody = box.querySelector<HTMLElement>("#lg-body");
   if (lgBody) void renderLocalGraph(lgBody, n.id);
+
+  if (state.noteScroll?.id === n.id) box.scrollTop = state.noteScroll.top;
+  box.onscroll = () => { state.noteScroll = { id: n.id, top: box.scrollTop }; };
 
   box.querySelectorAll<HTMLButtonElement>("[data-care-ok]").forEach((b) =>
     b.addEventListener("click", async () => {
