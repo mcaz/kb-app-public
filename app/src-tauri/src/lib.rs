@@ -141,6 +141,7 @@ struct NoteView {
     tags: Vec<String>,
     generated_at: Option<String>,
     related: Vec<(String, Option<String>)>,
+    similar: Vec<(String, Option<String>, f32)>,
     attachments: Vec<(String, u64)>,
     vault_root: String,
 }
@@ -160,6 +161,7 @@ fn note_get(id: String) -> CmdResult<NoteView> {
         tags: note.front.tags.clone(),
         generated_at: note.front.generated.as_ref().map(|g| g.at.clone()),
         related: related_of(&conn, Some(&id)).unwrap_or_default(),
+        similar: kb_core::search::similar_notes(&conn, &id, 6).unwrap_or_default(),
         attachments: vault.list_attachments(&id),
         vault_root: vault.root.display().to_string(),
         id,

@@ -246,6 +246,48 @@ pub fn tag_counts(conn: &Connection, limit: usize) -> Result<Vec<(String, usize)
     Ok(v)
 }
 
+/// 指定ノートと意味が近いノート(自分自身・リンク済み・退役は除く)。
+/// リンクされていない関連 = Obsidian の unlinked mentions に相当し、埋め込みならではの発見。
+pub fn similar_notes(
+    conn: &Connection,
+    id: &str,
+    limit: usize,
+) -> Result<Vec<(String, Option<String>, f32)>> {
+    use crate::embed;
+    let blob: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT embedding FROM note_vecs WHERE id = ?1 AND stamp = ?2",
+            rusqlite::params![id, embed::EMBED_STAMP],
+            |r| r.get(0),
+        )
+        .ok();
+    let Some(blob) = blob else { return Ok(Vec::new()) }; // 未埋め込み・段0 は空
+    let me = embed::from_blob(&blob);
+    let linked: std::collections::HashSet<String> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT dst FROM links WHERE src = ?1 UNION SELECT src FROM links WHERE dst = ?1",
+        )?;
+        let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    let mut out = Vec::new();
+    let mut stmt = conn.prepare_cached(
+        "SELECT title FROM notes WHERE id = ?1 AND status != 'deprecated'",
+    )?;
+    for (nid, dist) in embed::knn(conn, &me, limit + linked.len() + 5)? {
+        if out.len() >= limit {
+            break;
+        }
+        if nid == id || linked.contains(&nid) || dist > embed::RELATED_DISTANCE {
+            continue;
+        }
+        if let Ok(title) = stmt.query_row([&nid], |r| r.get::<_, Option<String>>(0)) {
+            out.push((nid, title, dist));
+        }
+    }
+    Ok(out)
+}
+
 /// 指定ノートの「つながり」(リンク先+被リンク、最大5件)。
 pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Option<String>)>> {
     let Some(id) = id else { return Ok(Vec::new()) };

@@ -475,14 +475,6 @@ function renderNoteView(box: HTMLElement) {
       </div>`
     )
     .join("");
-  const relatedSection = n.related.length
-    ? `<div class="related-section"><div class="head">🔗 つながり</div><ul>${n.related
-        .map(
-          ([id, t]) =>
-            `<li><button class="rel" data-id="${esc(id)}">${esc(t ?? id)}<span class="rid">${esc(id)}</span></button></li>`
-        )
-        .join("")}</ul></div>`
-    : "";
   box.replaceChildren(el(`
     <div class="note-split">
      <div class="note-main">
@@ -495,9 +487,23 @@ function renderNoteView(box: HTMLElement) {
       <div style="margin: 2px 0 12px;"><button class="small" id="talk">🤖 このノートについて Claude と話す</button></div>
       <div class="attach">${n.attachments.length ? `<span class="attach-label">添付:</span>` : ""}${attachChips}<button class="quiet small" id="attach-add">＋ ファイルを添付</button><input type="file" id="attach-file" multiple hidden /></div>
       <div class="preview">${marked.parse(n.body) as string}</div>
-      ${relatedSection}
      </div>
-     ${state.localGraph ? `<div class="local-graph" id="local-graph"><div class="lg-head">🕸️ つながり</div><div class="lg-body" id="lg-body"><div class="lg-empty">読み込み中…</div></div></div>` : ""}
+     ${state.localGraph ? `<div class="local-graph" id="local-graph">
+        <div class="lg-head">🕸️ つながりの地図</div>
+        <div class="lg-body" id="lg-body"><div class="lg-empty">読み込み中…</div></div>
+        <div class="rel-list">
+          <div class="lg-head">🔗 つながっているノート</div>
+          ${n.related.length
+            ? n.related.map(([id, t]) => `<button class="rel" data-id="${esc(id)}">${esc(t ?? id)}</button>`).join("")
+            : `<div class="lg-empty">まだありません</div>`}
+          <div class="lg-head" style="margin-top:12px">✨ 近いノート</div>
+          ${n.similar.length
+            ? n.similar
+                .map(([id, t, d]) => `<button class="rel sim" data-id="${esc(id)}">${esc(t ?? id)}<span class="rd">${d.toFixed(2)}</span></button>`)
+                .join("")
+            : `<div class="lg-empty">見つかりませんでした</div>`}
+        </div>
+      </div>` : ""}
     </div>
   `));
   box.querySelector("#lg-toggle")!.addEventListener("click", () => {
