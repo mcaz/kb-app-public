@@ -14,6 +14,32 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// 現在の vault のレジストリ名(お気に入り等、vault ごとの UI 設定のキー)。
+fn current_vault_name() -> CmdResult<String> {
+    let reg = Registry::load().map_err(err)?;
+    let path = reg.resolve(None).map_err(err)?;
+    reg.vaults
+        .iter()
+        .find(|v| v.path == path)
+        .map(|v| v.name.clone())
+        .ok_or_else(|| "vault 名が特定できない".to_string())
+}
+
+#[tauri::command]
+fn favorites_list() -> CmdResult<Vec<kb_core::favorites::Favorite>> {
+    Ok(kb_core::favorites::list(&current_vault_name()?))
+}
+
+#[tauri::command]
+fn favorite_add(name: String, tags: Vec<String>) -> CmdResult<()> {
+    kb_core::favorites::add(&current_vault_name()?, &name, &tags).map_err(err)
+}
+
+#[tauri::command]
+fn favorite_remove(name: String) -> CmdResult<()> {
+    kb_core::favorites::remove(&current_vault_name()?, &name).map_err(err)
+}
+
 fn default_vault() -> CmdResult<Vault> {
     let reg = Registry::load().map_err(err)?;
     let path = reg.resolve(None).map_err(err)?;
@@ -410,6 +436,9 @@ pub fn run() {
             care_accept,
             care_dismiss,
             graph_data,
+            favorites_list,
+            favorite_add,
+            favorite_remove,
             connect_state,
             connect_desktop,
             backup_now,

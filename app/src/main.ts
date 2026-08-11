@@ -8,7 +8,7 @@ import {
   type Simulation, type SimulationLinkDatum, type SimulationNodeDatum,
 } from "d3-force";
 import { marked } from "marked";
-import { api, type ConnectState, type GraphData, type HomeState, type NoteView } from "./ipc";
+import { api, type ConnectState, type Favorite, type GraphData, type HomeState, type NoteView } from "./ipc";
 
 const inTauri = "__TAURI_INTERNALS__" in window;
 
@@ -18,6 +18,7 @@ type View = "home" | "notes" | "graph" | "connect";
 const state = {
   view: "notes" as View,
   selectedTags: [] as string[],
+  favorites: [] as Favorite[],
   vaultName: "kb",
   home: null as HomeState | null,
   selected: null as NoteView | null,
@@ -153,7 +154,9 @@ async function boot() {
 }
 
 async function refreshHome() {
-  state.home = await api.homeState();
+  const [home, favs] = await Promise.all([api.homeState(), api.favoritesList()]);
+  state.home = home;
+  state.favorites = favs;
 }
 
 function renderOnboarding() {
@@ -189,6 +192,17 @@ function render() {
           <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span>${pendingCount ? `<span class="badge">${pendingCount}</span>` : ""}</button>
           <button class="nav ${state.view === "graph" ? "on" : ""}" id="nav-graph"><span>🕸️ グラフ</span></button>
           <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
+          ${state.favorites.length ? `<div class="fav-head">★ お気に入り</div>` : ""}
+          ${state.favorites
+            .map((f) => {
+              const on = state.view === "notes"
+                && f.tags.length === state.selectedTags.length
+                && f.tags.every((t) => state.selectedTags.includes(t));
+              return `<div class="nav fav ${on ? "on" : ""}" data-fav="${esc(f.name)}" title="${esc(f.tags.join(" / "))}">
+                <span>${esc(f.name)}</span><span class="fav-x" data-favx="${esc(f.name)}">×</span>
+              </div>`;
+            })
+            .join("")}
         </nav>
         <div id="pane"></div>
       </div>
@@ -199,6 +213,25 @@ function render() {
   document.getElementById("nav-notes")!.addEventListener("click", () => { state.view = "notes"; render(); });
   document.getElementById("nav-graph")!.addEventListener("click", () => { state.view = "graph"; render(); });
   document.getElementById("nav-connect")!.addEventListener("click", () => { state.view = "connect"; render(); });
+  shell.querySelectorAll<HTMLElement>("[data-fav]").forEach((f) =>
+    f.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).dataset.favx) return; // × は別処理
+      const fav = state.favorites.find((x) => x.name === f.dataset.fav);
+      if (!fav) return;
+      state.selectedTags = [...fav.tags];
+      state.view = "notes";
+      render();
+    })
+  );
+  shell.querySelectorAll<HTMLElement>("[data-favx]").forEach((x) =>
+    x.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await api.favoriteRemove(x.dataset.favx!);
+      state.favorites = await api.favoritesList();
+      render();
+      toast("お気に入りを外しました");
+    })
+  );
   const pane = document.getElementById("pane")!;
   pane.style.display = "flex";
   pane.style.flex = "1";
@@ -311,7 +344,9 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
   const selectedChips = state.selectedTags
     .map((t) => `<span class="tsel-chip">${esc(t)}<button class="chip-x" data-tag="${esc(t)}">×</button></span>`)
     .join("");
-  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>`;
+  const saveBtn = state.selectedTags.length ? `<button class="fav-save" id="fav-save" title="この組み合わせをお気に入りに保存">★</button>` : "";
+  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>${saveBtn}`;
+  box.querySelector("#fav-save")?.addEventListener("click", () => void saveFavorite());
   const input = box.querySelector<HTMLInputElement>("#tag-input")!;
   const dd = box.querySelector<HTMLElement>("#tag-dd")!;
 
@@ -357,6 +392,52 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
     } else if (e.key === "Escape") {
       dd.hidden = true;
     }
+  });
+}
+
+/// 選択中のタグをお気に入りとして保存(名前はアプリ内モーダルで入力)。
+function saveFavorite(): Promise<void> {
+  return new Promise((resolve) => {
+    const tags = [...state.selectedTags];
+    const overlay = el(`
+      <div class="modal-overlay">
+        <div class="modal">
+          <div class="modal-title">お気に入りに保存</div>
+          <div class="modal-desc">${tags.map((t) => esc(t)).join(" / ")}</div>
+          <input id="fav-name" placeholder="名前(例: 開発まわり)" value="${esc(tags.join("・"))}" />
+          <div class="modal-row">
+            <button class="primary" id="fav-ok">保存</button>
+            <button class="quiet" id="fav-cancel">やめる</button>
+          </div>
+        </div>
+      </div>
+    `);
+    const input = overlay.querySelector<HTMLInputElement>("#fav-name")!;
+    const done = () => { overlay.remove(); resolve(); };
+    const commit = async () => {
+      const name = input.value.trim();
+      if (!name) { toast("名前を入れてください"); return; }
+      try {
+        await api.favoriteAdd(name, tags);
+        state.favorites = await api.favoritesList();
+        done();
+        render();
+        toast("お気に入りに保存しました");
+      } catch (e) {
+        done();
+        toast(`${e}`);
+      }
+    };
+    overlay.querySelector("#fav-ok")!.addEventListener("click", () => void commit());
+    overlay.querySelector("#fav-cancel")!.addEventListener("click", done);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") void commit();
+      if (e.key === "Escape") done();
+    });
+    document.body.appendChild(overlay);
+    input.focus();
+    input.select();
   });
 }
 

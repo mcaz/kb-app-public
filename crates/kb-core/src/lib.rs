@@ -7,6 +7,7 @@ pub use rusqlite;
 pub mod care;
 pub mod connect;
 pub mod embed;
+pub mod favorites;
 pub mod frontmatter;
 pub mod import;
 pub mod index;

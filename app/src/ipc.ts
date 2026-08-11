@@ -36,6 +36,8 @@ export interface NoteView {
   vault_root: string;
 }
 
+export interface Favorite { name: string; tags: string[] }
+
 export interface GraphData {
   nodes: { id: string; title: string; origin: string | null; status: string; degree: number }[];
   edges: [string, string][];
@@ -102,8 +104,28 @@ const demoCare: CareProposal[] = [
   },
 ];
 
+let demoFavorites: Favorite[] = [{ name: "手続きまわり", tags: ["手続き"] }];
+
 // ---- API ----
 export const api = {
+  favoritesList(): Promise<Favorite[]> {
+    if (!inTauri) return demo(demoFavorites);
+    return invoke("favorites_list");
+  },
+  favoriteAdd(name: string, tags: string[]): Promise<void> {
+    if (!inTauri) {
+      demoFavorites = demoFavorites.filter((f) => f.name !== name).concat([{ name, tags }]);
+      return demo(undefined);
+    }
+    return invoke("favorite_add", { name, tags });
+  },
+  favoriteRemove(name: string): Promise<void> {
+    if (!inTauri) {
+      demoFavorites = demoFavorites.filter((f) => f.name !== name);
+      return demo(undefined);
+    }
+    return invoke("favorite_remove", { name });
+  },
   setupState(): Promise<SetupState> {
     if (!inTauri) {
       const onb = new URLSearchParams(location.search).get("screen") === "onboarding";

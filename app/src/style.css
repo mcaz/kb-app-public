@@ -69,6 +69,14 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
   padding: 0 7px; line-height: 18px; height: 18px;
 }
 .side .grow-btn { margin-top: auto; }
+.side .fav-head {
+  font-size: 10.5px; letter-spacing: .1em; color: var(--muted);
+  padding: 12px 10px 4px; margin-top: 4px; border-top: 1px solid var(--line);
+}
+.side .nav.fav { cursor: pointer; font-size: 12.5px; }
+.side .nav.fav .fav-x { opacity: 0; color: var(--muted); padding: 0 2px; }
+.side .nav.fav:hover .fav-x { opacity: 1; }
+.side .nav.fav .fav-x:hover { color: var(--danger); }
 
 .list { width: 230px; flex: none; border-right: 1px solid var(--line); padding: 10px 0; font-size: 13px; display: flex; flex-direction: column; min-height: 0; }
 /* フィルタチップ(状態+タグ) */
@@ -98,6 +106,12 @@ input:focus, textarea:focus { outline: 2px solid var(--grow-soft); border-color:
   width: 100%; border: none; background: transparent; padding: 3px 4px; font-size: 12px;
 }
 .tsel-wrap input:focus { outline: none; }
+.fav-save {
+  border: 1px solid var(--line); background: var(--chip); color: var(--prop);
+  border-radius: 7px; padding: 1px 8px; font-size: 12px; cursor: pointer; line-height: 1.5;
+}
+.fav-save:hover { border-color: var(--prop); }
+
 .tag-dd {
   position: absolute; top: 100%; left: 0; z-index: 20; min-width: 160px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
