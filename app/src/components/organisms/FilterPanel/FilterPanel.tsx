@@ -15,6 +15,7 @@ import {
 import { NamePromptDialog } from "@/components/molecules/NamePromptDialog";
 import { TagCombobox } from "@/components/molecules/TagCombobox";
 import type { Favorite, Period, SortKey } from "@/lib/api";
+import { useErrorText } from "@/hooks/useErrorText";
 import { useFavoriteAdd, useFavoriteRemove, useFavorites } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
@@ -30,6 +31,7 @@ export function FilterPanel({ allTags }: FilterPanelProps) {
   const { t } = useTranslation(["notes", "common"]);
   const session = useSession();
   const { data: favorites = [] } = useFavorites();
+  const errorText = useErrorText();
   const favoriteAdd = useFavoriteAdd();
   const favoriteRemove = useFavoriteRemove();
   const [prompt, setPrompt] = useState<"save" | "rename" | null>(null);
@@ -169,7 +171,7 @@ export function FilterPanel({ allTags }: FilterPanelProps) {
               session.setActiveFav(name);
               toast(prompt === "rename" ? t("common:toast.renamed") : t("favorite.saved"));
             },
-            onError: (e) => toast(String(e)),
+            onError: (e) => toast(errorText(e)),
           });
           setPrompt(null);
         }}

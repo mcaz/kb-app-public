@@ -44,5 +44,14 @@
     "languageJa": "日本語",
     "languageEn": "English",
     "note": "These settings are stored on this device only (they never go into your notes)."
+  },
+  "errors": {
+    "noteNotFound": "That note doesn’t exist yet",
+    "attachmentTooLarge": "Files larger than {{limit}}MB can’t be attached",
+    "claudeDesktopNotFound": "Claude Desktop not found",
+    "claudeDesktopLaunchFailed": "Could not launch Claude Desktop (check that it is installed)",
+    "backupFailed": "Backup failed: {{message}}",
+    "embedFailed": "Could not set up smart search: {{message}}",
+    "vaultUnavailable": "Could not open your notes: {{message}}"
   }
 }

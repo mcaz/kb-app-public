@@ -1,3 +1,5 @@
+import { KbError } from "@/lib/api/error";
+
 import type {
   CareProposal,
   ConnectState,
@@ -143,7 +145,7 @@ export const demoApi = {
     }),
   noteGet: (id: string): Promise<NoteView> => {
     const found = notes.find((n) => n.id === id);
-    if (!found) return Promise.reject(new Error("そのノートはまだありません"));
+    if (!found) return Promise.reject(new KbError({ code: "note_not_found", id }));
     return delay(found);
   },
   noteSearch: (query: string): Promise<SearchOutcome> =>

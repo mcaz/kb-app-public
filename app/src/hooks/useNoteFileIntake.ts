@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
+import { useErrorText } from "@/hooks/useErrorText";
 import { api, IN_TAURI } from "@/lib/api";
 import { queryKeys } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,6 +15,7 @@ import { useQueryClient } from "@tanstack/react-query";
  */
 export function useNoteFileIntake(noteId: string | null, active: boolean) {
   const { t } = useTranslation("notes");
+  const errorText = useErrorText();
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -60,14 +62,14 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
           await refresh(noteId);
           toast(t("attachment.addedNamed", { name: saved }));
         } catch (err) {
-          toast(t("attachment.pasteFailed", { error: String(err) }));
+          toast(t("attachment.pasteFailed", { error: errorText(err) }));
         }
       })();
     };
 
     document.addEventListener("paste", onPaste);
     return () => document.removeEventListener("paste", onPaste);
-  }, [noteId, active, qc, t]);
+  }, [noteId, active, qc, t, errorText]);
 
   useEffect(() => {
     if (!IN_TAURI) return;
@@ -81,7 +83,7 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
           if (warning) toast(`⚠ ${warning}`);
           added++;
         } catch (e) {
-          toast(t("attachment.failed", { error: String(e) }));
+          toast(t("attachment.failed", { error: errorText(e) }));
         }
       }
       if (added === 0) return;
@@ -109,5 +111,5 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
       });
 
     return () => dispose?.();
-  }, [noteId, active, qc, t]);
+  }, [noteId, active, qc, t, errorText]);
 }

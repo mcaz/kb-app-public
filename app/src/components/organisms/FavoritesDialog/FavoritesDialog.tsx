@@ -14,6 +14,7 @@ import {
 } from "@/components/atoms/ui/dialog";
 import { NamePromptDialog } from "@/components/molecules/NamePromptDialog";
 import type { Favorite } from "@/lib/api";
+import { useErrorText } from "@/hooks/useErrorText";
 import { useFavoriteAdd, useFavoriteRemove, useFavorites } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
@@ -26,6 +27,7 @@ export interface FavoritesDialogProps {
 export function FavoritesDialog({ open, onOpenChange }: FavoritesDialogProps) {
   const { t } = useTranslation(["notes", "common"]);
   const { data: favorites = [] } = useFavorites();
+  const errorText = useErrorText();
   const add = useFavoriteAdd();
   const remove = useFavoriteRemove();
   const applyFavorite = useSession((s) => s.applyFavorite);
@@ -124,7 +126,7 @@ export function FavoritesDialog({ open, onOpenChange }: FavoritesDialogProps) {
                 if (activeFav === target.name) setActiveFav(name);
                 toast(t("common:toast.renamed"));
               },
-              onError: (e) => toast(String(e)),
+              onError: (e) => toast(errorText(e)),
             },
           );
           setRenaming(null);

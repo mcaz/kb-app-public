@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/atoms/ui/button";
 import { ConnectCard } from "@/components/molecules/ConnectCard";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
+import { useEmbedProgress } from "@/hooks/useEmbedProgress";
+import { useErrorText } from "@/hooks/useErrorText";
 import {
   useBackupNow,
   useBackupSetRemote,
@@ -18,6 +20,8 @@ import {
 export function ConnectPage() {
   const { t } = useTranslation(["connect", "common"]);
   const { data: state, isPending } = useConnectState();
+  const errorText = useErrorText();
+  const embedProgress = useEmbedProgress();
   const connectDesktop = useConnectDesktop();
   const embedEnable = useEmbedEnable();
   const backupSetRemote = useBackupSetRemote();
@@ -59,7 +63,7 @@ export function ConnectPage() {
               onClick={() =>
                 connectDesktop.mutate(undefined, {
                   onSuccess: () => toast(t("ai.done")),
-                  onError: (e) => toast(t("ai.failed", { error: String(e) })),
+                  onError: (e) => toast(t("ai.failed", { error: errorText(e) })),
                 })
               }
             >
@@ -79,7 +83,9 @@ export function ConnectPage() {
                 ? t("smartSearch.enabled", { embedded: search.embedded, total: search.total })
                 : search.state === "downloading"
                   ? t("smartSearch.downloading")
-                  : t("smartSearch.off"),
+                  : embedProgress
+                    ? t("smartSearch.progress", embedProgress)
+                    : t("smartSearch.off"),
           }}
         >
           {search.state === "not_installed" && (
@@ -91,7 +97,7 @@ export function ConnectPage() {
                 toast(t("smartSearch.preparing"));
                 embedEnable.mutate(undefined, {
                   onSuccess: () => toast(t("smartSearch.done")),
-                  onError: (e) => toast(String(e)),
+                  onError: (e) => toast(errorText(e)),
                 });
               }}
             >
@@ -131,7 +137,7 @@ export function ConnectPage() {
               onClick={() =>
                 backupNow.mutate(undefined, {
                   onSuccess: (message) => toast(message),
-                  onError: (e) => toast(String(e)),
+                  onError: (e) => toast(errorText(e)),
                 })
               }
             >
@@ -158,7 +164,7 @@ export function ConnectPage() {
                   }
                   backupSetRemote.mutate(url, {
                     onSuccess: () => toast(t("backup.done")),
-                    onError: (e) => toast(String(e)),
+                    onError: (e) => toast(errorText(e)),
                   });
                 }}
               >

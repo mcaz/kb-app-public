@@ -110,10 +110,10 @@ components/<layer>/<ComponentName>/
 - 日付は `Intl.DateTimeFormat`、タイトル整列は現在ロケールの `localeCompare`
 - 言語は OS/ブラウザのロケールから検出し、`prefs` ストアに永続する
 
-**既知の限界**: コア(kb-core / Tauri 層)が返すエラー文言は日本語のまま画面に出る
-(例:「50MB を超えるファイルは添付できない」「vault 名が特定できない」)。
-本格対応にはコア側をエラーコード化して UI で訳す必要があり、今回の範囲外。
-英語環境では**この経路の文言だけ日本語が混じる**。
+**エラー文言**: Tauri 層は `AppError` で種類を型にしたので、画面は `code` で
+訳し分けられる(決定10)。ただし kb-core は anyhow のままなので、**Tauri 層が
+文脈を知らないエラーは `unexpected` に落ち、コアの日本語文言をそのまま運ぶ**。
+英語環境で日本語が混じる余地はここだけ残っている(残課題)。
 
 ### 8. テーマ(ライト / ダーク / システム)は data 属性で切り替える
 
@@ -142,7 +142,34 @@ lucide 既定の 2 はこのパレット(紙の地色・細い文字)には太�
 文言に混ざっていた絵文字は locale JSON から剥がし、アイコンはコンポーネント側に置く
 (翻訳者が記号の面倒を見ない形にする)。
 
-### 10. 規律は lint で強制する
+### 10. Tauri 層は commands / state / error に分ける
+
+`src-tauri/src/lib.rs` も単一570行で、フロントと同じ症状だった。標準的な構成に寄せる:
+
+```
+src-tauri/src/
+  main.rs      入口だけ
+  lib.rs       Builder の組み立てだけ
+  error.rs     画面へ返すエラー(種類を型にする)
+  state.rs     vault と索引接続の共有
+  mcp_mode.rs  同じ実行ファイルを MCP サーバーとして動かす経路
+  commands/    invoke で呼ばれる関数。機能ごとに分割
+```
+
+- **接続を共有する**。以前は `Vault::open` 16箇所・`open_db` 11箇所で、**ノートを
+  1本開くだけでも vault と DB を開き直し、索引の全体 sync まで走っていた**。
+  `AppState` に集約し、生成は遅延(未オンボーディングでも起動できるように)
+- **索引 sync は用途で分ける**。一覧・検索・ホームは `Sync::Force`(鮮度が要る)、
+  それ以外は3秒のスロットリング。取りこぼしても TanStack Query の再取得で追いつく
+- **エラーは型にする**(`AppError`)。specta が TS へ判別可能な union を出すので、
+  画面は `code` で訳し分けられる。**ただしコアは anyhow のままなので、分類できるのは
+  Tauri 層が文脈を知っている場合だけ**。それ以外は `unexpected` に落ち、コアの
+  日本語文言を運ぶ(残課題は「ほぼ塞がった」であって「塞がった」ではない)
+- **長い処理は同期コマンド + イベント**。Tauri は同期コマンドを別スレッドで動かすが、
+  async コマンドは async ランタイム上で動く。`embed_enable` は数分ブロックするため
+  async にするとランタイムを止める → 同期に直し、進捗を `EmbedProgress` で流す
+
+### 11. 規律は lint で強制する
 
 層の規約(5)とディレクトリ規約(6)は `eslint.config.js` の `no-restricted-imports`
 で機械的に落とす。**文章だけの規約は必ず破られる**ため
@@ -156,7 +183,7 @@ lucide 既定の 2 はこのパレット(紙の地色・細い文字)には太�
 ほかに typescript-eslint(型情報あり)・react-hooks・jsx-a11y、整形は Prettier
 (+ Tailwind クラス並べ替え)。`npm run check` で 整形 → lint → 型 → テスト を通す。
 
-### 11. CI は GitHub Actions の2ジョブ
+### 12. CI は GitHub Actions の2ジョブ
 
 - **frontend**: `format:check` → `lint` → `typecheck` → `test` → `vite build`
 - **rust**: `cargo fmt --check` → `clippy -D warnings` → `cargo test` →
@@ -179,8 +206,9 @@ GitHub Issues は使っていないため、ここに置く。
   画面ごとの `lazy()` 分割か `build.rolldownOptions.output.codeSplitting` で分けられる。
   重いのは d3-force・marked・Radix 一式。**着手の合図は「起動が遅い」と感じたとき**で、
   それまでは分割しない(計測せずに分けても複雑になるだけ)
-- **コアのエラー文言を日本語固定から外す**(上記「既知の限界」)。`kb-core` の
-  エラーをコード化し、UI 側で訳す。英語対応を名乗るならここが最後の穴
+- **kb-core を型付きエラーにする**。Tauri 層は `AppError` で分類できるようになったが、
+  コアが anyhow のままなので、文脈を持たないエラーは `unexpected` に落ちて
+  日本語文言をそのまま運ぶ。英語環境で残る最後の穴はここ
 - **設定画面の中身**。いまは「見た目(テーマ・言語)」だけの最小形。
   vault の切り替えなど、置く候補が出たときに広げる
 
