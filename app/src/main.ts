@@ -22,6 +22,7 @@ const state = {
   sort: "updated" as "updated" | "created" | "title",
   filterOpen: localStorage.getItem("kb.filterOpen") === "on",
   favorites: [] as Favorite[],
+  activeFav: null as string | null,
   graphCache: null as GraphData | null,
   listScroll: 0,
   noteScroll: {} as Record<string, number>,
@@ -225,7 +226,20 @@ function render() {
   `);
   app.replaceChildren(shell);
   document.getElementById("nav-home")!.addEventListener("click", () => { state.view = "home"; render(); });
-  document.getElementById("nav-notes")!.addEventListener("click", () => { state.view = "notes"; render(); });
+  document.getElementById("nav-notes")!.addEventListener("click", () => {
+    // まっさらな一覧に戻す(お気に入り・タグ・検索・期間・並び・ページを解除)
+    state.view = "notes";
+    state.activeFav = null;
+    state.selectedTags = [];
+    state.query = "";
+    state.searching = false;
+    state.period = "all";
+    state.sort = "updated";
+    state.page.list = 0;
+    state.selected = null;
+    state.secondary = null;
+    render();
+  });
   document.getElementById("nav-graph")!.addEventListener("click", () => {
     state.view = "graph";
     state.graphFocus = null; // ナビからは全体表示
@@ -243,6 +257,7 @@ function render() {
       state.period = (fav.period as typeof state.period) ?? "all";
       state.sort = (fav.sort as typeof state.sort) ?? "updated";
       state.page.list = 0;
+      state.activeFav = fav.name;
       state.view = "notes";
       render();
     })
@@ -251,6 +266,7 @@ function render() {
     x.addEventListener("click", async (e) => {
       e.stopPropagation();
       await api.favoriteRemove(x.dataset.favx!);
+      if (state.activeFav === x.dataset.favx) state.activeFav = null;
       state.favorites = await api.favoritesList();
       render();
       toast("お気に入りを外しました");
@@ -368,6 +384,14 @@ function renderNotes(pane: HTMLElement) {
               .map(([v, l]) => `<option value="${v}" ${state.sort === v ? "selected" : ""}>${l}</option>`).join("")}
           </select>
         </div>
+        <div class="f-actions">
+          ${state.activeFav
+            ? `<span class="f-active">★ ${esc(state.activeFav)}</span>
+               <button class="small" id="fav-update">更新</button>
+               <button class="quiet small" id="fav-rename">名前変更</button>
+               <button class="quiet small" id="fav-saveas">別名で保存</button>`
+            : `<button class="small" id="fav-save">★ お気に入りに保存</button>`}
+        </div>
       </div>
       <div class="items" id="items"></div>
       <div class="list-foot">
@@ -389,6 +413,19 @@ function renderNotes(pane: HTMLElement) {
     state.page.list = 0;
     render();
   });
+  list.querySelector("#fav-save")?.addEventListener("click", () => void saveFavorite());
+  list.querySelector("#fav-saveas")?.addEventListener("click", () => void saveFavorite());
+  list.querySelector("#fav-update")?.addEventListener("click", async () => {
+    try {
+      await api.favoriteAdd(currentFilterSet(state.activeFav!)); // 同名は上書き
+      state.favorites = await api.favoritesList();
+      render();
+      toast(`「${state.activeFav}」を更新しました`);
+    } catch (e) {
+      toast(`${e}`);
+    }
+  });
+  list.querySelector("#fav-rename")?.addEventListener("click", () => void renameFavorite());
   list.querySelector<HTMLSelectElement>("#f-sort")!.addEventListener("change", (e) => {
     state.sort = (e.target as HTMLSelectElement).value as typeof state.sort;
     render();
@@ -488,11 +525,8 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
   const selectedChips = state.selectedTags
     .map((t) => `<span class="tsel-chip">${esc(t)}<button class="chip-x" data-tag="${esc(t)}">×</button></span>`)
     .join("");
-  const canSave = state.selectedTags.length > 0 || state.query.trim().length > 0;
-  const saveBtn = canSave ? `<button class="fav-save" id="fav-save" title="いまの絞り込みをお気に入りに保存">★</button>` : "";
   const clearBtn = state.selectedTags.length >= 2 ? `<button class="tsel-clear" id="tsel-clear" title="タグをすべて解除">全解除</button>` : "";
-  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>${clearBtn}${saveBtn}`;
-  box.querySelector("#fav-save")?.addEventListener("click", () => void saveFavorite());
+  box.innerHTML = `${selectedChips}<span class="tsel-wrap"><input id="tag-input" placeholder="${state.selectedTags.length ? "" : "タグで絞り込み"}" autocomplete="off" /><div class="tag-dd" id="tag-dd" hidden></div></span>${clearBtn}`;
   box.querySelector("#tsel-clear")?.addEventListener("click", () => {
     state.selectedTags = [];
     state.page.list = 0;
@@ -547,25 +581,50 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
   });
 }
 
-/// 選択中のタグをお気に入りとして保存(名前はアプリ内モーダルで入力)。
-function saveFavorite(): Promise<void> {
+/// いまの絞り込み一式を Favorite の形に。
+function currentFilterSet(name: string): Favorite {
+  return {
+    name,
+    tags: [...state.selectedTags],
+    query: state.query.trim() || null,
+    period: state.period,
+    sort: state.sort,
+  };
+}
+
+/// 既定の名前「お気に入りN」(既存の最大 N +1)。
+function defaultFavName(): string {
+  const nums = state.favorites
+    .map((f) => /^お気に入り(\d+)$/.exec(f.name)?.[1])
+    .filter(Boolean)
+    .map(Number);
+  return `お気に入り${nums.length ? Math.max(...nums) + 1 : 1}`;
+}
+
+/// 名前変更(適用中のお気に入り)。
+function renameFavorite(): Promise<void> {
+  const old = state.activeFav!;
+  return askName("お気に入りの名前を変更", old, async (name) => {
+    const fav = state.favorites.find((f) => f.name === old);
+    if (!fav) return;
+    await api.favoriteAdd({ ...fav, name });
+    if (name !== old) await api.favoriteRemove(old);
+    state.favorites = await api.favoritesList();
+    state.activeFav = name;
+    render();
+    toast("名前を変更しました");
+  });
+}
+
+/// 名前入力モーダル(prompt は WKWebView で使えない)。
+function askName(title: string, initial: string, commit: (name: string) => Promise<void>, desc = ""): Promise<void> {
   return new Promise((resolve) => {
-    const tags = [...state.selectedTags];
-    const query = state.query.trim();
-    const period = state.period;
-    const sort = state.sort;
-    const parts = [
-      tags.length ? tags.join(" / ") : "",
-      query ? `検索「${query}」` : "",
-      period !== "all" ? `${period}日以内` : "",
-      sort !== "updated" ? (sort === "created" ? "作成順" : "タイトル順") : "",
-    ].filter(Boolean);
     const overlay = el(`
       <div class="modal-overlay">
         <div class="modal">
-          <div class="modal-title">お気に入りに保存</div>
-          <div class="modal-desc">${esc(parts.join(" ・ "))}</div>
-          <input id="fav-name" placeholder="名前(例: 開発まわり)" value="${esc(parts.join("・").slice(0, 40))}" />
+          <div class="modal-title">${esc(title)}</div>
+          ${desc ? `<div class="modal-desc">${esc(desc)}</div>` : ""}
+          <input id="fav-name" value="${esc(initial)}" />
           <div class="modal-row">
             <button class="primary" id="fav-ok">保存</button>
             <button class="quiet" id="fav-cancel">やめる</button>
@@ -575,31 +634,49 @@ function saveFavorite(): Promise<void> {
     `);
     const input = overlay.querySelector<HTMLInputElement>("#fav-name")!;
     const done = () => { overlay.remove(); resolve(); };
-    const commit = async () => {
+    const run = async () => {
       const name = input.value.trim();
       if (!name) { toast("名前を入れてください"); return; }
       try {
-        await api.favoriteAdd({ name, tags, query: query || null, period, sort });
-        state.favorites = await api.favoritesList();
+        await commit(name);
         done();
-        render();
-        toast("お気に入りに保存しました");
       } catch (e) {
         done();
         toast(`${e}`);
       }
     };
-    overlay.querySelector("#fav-ok")!.addEventListener("click", () => void commit());
+    overlay.querySelector("#fav-ok")!.addEventListener("click", () => void run());
     overlay.querySelector("#fav-cancel")!.addEventListener("click", done);
     overlay.addEventListener("click", (e) => { if (e.target === overlay) done(); });
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") void commit();
+      if (e.key === "Enter") void run();
       if (e.key === "Escape") done();
     });
     document.body.appendChild(overlay);
     input.focus();
     input.select();
   });
+}
+
+/// 選択中のタグをお気に入りとして保存(名前はアプリ内モーダルで入力)。
+function saveFavorite(): Promise<void> {
+  const parts = [
+    state.selectedTags.join(" / "),
+    state.query.trim() ? `検索「${state.query.trim()}」` : "",
+    state.period !== "all" ? `${state.period}日以内` : "",
+    state.sort !== "updated" ? (state.sort === "created" ? "作成順" : "タイトル順") : "",
+  ].filter(Boolean);
+  if (!state.selectedTags.length && !state.query.trim()) {
+    toast("タグか検索語を指定してから保存します");
+    return Promise.resolve();
+  }
+  return askName("お気に入りに保存", defaultFavName(), async (name) => {
+    await api.favoriteAdd(currentFilterSet(name));
+    state.favorites = await api.favoritesList();
+    state.activeFav = name;
+    render();
+    toast("お気に入りに保存しました");
+  }, parts.join(" ・ "));
 }
 
 /// 関連パネル(ノート一覧の右)。開いているノートのリンク・近いノート・グラフ入口。
