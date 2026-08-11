@@ -23,7 +23,6 @@ const state = {
   listScroll: 0,
   noteScroll: {} as Record<string, number>,
   secondary: null as NoteView | null,
-  localGraph: localStorage.getItem("kb.localGraph") !== "off",
   graphFocus: null as string | null,
   vaultName: "kb",
   home: null as HomeState | null,
@@ -309,7 +308,7 @@ function renderNotes(pane: HTMLElement) {
   list.style.width = `${Number(localStorage.getItem("kb.listWidth")) || 260}px`;
   const splitter = makeSplitter(list, "kb.listWidth", 180, 520);
 
-  const showRel = state.localGraph && state.selected;
+  const showRel = !!state.selected;
   const relPanelEl = el(`<div class="rel-panel" id="rel-panel"></div>`);
   relPanelEl.style.width = `${Number(localStorage.getItem("kb.relWidth")) || 220}px`;
   const relSplitter = makeSplitter(relPanelEl, "kb.relWidth", 160, 420);
@@ -553,7 +552,7 @@ function notePane(n: NoteView, secondary: boolean): HTMLElement {
         <div class="title">${esc(n.title)}</div>
         ${secondary
           ? `<button class="quiet small" data-act="main">主にする</button><button class="quiet small" data-act="close">×</button>`
-          : `<button class="quiet small" data-act="toggle-rel" title="関連パネル">${state.localGraph ? "🔗 隠す" : "🔗 表示"}</button>`}
+          : ""}
       </div>
       <div class="meta"><span title="作成 / 最終更新">作成 ${fmtDateTime(n.created_at)} · 更新 ${fmtDateTime(n.generated_at)}</span> ${statusPill} ${tagChips}</div>
       ${careBars}
@@ -568,11 +567,6 @@ function notePane(n: NoteView, secondary: boolean): HTMLElement {
     else state.selected = await api.noteGet(n.id);
   };
 
-  pane.querySelector('[data-act="toggle-rel"]')?.addEventListener("click", () => {
-    state.localGraph = !state.localGraph;
-    localStorage.setItem("kb.localGraph", state.localGraph ? "on" : "off");
-    render();
-  });
   pane.querySelector('[data-act="close"]')?.addEventListener("click", () => {
     state.secondary = null;
     render();
