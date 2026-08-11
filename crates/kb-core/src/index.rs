@@ -29,7 +29,9 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
 
 fn init_schema(conn: &Connection) -> Result<()> {
     let ver: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key='schema'", [], |r| r.get(0))
+        .query_row("SELECT value FROM meta WHERE key='schema'", [], |r| {
+            r.get(0)
+        })
         .ok();
     if ver.as_deref() == Some(SCHEMA_VERSION) {
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
@@ -38,7 +40,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
             ("tags", "ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''"),
             ("created", "ALTER TABLE notes ADD COLUMN created TEXT"),
         ] {
-            if conn.prepare(&format!("SELECT {col} FROM notes LIMIT 0")).is_err() {
+            if conn
+                .prepare(&format!("SELECT {col} FROM notes LIMIT 0"))
+                .is_err()
+            {
                 // 破壊的な作り直しをしない(埋め込み再計算の嵐を避ける)
                 conn.execute_batch(&format!("{ddl}; UPDATE notes SET mtime = -1;"))?;
             }
@@ -96,9 +101,13 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
         if known.get(&id) == Some(&mtime) {
             continue;
         }
-        let Ok(content) = fs::read_to_string(&path) else { continue };
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
         // 適合違反ファイルは索引せずスキップ(conformance 検査は別途 check で可視化予定)
-        let Ok(note) = Note::parse(&content) else { continue };
+        let Ok(note) = Note::parse(&content) else {
+            continue;
+        };
         upsert(conn, vault, &id, mtime, &note)?;
         updated += 1;
     }
@@ -207,7 +216,9 @@ fn extract_links(src_id: &str, body: &str, _vault: &Vault) -> Vec<String> {
             abs.to_string()
         } else {
             // 相対: src の親ディレクトリから解決
-            let base = std::path::Path::new(src_id).parent().unwrap_or(std::path::Path::new(""));
+            let base = std::path::Path::new(src_id)
+                .parent()
+                .unwrap_or(std::path::Path::new(""));
             let mut parts: Vec<&str> = base.iter().filter_map(|c| c.to_str()).collect();
             for comp in target.split('/') {
                 match comp {
@@ -233,11 +244,19 @@ mod tests {
     fn sync_and_incremental() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        vault.new_human_note("認証 メモ", "認証フローの見直し。[設計](/notes/設計.md) 参照。", "human:o").unwrap();
+        vault
+            .new_human_note(
+                "認証 メモ",
+                "認証フローの見直し。[設計](/notes/設計.md) 参照。",
+                "human:o",
+            )
+            .unwrap();
         let conn = open_db(&vault).unwrap();
         assert_eq!(sync(&vault, &conn).unwrap(), 1);
         assert_eq!(sync(&vault, &conn).unwrap(), 0); // 変更なしなら 0
-        let n: i64 = conn.query_row("SELECT count(*) FROM links", [], |r| r.get(0)).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM links", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
     }
 }
