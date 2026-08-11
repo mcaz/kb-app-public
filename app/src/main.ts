@@ -21,6 +21,7 @@ const state = {
   period: "all" as "all" | "7" | "30" | "90",
   sort: "updated" as "updated" | "created" | "title",
   filterOpen: localStorage.getItem("kb.filterOpen") === "on",
+  sideCollapsed: localStorage.getItem("kb.sideCollapsed") === "on",
   favorites: [] as Favorite[],
   activeFav: null as string | null,
   graphCache: null as GraphData | null,
@@ -198,27 +199,26 @@ function render() {
   const home = state.home!;
   const degraded = home.degraded.length
     ? `<div class="degraded">⚠ ${home.degraded.map(esc).join(" / ")}</div>` : "";
+  const nav = (id: string, view: View, icon: string, label: string) =>
+    `<button class="nav ${state.view === view ? "on" : ""}" id="${id}" data-label="${label}">
+       <span class="ico">${icon}</span><span class="lbl">${label}</span>
+     </button>`;
   const shell = el(`
     <div class="shell">
       ${degraded}
       <div class="app">
-        <nav class="side">
-          <div class="nb">${esc(state.vaultName)}</div>
-          <button class="nav ${state.view === "home" ? "on" : ""}" id="nav-home"><span>🏠 ホーム</span></button>
-          <button class="nav ${state.view === "notes" ? "on" : ""}" id="nav-notes"><span>📄 ノート</span></button>
-          <button class="nav ${state.view === "graph" ? "on" : ""}" id="nav-graph"><span>🕸️ グラフ</span></button>
-          <button class="nav ${state.view === "connect" ? "on" : ""}" id="nav-connect"><span>🔗 繋ぐ</span></button>
-          ${state.favorites.length ? `<div class="fav-head">★ お気に入り</div>` : ""}
-          ${state.favorites
-            .map((f) => {
-              const on = state.view === "notes"
-                && f.tags.length === state.selectedTags.length
-                && f.tags.every((t) => state.selectedTags.includes(t));
-              return `<div class="nav fav ${on ? "on" : ""}" data-fav="${esc(f.name)}" title="${esc(f.tags.join(" / "))}">
-                <span>${esc(f.name)}</span><span class="fav-x" data-favx="${esc(f.name)}">×</span>
-              </div>`;
-            })
-            .join("")}
+        <nav class="side ${state.sideCollapsed ? "collapsed" : ""}">
+          <div class="nb">${state.sideCollapsed ? "📚" : esc(state.vaultName)}</div>
+          ${nav("nav-home", "home", "🏠", "ホーム")}
+          ${nav("nav-notes", "notes", "📄", "ノート")}
+          ${nav("nav-graph", "graph", "🕸️", "グラフ")}
+          ${nav("nav-connect", "connect", "🔗", "繋ぐ")}
+          <button class="nav" id="nav-fav" data-label="お気に入り">
+            <span class="ico">★</span><span class="lbl">お気に入り</span>
+          </button>
+          <button class="nav side-toggle" id="side-toggle" data-label="${state.sideCollapsed ? "開く" : "畳む"}">
+            <span class="ico">${state.sideCollapsed ? "»" : "«"}</span><span class="lbl">畳む</span>
+          </button>
         </nav>
         <div id="pane"></div>
       </div>
@@ -246,32 +246,13 @@ function render() {
     render();
   });
   document.getElementById("nav-connect")!.addEventListener("click", () => { state.view = "connect"; render(); });
-  shell.querySelectorAll<HTMLElement>("[data-fav]").forEach((f) =>
-    f.addEventListener("click", (e) => {
-      if ((e.target as HTMLElement).dataset.favx) return; // × は別処理
-      const fav = state.favorites.find((x) => x.name === f.dataset.fav);
-      if (!fav) return;
-      state.selectedTags = [...fav.tags];
-      state.query = fav.query ?? "";
-      state.searching = !!state.query.trim();
-      state.period = (fav.period as typeof state.period) ?? "all";
-      state.sort = (fav.sort as typeof state.sort) ?? "updated";
-      state.page.list = 0;
-      state.activeFav = fav.name;
-      state.view = "notes";
-      render();
-    })
-  );
-  shell.querySelectorAll<HTMLElement>("[data-favx]").forEach((x) =>
-    x.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      await api.favoriteRemove(x.dataset.favx!);
-      if (state.activeFav === x.dataset.favx) state.activeFav = null;
-      state.favorites = await api.favoritesList();
-      render();
-      toast("お気に入りを外しました");
-    })
-  );
+  document.getElementById("side-toggle")!.addEventListener("click", () => {
+    state.sideCollapsed = !state.sideCollapsed;
+    localStorage.setItem("kb.sideCollapsed", state.sideCollapsed ? "on" : "off");
+    render();
+  });
+  document.getElementById("nav-fav")!.addEventListener("click", () => void favoritesModal());
+
   const pane = document.getElementById("pane")!;
   pane.style.display = "flex";
   pane.style.flex = "1";
@@ -613,6 +594,80 @@ function buildTagSelect(box: HTMLElement, allTags: string[]) {
     } else if (e.key === "Escape") {
       dd.hidden = true;
     }
+  });
+}
+
+/// お気に入りの管理モーダル(適用・名前変更・削除)。サイドバーから開く。
+function favoritesModal(): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = el(`<div class="modal-overlay"><div class="modal wide"></div></div>`);
+    const box = overlay.querySelector<HTMLElement>(".modal")!;
+    const done = () => { overlay.remove(); resolve(); };
+    const fill = () => {
+      const rows = state.favorites
+        .map((f) => {
+          const parts = [
+            f.tags.join(" / "),
+            f.query ? `検索「${f.query}」` : "",
+            f.period && f.period !== "all" ? `${f.period}日以内` : "",
+          ].filter(Boolean).join(" ・ ");
+          return `<div class="fav-row ${state.activeFav === f.name ? "on" : ""}" data-name="${esc(f.name)}">
+            <button class="fav-apply">
+              <span class="fn">${esc(f.name)}</span>
+              <span class="fd">${esc(parts || "(条件なし)")}</span>
+            </button>
+            <button class="quiet small fav-ren">名前変更</button>
+            <button class="quiet small fav-del">削除</button>
+          </div>`;
+        })
+        .join("");
+      box.innerHTML = `
+        <div class="modal-title">★ お気に入り</div>
+        <div class="fav-list">${rows || `<div class="lg-empty">まだありません。ノート一覧のフィルターから保存できます。</div>`}</div>
+        <div class="modal-row"><button class="quiet" id="fav-close">閉じる</button></div>
+      `;
+      box.querySelector("#fav-close")!.addEventListener("click", done);
+      box.querySelectorAll<HTMLElement>(".fav-row").forEach((row) => {
+        const name = row.dataset.name!;
+        row.querySelector(".fav-apply")!.addEventListener("click", () => {
+          const fav = state.favorites.find((x) => x.name === name);
+          if (!fav) return;
+          state.selectedTags = [...fav.tags];
+          state.query = fav.query ?? "";
+          state.searching = !!state.query.trim();
+          state.period = (fav.period as typeof state.period) ?? "all";
+          state.sort = (fav.sort as typeof state.sort) ?? "updated";
+          state.page.list = 0;
+          state.activeFav = name;
+          state.view = "notes";
+          done();
+          render();
+        });
+        row.querySelector(".fav-ren")!.addEventListener("click", () => {
+          void askName("お気に入りの名前を変更", name, async (newName) => {
+            const fav = state.favorites.find((x) => x.name === name);
+            if (!fav) return;
+            await api.favoriteAdd({ ...fav, name: newName });
+            if (newName !== name) await api.favoriteRemove(name);
+            state.favorites = await api.favoritesList();
+            if (state.activeFav === name) state.activeFav = newName;
+            fill();
+            render();
+          });
+        });
+        row.querySelector(".fav-del")!.addEventListener("click", async () => {
+          await api.favoriteRemove(name);
+          if (state.activeFav === name) state.activeFav = null;
+          state.favorites = await api.favoritesList();
+          fill();
+          render();
+          toast("削除しました");
+        });
+      });
+    };
+    fill();
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) done(); });
+    document.body.appendChild(overlay);
   });
 }
 
