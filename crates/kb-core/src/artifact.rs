@@ -96,14 +96,7 @@ pub struct ArtifactId(String);
 impl ArtifactId {
     /// 新しい ID(48bit の時刻 + 80bit の乱数)。
     pub fn new(unix_ms: u64) -> Self {
-        let mut rand_bytes = [0u8; 10];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut rand_bytes);
-        let mut rand_part: u128 = 0;
-        for b in rand_bytes {
-            rand_part = (rand_part << 8) | b as u128;
-        }
-        let time_part = (unix_ms as u128 & ((1u128 << 48) - 1)) << 80;
-        Self(encode_crockford(time_part | rand_part))
+        Self(new_ulid(unix_ms))
     }
 
     pub fn as_str(&self) -> &str {
@@ -111,26 +104,38 @@ impl ArtifactId {
     }
 }
 
+/// ULID を1つ作る(48bit の時刻 + 80bit の乱数)。
+/// Artifact と保管庫の ID で同じ生成規則を使うため、ここに出しておく。
+pub fn new_ulid(unix_ms: u64) -> String {
+    let mut rand_bytes = [0u8; 10];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut rand_bytes);
+    let mut rand_part: u128 = 0;
+    for b in rand_bytes {
+        rand_part = (rand_part << 8) | b as u128;
+    }
+    let time_part = (unix_ms as u128 & ((1u128 << 48) - 1)) << 80;
+    encode_crockford(time_part | rand_part)
+}
+
+/// ULID の形をしているか。26文字・Crockford・先頭は 128bit に収まる範囲。
+pub fn is_ulid(s: &str) -> bool {
+    s.len() == 26
+        && matches!(s.as_bytes().first(), Some(b'0'..=b'7'))
+        && s.bytes().all(|b| CROCKFORD.contains(&b))
+}
+
 impl FromStr for ArtifactId {
     type Err = ArtifactError;
 
     fn from_str(s: &str) -> Result<Self> {
-        let bad = || ArtifactError::Malformed {
-            field: "artifact_id",
-        };
-        if s.len() != 26 {
-            return Err(bad());
-        }
         // 26 文字 × 5bit = 130bit なので、先頭は 2bit ぶんしか使えない
-        let mut chars = s.chars();
-        let first = chars.next().ok_or_else(bad)?;
-        if !matches!(first, '0'..='7') {
-            return Err(bad());
+        if is_ulid(s) {
+            Ok(Self(s.to_string()))
+        } else {
+            Err(ArtifactError::Malformed {
+                field: "artifact_id",
+            })
         }
-        if !s.bytes().all(|b| CROCKFORD.contains(&b)) {
-            return Err(bad());
-        }
-        Ok(Self(s.to_string()))
     }
 }
 

@@ -191,7 +191,13 @@ blobless partial clone」を採る。
 
 - **旧 legacy ファイルの削除条件**。登録済み全端末での取得確認が理想だが、
   端末レジストリが無い。Artifact MVP では削除せず fallback を保持する
-- **安定した workspace ID の設計**(`registry.rs` の改定)
+- ~~**安定した workspace ID の設計**(`registry.rs` の改定)~~ →
+  実装時に**置き場所が違う**と判明した。`registry.json` は設定ディレクトリにある端末ローカルの
+  台帳で同期されないため、そこへ置くと同じ保管庫が端末ごとに別 ID を持ち、
+  Git で運ばれてきた台帳の参照先と噛み合わない。ID は保管庫と一緒に運ばれる必要があるので、
+  **保管庫直下の追跡ファイル `.kb-workspace`** に置く(`.kb/` は索引 DB 用に ignore 済み)。
+  同時初回起動の競合は `merge=union` で行を残し、読むときに古い方へ寄せて自己修復する
+  (`crates/kb-core/src/workspace.rs`)
 - LFS の quota / 帯域の使用量取得と表示。取得できない場合に「無制限・無料」とは
   表示しない。アプリが課金設定や budget を自動変更しない
 - dataset の multi-file manifest、実削除を伴う GC、license / retention、

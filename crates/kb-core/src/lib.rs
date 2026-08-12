@@ -18,6 +18,7 @@ pub mod search;
 pub mod tags;
 pub mod tokenize;
 pub mod vault;
+pub mod workspace;
 
 /// コアのバージョン。GUI / CLI / MCP が同一コアを共有していることの確認用。
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
