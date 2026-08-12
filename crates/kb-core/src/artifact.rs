@@ -502,6 +502,11 @@ pub struct Manifest {
     pub retrievable: bool,
     /// 内容を差し替えたとき、前の版の ID をここへ残す
     pub supersedes: Option<ArtifactId>,
+    /// ひもづくノート。**ファイルはノートの持ち物**という見え方の実体で、
+    /// 1つのファイルを複数のノートから持てる(同じ図を2つの決定が参照する等)。
+    /// UI の「このノートから外す」はここを外すだけ — 実体は消えない
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 impl Manifest {
@@ -527,7 +532,37 @@ impl Manifest {
             role,
             retrievable: role.retrievable_by_default(),
             supersedes: None,
+            notes: Vec::new(),
         }
+    }
+
+    /// ノートにひもづける。版が合わなければ通さない。
+    pub fn attach(&mut self, expected_version: u64, note_id: &str) -> Result<()> {
+        self.check_version(expected_version)?;
+        if !self.notes.iter().any(|n| n == note_id) {
+            self.notes.push(note_id.to_string());
+        }
+        self.version += 1;
+        Ok(())
+    }
+
+    /// ノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。
+    /// どのノートからも外れたファイルは、整理の下見で拾えるように残る。
+    pub fn detach(&mut self, expected_version: u64, note_id: &str) -> Result<()> {
+        self.check_version(expected_version)?;
+        self.notes.retain(|n| n != note_id);
+        self.version += 1;
+        Ok(())
+    }
+
+    fn check_version(&self, expected_version: u64) -> Result<()> {
+        if expected_version != self.version {
+            return Err(ArtifactError::Conflict {
+                expected: expected_version,
+                current: self.version,
+            });
+        }
+        Ok(())
     }
 
     /// 出来事を1件足す。既存の履歴は書き換えない。
@@ -541,12 +576,7 @@ impl Manifest {
 
     /// 直せる部分の更新。**版が合わなければ通さない**(自動再試行も強制上書きもしない)。
     pub fn apply(&mut self, expected_version: u64, change: Change, confirmed: bool) -> Result<()> {
-        if expected_version != self.version {
-            return Err(ArtifactError::Conflict {
-                expected: expected_version,
-                current: self.version,
-            });
-        }
+        self.check_version(expected_version)?;
         if let Some(policy) = change.policy {
             self.policy.check_change(&policy, confirmed)?;
             self.policy = policy;
@@ -574,6 +604,7 @@ impl Manifest {
         );
         next.retrievable = self.retrievable;
         next.supersedes = Some(self.id.clone());
+        next.notes = self.notes.clone();
         next
     }
 }
@@ -887,6 +918,50 @@ mod tests {
         assert_eq!(serde_json::from_str::<Manifest>(&json).unwrap(), m);
         // 取得状態は台帳に載せない(ADR-0003 決定9)
         assert!(!json.contains("availability"));
+    }
+
+    #[test]
+    fn detaching_from_a_note_does_not_touch_the_file() {
+        let mut m = manifest();
+        m.attach(1, "notes/a").unwrap();
+        m.attach(2, "notes/b").unwrap();
+        assert_eq!(m.notes, vec!["notes/a", "notes/b"]);
+
+        // 同じノートを2回足しても増えない
+        m.attach(3, "notes/a").unwrap();
+        assert_eq!(m.notes.len(), 2);
+
+        let hash = m.hash.clone();
+        m.detach(4, "notes/a").unwrap();
+        assert_eq!(m.notes, vec!["notes/b"]);
+        // 「外す」は関係を切るだけ。内容も来歴も動かない
+        assert_eq!(m.hash, hash);
+        assert_eq!(m.supersedes, None);
+    }
+
+    #[test]
+    fn relations_need_the_current_version_too() {
+        let mut m = manifest();
+        assert_eq!(
+            m.attach(99, "notes/a"),
+            Err(ArtifactError::Conflict {
+                expected: 99,
+                current: 1
+            })
+        );
+        assert!(m.notes.is_empty());
+    }
+
+    #[test]
+    fn a_new_version_keeps_the_same_notes() {
+        let mut old = manifest();
+        old.attach(1, "notes/a").unwrap();
+        let next = old.succeed(
+            ArtifactId::new(1_755_000_100_000),
+            ContentHash::of_bytes(b"v2"),
+            created(),
+        );
+        assert_eq!(next.notes, vec!["notes/a"]);
     }
 
     #[test]
