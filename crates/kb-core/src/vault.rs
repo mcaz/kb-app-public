@@ -528,6 +528,10 @@ impl Vault {
         for p in rel_paths {
             if self.root.join(p).exists() {
                 index.add_path(Path::new(p))?;
+            } else {
+                // 消えたパスも同じ呼び出しで畳む。追跡外なら何もしない
+                // (台帳が同期境界を跨いで移動するとき、旧側の削除が commit に乗らないため)
+                let _ = index.remove_path(Path::new(p));
             }
         }
         index.write()?;
