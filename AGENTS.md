@@ -63,3 +63,8 @@ npm --prefix app run install:app
 
 Use kb-app MCP `search` and `get` for prior product decisions before making a
 conflicting design choice. Do not use the vault files as a shortcut.
+
+The KB note `notes/kb-app-用語と正本の地図-2026-08-13-時点` maps the app's terms to
+the document that owns each rule (contract / requirements / ADR / KB), and lists the
+internal-vs-UI vocabulary split. Read it when you are unsure which document decides
+a question, or which word may appear on screen.
