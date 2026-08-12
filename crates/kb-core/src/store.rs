@@ -29,6 +29,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::{ArtifactError, ContentHash, Hasher, Policy, SyncPolicy, new_ulid};
+use crate::vault::Vault;
 
 /// 一度に読む塊の大きさ。全量をメモリへ載せない(ADR-0003 決定8)。
 const CHUNK: usize = 64 * 1024;
@@ -64,6 +65,31 @@ pub struct Imported {
     pub warn_over: Option<u64>,
     /// 同じ境界に同じ内容が既にあった
     pub deduped: bool,
+}
+
+/// この端末で開けるかを**算出**する。台帳から読むのではない。
+///
+/// 境界ごとに実体の持ち主が違うので、ここが唯一の入口になる:
+/// 「本体も同期」は LFS の置き場、それ以外は自前の置き場。
+pub fn availability(
+    vault: &Vault,
+    stores: &Stores,
+    policy: Policy,
+    hash: &ContentHash,
+) -> Availability {
+    // 仕事のリポジトリ由来は、取得を試みること自体をしない
+    if policy.client_repo && policy.sync != SyncPolicy::LocalOnly {
+        return Availability::UnavailableByPolicy;
+    }
+    let here = match policy.sync {
+        SyncPolicy::Full => crate::lfs::has(vault, hash),
+        other => stores.has_local(other, hash),
+    };
+    if here {
+        Availability::Local
+    } else {
+        Availability::Missing
+    }
 }
 
 /// 保管庫1つ分の置き場。境界ごとのディレクトリを束ねるだけで、跨ぐ操作を持たない。
@@ -127,17 +153,10 @@ impl Stores {
         }
     }
 
-    /// この端末で開けるかを**算出**する。台帳から読むのではない。
-    pub fn availability(&self, policy: Policy, hash: &ContentHash) -> Availability {
-        // 仕事のリポジトリ由来は、取得を試みること自体をしない
-        if policy.client_repo && policy.sync != SyncPolicy::LocalOnly {
-            return Availability::UnavailableByPolicy;
-        }
-        if self.has(policy.sync, hash) {
-            Availability::Local
-        } else {
-            Availability::Missing
-        }
+    /// この境界に実体があるか。`full` はここが持たないので常に false
+    /// (判定は [`availability`] を通すこと)。
+    fn has_local(&self, sync: SyncPolicy, hash: &ContentHash) -> bool {
+        sync != SyncPolicy::Full && self.has(sync, hash)
     }
 
     /// 読みながら取り込む。**全量をメモリへ載せない**。
@@ -156,6 +175,11 @@ impl Stores {
         src: &mut impl Read,
         max: Option<u64>,
     ) -> Result<Imported> {
+        if sync == SyncPolicy::Full {
+            // 「本体も同期」の実体は LFS の置き場が持つ(ADR-0003 決定2 補足)。
+            // ここにも置くと二重保存になる
+            anyhow::bail!("full の実体は crate::lfs が持つ(ここでは扱わない)");
+        }
         let dir = self.boundary_dir(sync);
         let tmp_dir = dir.join("tmp");
         fs::create_dir_all(&tmp_dir)?;
@@ -286,25 +310,34 @@ mod tests {
     fn import_is_content_addressed_and_verifies() {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        let out = s.import(SyncPolicy::Full, &mut &b"hello"[..]).unwrap();
+        let out = s
+            .import(SyncPolicy::ManifestOnly, &mut &b"hello"[..])
+            .unwrap();
 
         assert_eq!(out.hash, ContentHash::of_bytes(b"hello"));
         assert_eq!(out.size, 5);
         assert!(!out.deduped);
-        assert!(s.has(SyncPolicy::Full, &out.hash));
-        assert_eq!(s.verify(SyncPolicy::Full, &out.hash).unwrap(), Verified::Ok);
+        assert!(s.has(SyncPolicy::ManifestOnly, &out.hash));
+        assert_eq!(
+            s.verify(SyncPolicy::ManifestOnly, &out.hash).unwrap(),
+            Verified::Ok
+        );
     }
 
     #[test]
     fn same_content_in_same_boundary_is_deduped() {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        let first = s.import(SyncPolicy::Full, &mut &b"same"[..]).unwrap();
-        let second = s.import(SyncPolicy::Full, &mut &b"same"[..]).unwrap();
+        let first = s
+            .import(SyncPolicy::ManifestOnly, &mut &b"same"[..])
+            .unwrap();
+        let second = s
+            .import(SyncPolicy::ManifestOnly, &mut &b"same"[..])
+            .unwrap();
         assert_eq!(first.hash, second.hash);
         assert!(!first.deduped);
         assert!(second.deduped);
-        assert_eq!(s.usage(SyncPolicy::Full).0, 1);
+        assert_eq!(s.usage(SyncPolicy::ManifestOnly).0, 1);
     }
 
     #[test]
@@ -318,10 +351,14 @@ mod tests {
         // 同じ bytes でも、別の境界からは「持っている」と答えない。
         // blob が漏れなくても、存在の有無そのものが情報になるため
         assert!(s.has(SyncPolicy::LocalOnly, &out.hash));
-        assert!(!s.has(SyncPolicy::Full, &out.hash));
         assert!(!s.has(SyncPolicy::ManifestOnly, &out.hash));
-        assert!(s.read(SyncPolicy::Full, &out.hash).unwrap().is_none());
-        assert_eq!(s.usage(SyncPolicy::Full), (0, 0));
+        assert!(!s.has(SyncPolicy::ManifestOnly, &out.hash));
+        assert!(
+            s.read(SyncPolicy::ManifestOnly, &out.hash)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(s.usage(SyncPolicy::ManifestOnly), (0, 0));
     }
 
     #[test]
@@ -330,10 +367,10 @@ mod tests {
         let a = stores(&dir, "ws-a");
         let b = stores(&dir, "ws-b");
         let out = a
-            .import(SyncPolicy::Full, &mut &b"shared bytes"[..])
+            .import(SyncPolicy::ManifestOnly, &mut &b"shared bytes"[..])
             .unwrap();
-        assert!(a.has(SyncPolicy::Full, &out.hash));
-        assert!(!b.has(SyncPolicy::Full, &out.hash));
+        assert!(a.has(SyncPolicy::ManifestOnly, &out.hash));
+        assert!(!b.has(SyncPolicy::ManifestOnly, &out.hash));
     }
 
     #[test]
@@ -361,7 +398,7 @@ mod tests {
         };
 
         let err = s
-            .import_limited(SyncPolicy::Full, &mut src, Some(CHUNK as u64))
+            .import_limited(SyncPolicy::ManifestOnly, &mut src, Some(CHUNK as u64))
             .unwrap_err();
         assert!(
             matches!(
@@ -372,8 +409,8 @@ mod tests {
         );
         // 上限の2塊ぶんまでで止まっている(全量 4 塊は読んでいない)
         assert!(src.read <= CHUNK * 2, "読み過ぎ: {}", src.read);
-        assert_eq!(s.usage(SyncPolicy::Full), (0, 0));
-        let tmp = s.boundary_dir(SyncPolicy::Full).join("tmp");
+        assert_eq!(s.usage(SyncPolicy::ManifestOnly), (0, 0));
+        let tmp = s.boundary_dir(SyncPolicy::ManifestOnly).join("tmp");
         assert!(
             fs::read_dir(tmp).unwrap().next().is_none(),
             "一時ファイルが残っている"
@@ -400,9 +437,9 @@ mod tests {
         }
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        assert!(s.import(SyncPolicy::Full, &mut Broken).is_err());
-        assert_eq!(s.usage(SyncPolicy::Full), (0, 0));
-        let tmp = s.boundary_dir(SyncPolicy::Full).join("tmp");
+        assert!(s.import(SyncPolicy::ManifestOnly, &mut Broken).is_err());
+        assert_eq!(s.usage(SyncPolicy::ManifestOnly), (0, 0));
+        let tmp = s.boundary_dir(SyncPolicy::ManifestOnly).join("tmp");
         let left: Vec<_> = fs::read_dir(tmp).unwrap().collect();
         assert!(left.is_empty(), "一時ファイルが残っている");
     }
@@ -411,10 +448,16 @@ mod tests {
     fn tampered_object_is_reported_as_mismatch() {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        let out = s.import(SyncPolicy::Full, &mut &b"original"[..]).unwrap();
-        fs::write(s.object_path(SyncPolicy::Full, &out.hash), b"tampered").unwrap();
+        let out = s
+            .import(SyncPolicy::ManifestOnly, &mut &b"original"[..])
+            .unwrap();
+        fs::write(
+            s.object_path(SyncPolicy::ManifestOnly, &out.hash),
+            b"tampered",
+        )
+        .unwrap();
         assert_eq!(
-            s.verify(SyncPolicy::Full, &out.hash).unwrap(),
+            s.verify(SyncPolicy::ManifestOnly, &out.hash).unwrap(),
             Verified::Mismatch
         );
     }
@@ -425,7 +468,7 @@ mod tests {
         let s = stores(&dir, "ws-a");
         let absent = ContentHash::of_bytes(b"never imported");
         assert_eq!(
-            s.verify(SyncPolicy::Full, &absent).unwrap(),
+            s.verify(SyncPolicy::ManifestOnly, &absent).unwrap(),
             Verified::Missing
         );
     }
@@ -433,25 +476,46 @@ mod tests {
     #[test]
     fn availability_is_derived_here_not_stored() {
         let dir = tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
         let s = stores(&dir, "ws-a");
-        let out = s.import(SyncPolicy::Full, &mut &b"here"[..]).unwrap();
+        let out = s
+            .import(SyncPolicy::ManifestOnly, &mut &b"here"[..])
+            .unwrap();
 
-        let policy = Policy::default_managed();
-        assert_eq!(s.availability(policy, &out.hash), Availability::Local);
+        let policy = Policy {
+            sensitivity: Sensitivity::Private,
+            sync: SyncPolicy::ManifestOnly,
+            client_repo: false,
+        };
+        assert_eq!(
+            availability(&vault, &s, policy, &out.hash),
+            Availability::Local
+        );
 
         let elsewhere = ContentHash::of_bytes(b"not here");
-        assert_eq!(s.availability(policy, &elsewhere), Availability::Missing);
+        assert_eq!(
+            availability(&vault, &s, policy, &elsewhere),
+            Availability::Missing
+        );
 
         // 仕事のリポジトリ由来は取得を試みない
         let client = Policy {
-            sensitivity: Sensitivity::Private,
-            sync: SyncPolicy::Full,
             client_repo: true,
+            sync: SyncPolicy::ManifestOnly,
+            ..policy
         };
         assert_eq!(
-            s.availability(client, &out.hash),
+            availability(&vault, &s, client, &out.hash),
             Availability::UnavailableByPolicy
         );
+    }
+
+    #[test]
+    fn full_is_owned_by_lfs_not_here() {
+        let dir = tempdir().unwrap();
+        let s = stores(&dir, "ws-a");
+        let err = s.import(SyncPolicy::Full, &mut &b"x"[..]).unwrap_err();
+        assert!(err.to_string().contains("lfs"), "{err}");
     }
 
     #[test]
