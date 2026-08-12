@@ -17,6 +17,7 @@ pub mod ledger;
 pub mod lfs;
 pub mod mcp;
 pub mod registry;
+pub mod resolve;
 pub mod search;
 pub mod store;
 pub mod tags;
