@@ -6,6 +6,7 @@
 pub mod attachments;
 pub mod connect;
 pub mod favorites;
+pub mod files;
 pub mod home;
 pub mod notes;
 pub mod setup;

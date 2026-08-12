@@ -48,6 +48,13 @@
   "errors": {
     "noteNotFound": "That note doesn’t exist yet",
     "attachmentTooLarge": "Files larger than {{limit}}MB can’t be attached",
+    "fileTooLarge": "Files larger than {{limit}}MB can’t be synced",
+    "fileConflict": "It was updated somewhere else. Reload the latest and try again",
+    "fileLocationUnstable": "This location can’t be reached from your other devices. Import a copy instead",
+    "fileClientRepoLocked": "This file lives in a work repository, so the setting can’t be changed",
+    "fileNeedsConfirm": "Widening what leaves this device needs a confirmation",
+    "fileMalformed": "That file reference is not valid",
+    "clipboardImageTooLarge": "The pasted image is too large. Save it as a file and import that instead",
     "claudeDesktopNotFound": "Claude Desktop not found",
     "claudeDesktopLaunchFailed": "Could not launch Claude Desktop (check that it is installed)",
     "backupFailed": "Backup failed: {{message}}",
