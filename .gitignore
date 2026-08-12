@@ -3,3 +3,6 @@ poc/*/target
 poc/embed-onnx/models/
 node_modules/
 app/dist/
+
+# macOS が各ディレクトリに勝手に作る
+.DS_Store
