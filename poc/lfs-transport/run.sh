@@ -118,12 +118,18 @@ fi
 # ───────────────────────────────────────────────────────────────
 # 3〜5 は本物の remote が要る
 # ───────────────────────────────────────────────────────────────
+MODE="remote"
 if [[ -z "$REMOTE" ]]; then
+  # 実体の取得・除外は転送方式によらず同じ経路(smudge と fetch 設定)を通るので、
+  # ローカルの bare リポジトリで代用できる。認証だけは代用できない
+  MODE="local"
+  REMOTE="$WORK/origin.git"
+  # 既定ブランチを揃えないと clone 時に HEAD が解決できない
+  git init -q --bare -b main "$REMOTE"
   echo
-  skip "手動 clone で実体が落ちてこないか" "--remote が無い"
-  skip "必要な実体だけ後から取れるか" "--remote が無い"
-  skip "既存の認証を対話なしで使えるか" "--remote が無い"
-else
+  echo "(remote 未指定 — ローカルの bare で代用する。認証の項目だけ測れない)"
+fi
+
   echo
   echo "== 3. push =="
   cat > .lfsconfig <<'EOF'
@@ -135,7 +141,11 @@ EOF
   git remote add origin "$REMOTE"
   git branch -M main
   if GIT_TERMINAL_PROMPT=0 git push -q -u origin main 2>"$WORK/push.err"; then
-    pass "既存の認証を対話なしで使えるか" "push 成功(資格情報の入力なし)"
+    if [[ "$MODE" == "remote" ]]; then
+      pass "既存の認証を対話なしで使えるか" "push 成功(資格情報の入力なし)"
+    else
+      skip "既存の認証を対話なしで使えるか" "ローカル代用では測れない"
+    fi
   else
     fail "既存の認証を対話なしで使えるか" "$(tail -2 "$WORK/push.err" | tr '\n' ' ')"
   fi
@@ -156,8 +166,11 @@ EOF
   echo
   echo "== 5. 必要な実体だけ後から取る =="
   cd "$PLAIN"
+  # 素の clone には LFS のフィルタが張られていない。アプリ側で有効化する
+  git lfs install --local >/dev/null 2>&1
   git config lfs.storage "$WORK/sidecar2"
-  if GIT_TERMINAL_PROMPT=0 git lfs pull -I "blob.bin" >/dev/null 2>&1; then
+  # -X "" が要る。.lfsconfig の fetchexclude=* は -I だけでは上書きされない
+  if GIT_TERMINAL_PROMPT=0 git lfs pull -I "blob.bin" -X "" >/dev/null 2>&1; then
     GOT2="$(sha256 blob.bin)"
     if [[ "$GOT2" == "$WANT" ]]; then
       pass "必要な実体だけ後から取れるか" "取得後に照合一致"
@@ -167,7 +180,6 @@ EOF
   else
     fail "必要な実体だけ後から取れるか" "git lfs pull が失敗"
   fi
-fi
 
 echo
 echo "== まとめ =="
