@@ -12,9 +12,13 @@
 | 2 | **ノートの形式(OKF frontmatter)はアプリが管理**する。直接の形式いじりはしない | parse 検証・書き込みはコア API 経由のみ |
 | 3 | **ノートは AI の領分**(update / remove は AI、削除指示は人間) | 所有ガード(コアで強制) |
 | 4 | **同期・索引は派生**。壊れたら画面に出す(沈黙しない) | fail-open+劣化表示 |
-| 5 | **ファイルの実体と持ち出し範囲はコアが守る**(2026-08-12 追加) | 取り込みは全経路(picker / drop / paste / CLI / MCP)が同一のコア API に合流 / `client_repo` 由来は `local_only` 固定で instructions・prompt から緩和不能 / **緩和の能力を MCP に公開しない**(能力の不在)/ content と作成時 provenance は不変(更新は新しい版)/ availability は同期せず端末ごとに導出 |
+| 5 | **ファイルの実体と持ち出し範囲はコアが守る**(2026-08-12 追加) | 取り込みは全経路(picker / drop / paste / CLI / MCP)が同一のコア API に合流 / `client_repo` 由来は `local_only` 固定で instructions・prompt から緩和不能 / **緩和の能力を MCP に公開しない**(能力の不在)/ content と作成時 provenance は不変(更新は新しい版)/ **新しい版は前の版の区分を引き継ぎ、渡された指定を見ない**(2026-08-13 追加)/ availability は同期せず端末ごとに導出 |
 
 - タグ無しノートは契約違反状態として**お手入れの気づき**に出す(修復は Claude への依頼で)
+- 契約5 の「新しい版は前の版の区分を引き継ぐ」は、確認を1段置いても
+  **同じ結果へ到達する別の操作から漏れる**ため(「新しい版として追加」は新規取り込みと
+  同じ経路で、渡された policy を効かせると確認を通らない緩和になる)。
+  強制点は `kb-core` の `intake::take`、検査は `a_new_version_cannot_widen_the_boundary`
 - 契約5 に**個別の受入条件までは書かない**(この文書は「最低限」であるため)。
   Artifact の受入条件14項目は [ADR-0003](adr/0003-artifact-storage-and-transport.md) と
   kb-core のテストが持つ。ここに置くのは、instructions では守れず**能力・スキーマ・コアで
