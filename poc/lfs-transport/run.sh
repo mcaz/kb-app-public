@@ -55,6 +55,10 @@ REPO="$WORK/oid"
 git init -q "$REPO"
 cd "$REPO"
 git lfs install --local >/dev/null 2>&1
+# 置き場の指定は「最初の実体を作る前」でなければ効かない(下の項目2で実測)
+SIDECAR="$WORK/sidecar"
+mkdir -p "$SIDECAR"
+git config lfs.storage "$SIDECAR"
 git lfs track "*.bin" >/dev/null
 head -c 3000000 /dev/urandom > blob.bin
 WANT="$(sha256 blob.bin)"
@@ -82,16 +86,33 @@ fi
 # ───────────────────────────────────────────────────────────────
 echo
 echo "== 2. 実体の置き場を保管庫の外へ =="
-SIDECAR="$WORK/sidecar"
-mkdir -p "$SIDECAR"
-git config lfs.storage "$SIDECAR"
-git commit -qm "blob" >/dev/null
+git -c user.email=poc@localhost -c user.name=poc commit -qm "blob" >/dev/null
 INSIDE="$(find .git/lfs -type f 2>/dev/null | wc -l | tr -d ' ')"
 OUTSIDE="$(find "$SIDECAR" -type f 2>/dev/null | wc -l | tr -d ' ')"
 if (( OUTSIDE > 0 && INSIDE == 0 )); then
   pass "lfs.storage が効く" "外 ${OUTSIDE} 件 / 保管庫内 ${INSIDE} 件"
 else
   fail "lfs.storage が効く" "外 ${OUTSIDE} 件 / 保管庫内 ${INSIDE} 件"
+fi
+
+# 順序の罠: 実体を作った後に設定しても、既にある実体は移らない。
+# 製品では「保管庫を作る/clone した直後」に張る必要がある
+LATE="$WORK/late"
+git init -q "$LATE"
+(
+  cd "$LATE"
+  git lfs install --local >/dev/null 2>&1
+  git lfs track "*.bin" >/dev/null
+  head -c 1000000 /dev/urandom > late.bin
+  git add .gitattributes late.bin
+  mkdir -p "$WORK/late-side"
+  git config lfs.storage "$WORK/late-side" # ← 後から設定
+)
+LATE_INSIDE="$(find "$LATE/.git/lfs" -type f 2>/dev/null | wc -l | tr -d ' ')"
+if (( LATE_INSIDE > 0 )); then
+  pass "後から設定しても移らない(順序の罠)" "保管庫内に ${LATE_INSIDE} 件が残る"
+else
+  fail "後から設定しても移らない(順序の罠)" "想定と違う挙動"
 fi
 
 # ───────────────────────────────────────────────────────────────
