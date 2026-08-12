@@ -124,11 +124,18 @@ fn stderr_of(out: &std::process::Output) -> String {
 /// 生成ファイルを競合させない設定(複数デバイス同期の前提)。
 /// index.md は派生物 — 競合したら相手側を取り、pull 後に再生成で自己修復。
 /// log.md は追記ログ — union merge で両側の行を残す。
+/// .kb-workspace は保管庫の ID — 2台が同時に初回起動すると別々に発行されるので、
+/// union で両方を残し、読むときに古い方へ寄せる(crate::workspace)。
 /// merge driver の設定はリポジトリローカルなので、clone した側でも毎回冪等に張り直す。
 fn ensure_merge_config(vault: &Vault) -> Result<()> {
     let attrs = vault.root.join(".gitattributes");
     // eol=lf: Windows(autocrlf)混在でも差分が全行化しない
-    let want = "* text=auto eol=lf\nindex.md merge=ours\nlog.md merge=union\n";
+    let want = concat!(
+        "* text=auto eol=lf\n",
+        "index.md merge=ours\n",
+        "log.md merge=union\n",
+        ".kb-workspace merge=union\n",
+    );
     let current = fs::read_to_string(&attrs).unwrap_or_default();
     if current != want {
         fs::write(&attrs, want)?;
