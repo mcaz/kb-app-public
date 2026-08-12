@@ -1,12 +1,16 @@
 import { KbError } from "@/lib/api/error";
 
 import type {
+  Added,
+  Availability,
   CareProposal,
   ConnectState,
   Favorite,
   GraphData,
+  FileRow,
   Hit,
   HomeState,
+  NoteFiles,
   NoteView,
   SearchOutcome,
   SetupState,
@@ -35,7 +39,6 @@ const notes: NoteView[] = [
       "- 住所変更: 免許・銀行・[確定申告の準備](/notes/確定申告の準備.md)にも影響\n",
     related: [["notes/確定申告の準備", "確定申告の準備"]],
     similar: [["notes/沖縄旅行の持ち物リスト", "沖縄旅行の持ち物リスト", 0.42]],
-    attachments: [["間取り図.png", 245760]],
     vault_root: "(demo)",
   },
   {
@@ -49,7 +52,6 @@ const notes: NoteView[] = [
     body: "医療費の領収書を集める。\n",
     related: [],
     similar: [["notes/引っ越し手続きメモ", "引っ越し手続きメモ", 0.38]],
-    attachments: [],
     vault_root: "(demo)",
   },
   {
@@ -63,7 +65,6 @@ const notes: NoteView[] = [
     body: "会話でまとめた持ち物:\n\n- 日焼け止め\n- モバイルバッテリー\n- 子どもの浮き輪\n",
     related: [],
     similar: [],
-    attachments: [],
     vault_root: "(demo)",
   },
 ];
@@ -79,6 +80,54 @@ const toHit = (n: NoteView): Hit => ({
   created: n.created_at,
   updated: n.generated_at,
 });
+
+/** ノートごとのファイル。取得できていない行も1つ置いて、状態の見え方を確かめられるようにする。 */
+const files: Record<string, FileRow[]> = {
+  "notes/引っ越し手続きメモ": [
+    {
+      id: "demo-1",
+      version: 1,
+      name: "間取り図.png",
+      size: 245760,
+      media_type: "image/png",
+      availability: "local",
+      sensitivity: "private",
+      sync: "full",
+      linked: false,
+      client_repo: false,
+      can_fetch: false,
+      added_at: "2026-08-10T05:00:00Z",
+    },
+    {
+      id: "demo-2",
+      version: 1,
+      name: "内見メモ.pdf",
+      size: 1048576,
+      media_type: "application/pdf",
+      availability: "missing",
+      sensitivity: "private",
+      sync: "full",
+      linked: false,
+      client_repo: false,
+      can_fetch: true,
+      added_at: "2026-08-11T05:00:00Z",
+    },
+    {
+      id: "demo-3",
+      version: 1,
+      name: "契約書ひな形.docx",
+      size: 51200,
+      media_type: "application/octet-stream",
+      availability: "unavailable_by_policy",
+      sensitivity: "private",
+      sync: "local_only",
+      linked: true,
+      client_repo: true,
+      can_fetch: false,
+      added_at: "2026-08-12T05:00:00Z",
+    },
+  ],
+};
 
 const care: CareProposal[] = [
   {
@@ -186,17 +235,35 @@ export const demoApi = {
     if (i >= 0) care.splice(i, 1);
     return delay(null);
   },
-  attachmentAdd: (id: string, name: string, dataBase64: string) => {
-    notes
-      .find((n) => n.id === id)
-      ?.attachments.push([name, Math.round((dataBase64.length * 3) / 4)]);
-    return delay<[string, string | null]>([name, null]);
+  noteFiles: (id: string): Promise<NoteFiles> =>
+    delay({
+      files: files[id] ?? [],
+      legacy: id === "notes/引っ越し手続きメモ" ? [{ name: "旧・間取り図.png", size: 245760 }] : [],
+    }),
+  fileAdd: (noteId: string, path: string): Promise<Added> => {
+    const file: FileRow = {
+      id: `demo-${Object.values(files).flat().length + 1}`,
+      version: 1,
+      name: path.split("/").pop() ?? "file",
+      size: 34567,
+      media_type: "image/png",
+      availability: "local",
+      sensitivity: "private",
+      sync: "full",
+      linked: false,
+      client_repo: false,
+      can_fetch: false,
+      added_at: new Date().toISOString(),
+    };
+    files[noteId] = [...(files[noteId] ?? []), file];
+    return delay({ file, warn_over_bytes: null, forced_local_only: false });
   },
-  attachmentAddFromPath: (_id: string, path: string) =>
-    delay<[string, string | null]>([path.split("/").pop() ?? "file", null]),
   // ブラウザでは DOM の paste 経路が動くのでフォールバックは不要
-  attachmentPaste: (_id: string) => delay<[string, string | null] | null>(null),
-  attachmentRemove: () => delay(null),
+  fileAddFromClipboard: () => delay<Added | null>(null),
+  fileDetach: () => delay(null),
+  fileFetch: () => delay<Availability>("local"),
+  // ブラウザにネイティブの選択画面は無い(この経路は Tauri でしか通らない)
+  pickFiles: () => delay<string[]>([]),
   connectDesktop: () => {
     connect.desktop = "connected";
     return delay(null);

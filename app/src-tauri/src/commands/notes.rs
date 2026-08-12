@@ -19,7 +19,6 @@ pub struct NoteView {
     generated_at: Option<String>,
     related: Vec<(String, Option<String>)>,
     similar: Vec<(String, Option<String>, f32)>,
-    attachments: Vec<(String, u64)>,
     vault_root: String,
 }
 
@@ -43,7 +42,6 @@ pub fn note_get(state: State<'_, AppState>, id: String) -> AppResult<NoteView> {
             generated_at: note.front.updated_at(),
             related: related_of(conn, Some(&id)).unwrap_or_default(),
             similar: kb_core::search::similar_notes(conn, &id, 6).unwrap_or_default(),
-            attachments: vault.list_attachments(&id),
             vault_root: vault.root.display().to_string(),
             id: id.clone(),
         })

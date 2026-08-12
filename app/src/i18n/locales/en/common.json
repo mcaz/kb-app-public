@@ -47,7 +47,6 @@
   },
   "errors": {
     "noteNotFound": "That note doesn’t exist yet",
-    "attachmentTooLarge": "Files larger than {{limit}}MB can’t be attached",
     "fileTooLarge": "Files larger than {{limit}}MB can’t be synced",
     "fileConflict": "It was updated somewhere else. Reload the latest and try again",
     "fileLocationUnstable": "This location can’t be reached from your other devices. Import a copy instead",

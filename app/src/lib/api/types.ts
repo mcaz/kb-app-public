@@ -22,6 +22,7 @@ export type SearchOutcome = SearchOutcome_Serialize;
 export type Favorite = Favorite_Serialize;
 
 export type { ConnectState, GraphData, NoteView, SetupState, TagInfo, TagOverview };
+export type { Added, Availability, FileRow, LegacyFile, NoteFiles } from "@/lib/bindings";
 export type { CareProposal, GraphNode, Stats } from "@/lib/bindings";
 
 /** 一覧の絞り込み条件(お気に入りとして保存できる単位)。 */

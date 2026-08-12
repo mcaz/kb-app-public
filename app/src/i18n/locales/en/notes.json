@@ -56,16 +56,28 @@
     "careConfirm": "Got it",
     "careDismissed": "OK, leaving it as is"
   },
-  "attachment": {
-    "label": "Attachments:",
-    "add": "Attach a file",
-    "added": "Attached",
-    "addedNamed": "Attached ({{name}})",
-    "addedCount": "Attached ({{count}})",
-    "removed": "Attachment removed (it stays in history)",
-    "tooLarge": "Files larger than 50MB can’t be attached",
+  "file": {
+    "label": "Files:",
+    "add": "Add a file",
+    "added": "Added",
+    "addedCount": "Added ({{count}})",
+    "replaced": "Added as a new version",
+    "newVersion": "Add as a new version",
+    "detach": "Remove from this note",
+    "detached": "Removed from this note (the file itself stays)",
+    "fetch": "Get a copy",
+    "fetched": "Copy retrieved",
+    "fetchIncomplete": "Could not retrieve it (still not on this device)",
+    "fetchFailed": "Retrieval failed: {{error}}",
+    "missing": "Not on this device",
+    "unavailable": "Can’t be opened on this device (by setting)",
+    "localOnly": "Not synced",
+    "linked": "Referenced in place",
+    "legacy": "Not imported yet",
+    "large": "Large file (over {{limit}}MB) — syncing may take a while",
+    "forcedLocalOnly": "This file lives in a work repository, so it is kept unsynced",
+    "addFailed": "Could not add the file: {{error}}",
     "needNote": "Open a note before dropping files",
-    "failed": "Attachment failed: {{error}}",
     "pasteFailed": "Paste failed: {{error}}"
   }
 }

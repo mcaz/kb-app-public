@@ -56,16 +56,28 @@
     "careConfirm": "確認した",
     "careDismissed": "了解、そのままにします"
   },
-  "attachment": {
-    "label": "添付:",
-    "add": "ファイルを添付",
-    "added": "添付しました",
-    "addedNamed": "添付しました({{name}})",
-    "addedCount": "添付しました({{count}} 件)",
-    "removed": "添付を削除しました(履歴には残ります)",
-    "tooLarge": "50MB を超えるファイルは添付できません",
+  "file": {
+    "label": "ファイル:",
+    "add": "ファイルを追加",
+    "added": "追加しました",
+    "addedCount": "追加しました({{count}} 件)",
+    "replaced": "新しい版として追加しました",
+    "newVersion": "新しい版として追加",
+    "detach": "このノートから外す",
+    "detached": "このノートから外しました(ファイル自体は残ります)",
+    "fetch": "取り寄せる",
+    "fetched": "取り寄せました",
+    "fetchIncomplete": "取り寄せられませんでした(この端末にはまだありません)",
+    "fetchFailed": "取り寄せに失敗: {{error}}",
+    "missing": "この端末にありません",
+    "unavailable": "この端末では開けません(設定による)",
+    "localOnly": "同期しない",
+    "linked": "元の場所のまま参照",
+    "legacy": "取り込み前",
+    "large": "大きなファイルです({{limit}}MB 超)— 同期に時間がかかることがあります",
+    "forcedLocalOnly": "仕事のリポジトリの中のファイルなので、同期しない設定にしました",
+    "addFailed": "追加に失敗: {{error}}",
     "needNote": "ノートを開いてからドロップしてください",
-    "failed": "添付に失敗: {{error}}",
-    "pasteFailed": "ペースト添付に失敗: {{error}}"
+    "pasteFailed": "貼り付けに失敗: {{error}}"
   }
 }

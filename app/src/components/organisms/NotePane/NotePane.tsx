@@ -6,16 +6,14 @@ import { Icon } from "@/components/atoms/Icon";
 import { StatusPill } from "@/components/atoms/StatusPill";
 import { TagChip } from "@/components/atoms/TagChip";
 import { Button } from "@/components/atoms/ui/button";
-import { AttachmentBar } from "@/components/molecules/AttachmentBar";
 import { CareBar } from "@/components/molecules/CareBar";
+import { FilePanel } from "@/components/organisms/FilePanel";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
 import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useCareDismiss, useHomeState, useLaunchAi, useNote } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
-
-import { useAttachmentActions } from "./useAttachmentActions";
 
 export interface NotePaneProps {
   noteId: string;
@@ -35,7 +33,6 @@ export function NotePane({ noteId, secondary = false }: NotePaneProps) {
   const errorText = useErrorText();
   const careDismiss = useCareDismiss();
   const launchAi = useLaunchAi();
-  const { addFiles, removeFile } = useAttachmentActions(noteId);
 
   if (!note) return null;
   const care = (home?.care ?? []).filter((c) => c.a === note.id || c.b === note.id);
@@ -107,20 +104,7 @@ export function NotePane({ noteId, secondary = false }: NotePaneProps) {
         </Button>
       </div>
 
-      <AttachmentBar
-        attachments={note.attachments}
-        labels={{
-          label: t("attachment.label"),
-          add: t("attachment.add"),
-          remove: t("common:action.delete"),
-        }}
-        onAdd={(files) => {
-          void addFiles(files).then((ok) => {
-            if (ok) toast(t("attachment.added"));
-          });
-        }}
-        onRemove={(name) => void removeFile(name)}
-      />
+      <FilePanel noteId={note.id} />
 
       <MarkdownView
         body={note.body}

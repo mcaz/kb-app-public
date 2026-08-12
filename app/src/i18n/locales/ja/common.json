@@ -47,7 +47,6 @@
   },
   "errors": {
     "noteNotFound": "そのノートはまだありません",
-    "attachmentTooLarge": "{{limit}}MB を超えるファイルは添付できません",
     "fileTooLarge": "{{limit}}MB を超えるファイルは同期できません",
     "fileConflict": "別の場所で更新されています。最新を読み込んでからやり直してください",
     "fileLocationUnstable": "この場所は他の端末から辿れません。コピーして取り込んでください",

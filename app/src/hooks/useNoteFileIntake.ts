@@ -9,9 +9,11 @@ import { queryKeys } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
 
 /**
- * ノートを開いた状態での ⌘V / ドラッグ&ドロップ = 添付として持ち込む。
- * 旧実装はモジュール読み込み時に document へ購読を張っていたので、ここで
- * ライフサイクルに載せ替える(解除できるようにする)。
+ * ノートを開いた状態での ⌘V / ドラッグ&ドロップ = そのノートのファイルとして持ち込む。
+ *
+ * **どちらもコアの取り込み口へ合流させる**(ADR-0003 決定6)。以前はここだけが
+ * 実体の書き込みを直接呼んでいて、区分の判定を通らない経路になっていた。
+ * 渡すのはパスだけで、中身はこの層に載せない(決定8。base64 IPC の廃止)。
  */
 export function useNoteFileIntake(noteId: string | null, active: boolean) {
   const { t } = useTranslation("notes");
@@ -19,7 +21,7 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
   const qc = useQueryClient();
 
   useEffect(() => {
-    const refresh = (id: string) => qc.invalidateQueries({ queryKey: queryKeys.note(id) });
+    const refresh = (id: string) => qc.invalidateQueries({ queryKey: queryKeys.noteFiles(id) });
 
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -27,42 +29,22 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
       if (!noteId || !active) return;
 
       const items = Array.from(e.clipboardData?.items ?? []);
-      const image = items.find((i) => i.type.startsWith("image/"));
+      // 文字列の貼り付けは邪魔しない
+      if (!items.some((i) => i.type.startsWith("image/")) && items.some((i) => i.kind === "string"))
+        return;
 
       void (async () => {
         try {
-          if (image) {
-            e.preventDefault();
-            const file = image.getAsFile();
-            if (!file) return;
-            const ext = image.type.split("/")[1] ?? "png";
-            const base64 = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve((reader.result as string).split(",", 2)[1] ?? "");
-              reader.onerror = () => reject(new Error("read failed"));
-              reader.readAsDataURL(file);
-            });
-            const [saved, warning] = await api.attachmentAdd(
-              noteId,
-              `pasted-${Date.now()}.${ext}`,
-              base64,
-            );
-            if (warning) toast(`⚠ ${warning}`);
-            await refresh(noteId);
-            toast(t("attachment.addedNamed", { name: saved }));
-            return;
-          }
-          // 文字列のペーストは邪魔しない
-          if (items.some((i) => i.kind === "string")) return;
-          // WKWebView は DOM に画像を渡さないため Rust 側から読む
-          const result = await api.attachmentPaste(noteId);
-          if (!result) return;
-          const [saved, warning] = result;
-          if (warning) toast(`⚠ ${warning}`);
+          // 画像は DOM 側で読まず、クリップボードから直接ファイルにして取り込む
+          // (WKWebView は DOM の paste に画像を渡さないので、経路も1本で済む)
+          const added = await api.fileAddFromClipboard(noteId);
+          if (!added) return;
+          e.preventDefault();
+          if (added.forced_local_only) toast(t("file.forcedLocalOnly"));
           await refresh(noteId);
-          toast(t("attachment.addedNamed", { name: saved }));
+          toast(t("file.added"));
         } catch (err) {
-          toast(t("attachment.pasteFailed", { error: errorText(err) }));
+          toast(t("file.pasteFailed", { error: errorText(err) }));
         }
       })();
     };
@@ -79,16 +61,16 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
       let added = 0;
       for (const path of paths) {
         try {
-          const [, warning] = await api.attachmentAddFromPath(id, path);
-          if (warning) toast(`⚠ ${warning}`);
+          const result = await api.fileAdd(id, path);
+          if (result.forced_local_only) toast(t("file.forcedLocalOnly"));
           added++;
         } catch (e) {
-          toast(t("attachment.failed", { error: errorText(e) }));
+          toast(t("file.addFailed", { error: errorText(e) }));
         }
       }
       if (added === 0) return;
-      await qc.invalidateQueries({ queryKey: queryKeys.note(id) });
-      toast(t("attachment.addedCount", { count: added }));
+      await qc.invalidateQueries({ queryKey: queryKeys.noteFiles(id) });
+      toast(t("file.addedCount", { count: added }));
     };
 
     void getCurrentWebview()
@@ -101,7 +83,7 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
         document.body.classList.remove("dragover");
         if (kind !== "drop") return;
         if (!noteId || !active) {
-          toast(t("attachment.needNote"));
+          toast(t("file.needNote"));
           return;
         }
         void drop((event.payload as { paths?: string[] }).paths ?? [], noteId);

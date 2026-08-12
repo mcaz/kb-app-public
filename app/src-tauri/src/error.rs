@@ -22,8 +22,6 @@ pub enum AppError {
     VaultUnavailable { message: String },
     /// 指定 ID のノートが無い(消された・まだ書かれていない)。
     NoteNotFound { id: String },
-    /// 添付が上限を超えている。
-    AttachmentTooLarge { limit_mb: u32, actual_mb: u32 },
     /// 「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。
     FileTooLarge { size: u64, limit: u64 },
     /// 別の場所で更新された。**自動再試行も強制上書きもしない**(決定7)。
@@ -58,10 +56,6 @@ impl std::fmt::Display for AppError {
                 write!(f, "{message}")
             }
             Self::NoteNotFound { id } => write!(f, "ノートが見つからない: {id}"),
-            Self::AttachmentTooLarge {
-                limit_mb,
-                actual_mb,
-            } => write!(f, "添付が上限を超えている({actual_mb}MB > {limit_mb}MB)"),
             Self::FileTooLarge { size, limit } => write!(f, "大きすぎる({size} > {limit})"),
             Self::FileConflict { expected, current } => {
                 write!(f, "別の場所で更新された(手元 {expected} / 最新 {current})")

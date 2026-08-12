@@ -16,7 +16,7 @@ pub mod state;
 use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events};
 
-use commands::{attachments, connect, favorites, files, home, notes, setup};
+use commands::{connect, favorites, files, home, notes, setup};
 
 /// GUI が呼べるコマンドとイベントの全集合。ここが `app/src/lib/bindings.ts` の正本。
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
@@ -33,10 +33,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             favorites::favorites_list,
             favorites::favorite_add,
             favorites::favorite_remove,
-            attachments::attachment_add,
-            attachments::attachment_add_from_path,
-            attachments::attachment_paste,
-            attachments::attachment_remove,
             files::note_files,
             files::file_add,
             files::file_add_from_clipboard,
@@ -75,6 +71,9 @@ pub fn run() {
     export_bindings().expect("bindings.ts の生成に失敗");
 
     tauri::Builder::default()
+        // ファイルを選ぶ経路。取り込みに渡すのはパスだけなので、
+        // 中身を JS 側へ載せない選択肢がこれしかない(ADR-0003 決定8)
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             // イベントの購読口を張る(進捗通知など)

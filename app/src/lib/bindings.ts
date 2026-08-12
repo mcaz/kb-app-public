@@ -20,19 +20,6 @@ export const commands = {
 	favoritesList: () => typedError<Favorite_Serialize[], AppError>(__TAURI_INVOKE("favorites_list")),
 	favoriteAdd: (fav: Favorite_Deserialize) => typedError<null, AppError>(__TAURI_INVOKE("favorite_add", { fav })),
 	favoriteRemove: (name: string) => typedError<null, AppError>(__TAURI_INVOKE("favorite_remove", { name })),
-	/**  添付の追加。データは base64。 */
-	attachmentAdd: (id: string, name: string, dataBase64: string) => typedError<[string, string | null], AppError>(__TAURI_INVOKE("attachment_add", { id, name, dataBase64 })),
-	/**
-	 *  パス指定で添付(ドラッグ&ドロップ用)。Tauri はファイルドロップを DOM に渡さず
-	 *  自前イベントでパスをくれるので、Rust 側で直接読む(base64 経由より大きいファイルに強い)。
-	 */
-	attachmentAddFromPath: (id: string, path: string) => typedError<[string, string | null], AppError>(__TAURI_INVOKE("attachment_add_from_path", { id, path })),
-	/**
-	 *  クリップボードの画像を添付(ペーストのフォールバック)。
-	 *  画像が無ければ Ok(None) — テキストのペーストを邪魔しない。
-	 */
-	attachmentPaste: (id: string) => typedError<[string, string | null] | null, AppError>(__TAURI_INVOKE("attachment_paste", { id })),
-	attachmentRemove: (id: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("attachment_remove", { id, name })),
 	/**  そのノートのファイル(最新版だけ)と、まだ移行していない旧添付。 */
 	noteFiles: (id: string) => typedError<NoteFiles, AppError>(__TAURI_INVOKE("note_files", { id })),
 	/**
@@ -94,8 +81,6 @@ export type AppError =
 { code: "vault_unavailable"; message: string } | 
 /**  指定 ID のノートが無い(消された・まだ書かれていない)。 */
 { code: "note_not_found"; id: string } | 
-/**  添付が上限を超えている。 */
-{ code: "attachment_too_large"; limit_mb: number; actual_mb: number } | 
 /**  「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。 */
 { code: "file_too_large"; size: number; limit: number } | 
 /**  別の場所で更新された。**自動再試行も強制上書きもしない**(決定7)。 */
@@ -313,7 +298,6 @@ export type NoteView = {
 	generated_at: string | null,
 	related: ([string, string | null])[],
 	similar: ([string, string | null, number | null])[],
-	attachments: ([string, number])[],
 	vault_root: string,
 };
 
