@@ -168,6 +168,37 @@ impl Ledger {
         Ok(None)
     }
 
+    /// 旧 `/…files/…` リンク → 参照名 の対応表。
+    ///
+    /// 本文は**自動書換えしない**(ユーザーの文章なので触らない)。
+    /// 代わりに旧パスから参照名へ辿れるようにして、レンダラは両方をコアへ渡す。
+    fn alias_path(&self) -> PathBuf {
+        self.vault_root.join(DIR).join("aliases.json")
+    }
+
+    pub fn aliases(&self) -> std::collections::BTreeMap<String, String> {
+        fs::read_to_string(self.alias_path())
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    /// 旧パスに参照名を結びつける(移行のときだけ増える)。
+    pub fn put_alias(&self, vault: &Vault, legacy_path: &str, name: &RefName) -> Result<()> {
+        let mut map = self.aliases();
+        map.insert(legacy_path.to_string(), name.to_string());
+        write_json(&self.alias_path(), &map)?;
+        self.commit_if_tracked(vault, &[self.alias_path()], "vault: 旧リンクの対応表を更新");
+        Ok(())
+    }
+
+    pub fn alias(&self, legacy_path: &str) -> Option<RefName> {
+        use std::str::FromStr;
+        self.aliases()
+            .get(legacy_path)
+            .and_then(|n| RefName::from_str(n).ok())
+    }
+
     /// その名前が既に使われているか(衝突時に別名を提案するため)。
     pub fn ref_taken(&self, name: &RefName) -> bool {
         [SyncPolicy::Full, SyncPolicy::LocalOnly]
