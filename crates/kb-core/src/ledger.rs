@@ -138,6 +138,14 @@ impl Ledger {
         out
     }
 
+    /// そのノートにひもづく台帳。**ファイルはノートの持ち物**という見え方の実体。
+    pub fn list_for_note(&self, note_id: &str) -> Vec<Manifest> {
+        self.list()
+            .into_iter()
+            .filter(|m| m.notes.iter().any(|n| n == note_id))
+            .collect()
+    }
+
     /// 参照を書く。置き場は指す先の区分に従う(台帳と同じ理由)。
     pub fn put_ref(&self, vault: &Vault, sync: SyncPolicy, r: &ArtifactRef) -> Result<()> {
         let dest = self.ref_path(sync, &r.name);

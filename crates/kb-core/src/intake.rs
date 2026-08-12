@@ -37,6 +37,8 @@ pub enum Keep {
 /// 取り込みの指定。区分を指定しなくても、場所から安全側の既定が決まる。
 #[derive(Debug, Clone)]
 pub struct Request {
+    /// ひもづけ先のノート。**ファイルはノートの持ち物**として現れる
+    pub note_id: Option<String>,
     pub display_name: String,
     pub media_type: String,
     pub role: Role,
@@ -218,6 +220,9 @@ pub fn take(
         policy,
         req.role,
     );
+    if let Some(note_id) = &req.note_id {
+        manifest.notes.push(note_id.clone());
+    }
     manifest.record(
         &req.at,
         match keep {
@@ -308,6 +313,7 @@ mod tests {
 
     fn req() -> Request {
         Request {
+            note_id: Some("notes/decision".into()),
             display_name: "表.csv".into(),
             media_type: "text/csv".into(),
             role: Role::File,
@@ -492,6 +498,17 @@ mod tests {
 
         let out = take_at(&e, &src, r).unwrap();
         assert!(!out.manifest.retrievable);
+    }
+
+    #[test]
+    fn the_file_belongs_to_the_note_it_was_added_to() {
+        let e = env();
+        let src = e.root.join("p.png");
+        fs::write(&src, b"p").unwrap();
+        let out = take_at(&e, &src, req()).unwrap();
+        assert_eq!(out.manifest.notes, vec!["notes/decision"]);
+        assert_eq!(e.ledger.list_for_note("notes/decision").len(), 1);
+        assert!(e.ledger.list_for_note("notes/other").is_empty());
     }
 
     #[test]
