@@ -12,6 +12,7 @@ pub mod favorites;
 pub mod frontmatter;
 pub mod import;
 pub mod index;
+pub mod ledger;
 pub mod mcp;
 pub mod registry;
 pub mod search;
