@@ -128,21 +128,95 @@ fn stderr_of(out: &std::process::Output) -> String {
 /// union で両方を残し、読むときに古い方へ寄せる(crate::workspace)。
 /// merge driver の設定はリポジトリローカルなので、clone した側でも毎回冪等に張り直す。
 fn ensure_merge_config(vault: &Vault) -> Result<()> {
+    let lfs = lfs_available();
     let attrs = vault.root.join(".gitattributes");
-    // eol=lf: Windows(autocrlf)混在でも差分が全行化しない
-    let want = concat!(
-        "* text=auto eol=lf\n",
-        "index.md merge=ours\n",
-        "log.md merge=union\n",
-        ".kb-workspace merge=union\n",
-    );
+    let want = attributes_for(lfs);
     let current = fs::read_to_string(&attrs).unwrap_or_default();
     if current != want {
-        fs::write(&attrs, want)?;
+        fs::write(&attrs, &want)?;
         vault.commit(&[".gitattributes"], "vault: 同期用の merge 属性")?;
     }
     let repo = git2::Repository::open(&vault.root)?;
     repo.config()?.set_str("merge.ours.driver", "true")?;
+    if lfs {
+        let _ = ensure_lfs_config(vault);
+    }
+    Ok(())
+}
+
+/// `.gitattributes` の中身。**ここが唯一の書き手**
+/// (2箇所から書くと、LFS の有無で毎回互いに上書きし合う)。
+///
+/// eol=lf は Windows(autocrlf)混在でも差分が全行化しないため。
+/// LFS の行は git-lfs がある時だけ足す — フィルタが無い環境でこの属性を張ると、
+/// 実体がそのまま Git に入ってしまう(決定が却下した形)。
+fn attributes_for(lfs: bool) -> String {
+    let mut want = String::from(
+        "* text=auto eol=lf\n\
+         index.md merge=ours\n\
+         log.md merge=union\n\
+         .kb-workspace merge=union\n",
+    );
+    if lfs {
+        want.push_str(&format!(
+            "{}/lfs/** filter=lfs diff=lfs merge=lfs -text\n",
+            crate::ledger::DIR
+        ));
+    }
+    want
+}
+
+fn lfs_available() -> bool {
+    std::process::Command::new("git")
+        .args(["lfs", "version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// LFS の下ごしらえ(PoC `poc/lfs-transport` の実測を反映)。
+///
+/// 3つとも**順序と場所が効く**:
+///
+/// 1. `lfs.storage` は**最初の実体を作る前**に張る。後から張っても既にある実体は
+///    移らないので、保管庫の中に取り残される
+/// 2. 素の clone には LFS のフィルタが無い。取得を担うなら `install --local` が要る
+/// 3. `.lfsconfig` の `fetchexclude` は**追跡ファイル**にする。これが他の端末へ
+///    運ばれることで、手で clone しても実体が落ちてこない
+///
+/// push / pull のたびに呼ばれる(clone した側でも冪等に張り直すため)。
+/// 失敗しても同期自体は続ける — 同期は派生(契約4)。
+pub fn ensure_lfs_config(vault: &Vault) -> Result<()> {
+    let workspace_id = crate::workspace::workspace_id(vault)?;
+    let storage = dirs::data_dir()
+        .context("データ領域が特定できない")?
+        .join("kb-app")
+        .join("artifacts")
+        .join(&workspace_id)
+        .join("full-lfs");
+    fs::create_dir_all(&storage)?;
+
+    // フィルタを張る(冪等)
+    let out = git(vault, &["lfs", "install", "--local"])?;
+    if !out.status.success() {
+        bail!("git lfs install: {}", stderr_of(&out));
+    }
+
+    // 置き場を保管庫の外へ。実体を作る前でなければ効かない
+    let repo = git2::Repository::open(&vault.root)?;
+    let want_storage = storage.to_string_lossy().to_string();
+    let current = repo.config()?.get_string("lfs.storage").unwrap_or_default();
+    if current != want_storage {
+        repo.config()?.set_str("lfs.storage", &want_storage)?;
+    }
+
+    // 既定では実体を取らない。**追跡ファイル**にして他の端末へも運ぶ
+    let cfg = vault.root.join(".lfsconfig");
+    let want_cfg = "[lfs]\n\tfetchexclude = *\n";
+    if fs::read_to_string(&cfg).unwrap_or_default() != want_cfg {
+        fs::write(&cfg, want_cfg)?;
+        vault.commit(&[".lfsconfig"], "vault: 既定では実体を取らない")?;
+    }
     Ok(())
 }
 
@@ -321,6 +395,56 @@ pub fn current_note(vault: &Vault) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lfs_attribute_is_added_only_when_git_lfs_exists() {
+        // フィルタの無い環境でこの属性を張ると、実体がそのまま Git に入る
+        // (決定が却下した形)。だから git-lfs がある時だけ足す
+        let without = attributes_for(false);
+        assert!(!without.contains("filter=lfs"));
+        assert!(without.contains("index.md merge=ours"));
+        assert!(without.contains(".kb-workspace merge=union"));
+
+        let with = attributes_for(true);
+        assert!(with.contains(".kb-artifacts/lfs/** filter=lfs diff=lfs merge=lfs -text"));
+        // 既存の行は落とさない(唯一の書き手なので、消えるとそのまま失われる)
+        assert!(with.contains("index.md merge=ours"));
+        assert!(with.contains("log.md merge=union"));
+        assert!(with.contains(".kb-workspace merge=union"));
+    }
+
+    #[test]
+    fn lfs_setup_is_idempotent_and_points_outside_the_vault() {
+        if !lfs_available() {
+            eprintln!("git-lfs が無いので飛ばす");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+
+        ensure_lfs_config(&vault).unwrap();
+        let repo = git2::Repository::open(&vault.root).unwrap();
+        let storage = repo.config().unwrap().get_string("lfs.storage").unwrap();
+
+        // 保管庫の外を指していること。中だと clone・履歴が肥大する
+        assert!(
+            !std::path::Path::new(&storage).starts_with(&vault.root),
+            "置き場が保管庫の中にある: {storage}"
+        );
+        // 実体を取らない設定が**追跡ファイル**として置かれる
+        // (これが他の端末へ運ばれるから、手で clone しても実体が落ちてこない)
+        let cfg = vault.root.join(".lfsconfig");
+        assert!(fs::read_to_string(&cfg).unwrap().contains("fetchexclude"));
+        let ignore = fs::read_to_string(vault.root.join(".gitignore")).unwrap();
+        assert!(!ignore.contains(".lfsconfig"));
+
+        // 2回目は何も壊さない(push / pull のたびに呼ばれる)
+        ensure_lfs_config(&vault).unwrap();
+        assert_eq!(
+            repo.config().unwrap().get_string("lfs.storage").unwrap(),
+            storage
+        );
+    }
 
     #[test]
     fn desktop_connect_preserves_existing_servers() {
