@@ -14,6 +14,7 @@ pub mod import;
 pub mod index;
 pub mod intake;
 pub mod ledger;
+pub mod lfs;
 pub mod mcp;
 pub mod registry;
 pub mod search;

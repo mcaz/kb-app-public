@@ -155,6 +155,21 @@ pub fn take(
     }
 
     let (locator, hash, size, warn_over) = match keep {
+        Keep::Managed if policy.sync == SyncPolicy::Full => {
+            // 「本体も同期」の実体は LFS の置き場が持つ(自前 CAS には置かない)。
+            // 大きさは複製する前に見る — 2GB を写してから断らない
+            let size = std::fs::metadata(src)
+                .with_context(|| format!("読めない: {}", src.display()))?
+                .len();
+            let warn_over = policy.sync.check_size(size)?;
+            let (hash, size) = crate::lfs::import(vault, src)?;
+            (
+                Locator::Managed { hash: hash.clone() },
+                hash,
+                size,
+                warn_over,
+            )
+        }
         Keep::Managed => {
             let imported = stores.import_path(policy.sync, src)?;
             (
@@ -336,9 +351,12 @@ mod tests {
         assert!(!out.manifest.policy.client_repo);
         assert!(!out.forced_local_only);
         assert!(matches!(out.manifest.locator, Locator::Managed { .. }));
-        // 実体が置き場に入り、台帳が引ける
-        assert!(e.stores.has(SyncPolicy::Full, &out.manifest.hash));
+        // 「本体も同期」の実体は LFS の置き場が持つ。自前 CAS には**入れない**
+        assert!(!e.stores.has(SyncPolicy::Full, &out.manifest.hash));
         assert!(e.ledger.get(&out.manifest.id).unwrap().is_some());
+        if crate::connect::ensure_vault_config(&e.vault).is_ok() {
+            assert!(crate::lfs::has(&e.vault, &out.manifest.hash));
+        }
     }
 
     #[test]

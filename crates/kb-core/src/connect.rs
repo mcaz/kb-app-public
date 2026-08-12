@@ -127,6 +127,15 @@ fn stderr_of(out: &std::process::Output) -> String {
 /// .kb-workspace は保管庫の ID — 2台が同時に初回起動すると別々に発行されるので、
 /// union で両方を残し、読むときに古い方へ寄せる(crate::workspace)。
 /// merge driver の設定はリポジトリローカルなので、clone した側でも毎回冪等に張り直す。
+/// 保管庫の設定を一括で張り直す(merge 属性 + LFS)。
+///
+/// **実体を書く前に必ずこれを通すこと。** `.gitattributes` の LFS 行が無いまま
+/// `git add` すると、実体がそのまま Git に入る(決定が却下した形)。
+/// 冪等なので何度呼んでもよい。
+pub fn ensure_vault_config(vault: &Vault) -> Result<()> {
+    ensure_merge_config(vault)
+}
+
 fn ensure_merge_config(vault: &Vault) -> Result<()> {
     let lfs = lfs_available();
     let attrs = vault.root.join(".gitattributes");
