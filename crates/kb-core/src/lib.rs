@@ -4,6 +4,7 @@
 
 pub use rusqlite;
 
+pub mod artifact;
 pub mod care;
 pub mod connect;
 pub mod embed;
