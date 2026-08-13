@@ -85,6 +85,12 @@ enum Command {
         #[command(subcommand)]
         command: CareCommand,
     },
+    /// 旧添付(<ノート ID>.files/)を台帳に載せる(既定は棚卸しだけ)
+    MigrateFiles {
+        /// 実際に書き込む。付けなければ何も書かない
+        #[arg(long)]
+        apply: bool,
+    },
     /// 索引の増分 sync
     Sync,
     /// かしこい検索(段1: 埋め込み内蔵)の管理
@@ -286,6 +292,34 @@ fn main() -> Result<()> {
                     println!("dismissed: {key}");
                 }
             }
+        }
+        Command::MigrateFiles { apply } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            let workspace_id = kb_core::workspace::workspace_id(&vault)?;
+            let ledger = kb_core::ledger::Ledger::open(&vault, &workspace_id)?;
+
+            let pending = kb_core::migrate::survey(&vault, &ledger);
+            if pending.is_empty() {
+                println!("移行するものはない(すべて台帳に載っている)");
+                return Ok(());
+            }
+            for p in &pending {
+                println!("{}\t{} バイト\t{}", p.link, p.size, p.note_id);
+            }
+            if !apply {
+                // 既定を棚卸しにするのは、実データに書く操作だから(--apply で実行)
+                println!("\n{} 件。書き込むには --apply", pending.len());
+                return Ok(());
+            }
+            let at = kb_core::frontmatter::now_iso();
+            let done = kb_core::migrate::migrate(&vault, &ledger, &workspace_id, &at)?;
+            for d in &done {
+                println!("載せた: {} → {} (参照名 {})", d.file_name, d.id, d.ref_name);
+            }
+            println!(
+                "\n{} 件。実体は動かしていない(旧ファイルはそのまま)",
+                done.len()
+            );
         }
         Command::Sync => {
             let vault = open_vault(cli.vault.as_deref())?;
