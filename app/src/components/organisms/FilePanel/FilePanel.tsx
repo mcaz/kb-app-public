@@ -24,7 +24,8 @@ export interface FilePanelProps {
 export function FilePanel({ noteId }: FilePanelProps) {
   const { t } = useTranslation("notes");
   const { data } = useNoteFiles(noteId);
-  const { addPicked, detachFile, fetchFile, busy } = useFileActions(noteId);
+  const { addPicked, detachFile, fetchFile, openFile, openLegacyFile, busy } =
+    useFileActions(noteId);
 
   const files = data?.files ?? [];
   const legacy = data?.legacy ?? [];
@@ -47,6 +48,7 @@ export function FilePanel({ noteId }: FilePanelProps) {
             onDetach={() => void detachFile(file)}
             onReplace={() => void addPicked(file.id)}
             onFetch={() => void fetchFile(file)}
+            onOpen={() => void openFile(file)}
           />
         ))}
 
@@ -57,7 +59,13 @@ export function FilePanel({ noteId }: FilePanelProps) {
         {legacy.map((file) => (
           <li key={file.name} className={fileRowVariants({ state: "legacy" })}>
             <Icon as={Paperclip} size="sm" className="text-muted" />
-            <span className="min-w-0 break-all">{file.name}</span>
+            <button
+              type="button"
+              className="hover:text-grow min-w-0 cursor-pointer border-none bg-transparent p-0 text-left break-all"
+              onClick={() => void openLegacyFile(file.name)}
+            >
+              {file.name}
+            </button>
             <i className="text-muted text-[11px] not-italic">{formatSize(file.size)}</i>
             <StatusPill>{t("file.legacy")}</StatusPill>
           </li>

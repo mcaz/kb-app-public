@@ -262,6 +262,8 @@ export const demoApi = {
   fileAddFromClipboard: () => delay<Added | null>(null),
   fileDetach: () => delay(null),
   fileFetch: () => delay<Availability>("local"),
+  // ブラウザからは OS のアプリへ渡せない(この経路は Tauri でしか通らない)
+  fileOpen: () => delay(null),
   // ブラウザにネイティブの選択画面は無い(この経路は Tauri でしか通らない)
   pickFiles: () => delay<string[]>([]),
   connectDesktop: () => {

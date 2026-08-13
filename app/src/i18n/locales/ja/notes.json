@@ -69,6 +69,7 @@
     "fetched": "取り寄せました",
     "fetchIncomplete": "取り寄せられませんでした(この端末にはまだありません)",
     "fetchFailed": "取り寄せに失敗: {{error}}",
+    "openFailed": "開けませんでした: {{error}}",
     "missing": "この端末にありません",
     "unavailable": "この端末では開けません(設定による)",
     "localOnly": "同期しない",

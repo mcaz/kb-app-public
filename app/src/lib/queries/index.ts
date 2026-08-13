@@ -127,6 +127,14 @@ export const useFileDetach = () =>
     (a) => a.noteId,
   );
 
+/** 開くだけ。台帳も画面の一覧も変わらないので、無効化しない。 */
+export const useFileOpen = () => useMutation({ mutationFn: (id: string) => api.fileOpen(id) });
+
+export const useLegacyOpen = () =>
+  useMutation({
+    mutationFn: (a: { noteId: string; name: string }) => api.legacyOpen(a.noteId, a.name),
+  });
+
 export const useFileFetch = () =>
   useFileMutation(
     (a: { noteId: string; id: string }) => api.fileFetch(a.id),

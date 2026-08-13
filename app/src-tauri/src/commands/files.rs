@@ -14,6 +14,7 @@ use std::str::FromStr;
 
 use kb_core::artifact::{ArtifactId, Manifest, Role, Sensitivity, SyncPolicy};
 use kb_core::intake;
+use kb_core::resolve;
 use kb_core::store::{Availability, Stores, availability};
 use kb_core::vault::Vault;
 use serde::Serialize;
@@ -214,6 +215,84 @@ fn take(
             forced_local_only: taken.forced_local_only,
         })
     })
+}
+
+/// 開く。**中身は必ず resolver 経由で取り出す。**
+///
+/// OS のアプリへ渡すにはパスが要るが、置き場のファイル名は照合値(hash)なので、
+/// 表示名を付けた複製を一時領域に作ってから渡す。内容は不変なので使い回せる。
+///
+/// 経路をここに一本化しているのは、**画面へパスを渡さない**ため。パスを渡すと
+/// 「手元に無いものの中身を開かない」が画面側の作法に落ちる(決定9・resolver の doc)。
+#[tauri::command]
+#[specta::specta]
+pub fn file_open(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
+    let id = artifact_id(&id)?;
+    let path = state.with_artifacts(|vault, stores, ledger, _| {
+        let resolved = resolve::resolve(vault, stores, ledger, &resolve::Link::Fixed(id.clone()))
+            .map_err(AppError::from)?
+            .ok_or_else(|| AppError::Unexpected {
+                message: format!("ファイルの台帳が無い: {id}"),
+            })?;
+        // 手元に無い / 方針で閉じている場合、ここが None を返す
+        let mut file = resolved
+            .open(vault, stores)
+            .map_err(AppError::from)?
+            .ok_or(AppError::FileNotHere)?;
+        export(&resolved.manifest, &mut file)
+    })?;
+    open_with_os(&app, &path)
+}
+
+/// 移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。
+#[tauri::command]
+#[specta::specta]
+pub fn legacy_open(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    note_id: String,
+    name: String,
+) -> AppResult<()> {
+    let path = state.with_vault(|vault| {
+        // 名前は成分だけ使う(パス潜り対策 — 旧実装と同じ扱い)
+        let base = Path::new(&name)
+            .file_name()
+            .ok_or_else(|| AppError::unexpected("ファイル名が不正"))?;
+        let path = vault.attach_dir(&note_id).join(base);
+        if !path.is_file() {
+            return Err(AppError::FileNotHere);
+        }
+        Ok(path)
+    })?;
+    open_with_os(&app, &path)
+}
+
+/// 表示名を付けた複製を一時領域へ。内容は不変なので、同じものがあれば使い回す。
+fn export(m: &Manifest, src: &mut std::fs::File) -> AppResult<PathBuf> {
+    // 表示名は直せる field なので、パスとして解釈させない
+    let name = Path::new(&m.display_name)
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("file"));
+    let dir = std::env::temp_dir()
+        .join("kb-app-open")
+        .join(&m.hash.as_str()[..12]);
+    std::fs::create_dir_all(&dir)?;
+    let dest = dir.join(name);
+    if std::fs::metadata(&dest).map(|meta| meta.len()).ok() != Some(m.created.size) {
+        let mut out = std::fs::File::create(&dest)?;
+        // 固定サイズの塊で写す(全量をメモリに載せない — 決定8 と同じ理由)
+        std::io::copy(src, &mut out)?;
+    }
+    Ok(dest)
+}
+
+/// OS の既定のアプリへ渡す。**画面から直接は呼べない** — 権限を webview に与えて
+/// いないので、開く経路はこの上の2コマンドだけになる。
+fn open_with_os(app: &tauri::AppHandle, path: &Path) -> AppResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(AppError::unexpected)
 }
 
 /// このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。

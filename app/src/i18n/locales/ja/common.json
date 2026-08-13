@@ -53,6 +53,7 @@
     "fileClientRepoLocked": "仕事のリポジトリの中のファイルなので、この設定は変えられません",
     "fileNeedsConfirm": "持ち出す範囲を広げる操作には確認が要ります",
     "fileMalformed": "ファイルの指定が正しくありません",
+    "fileNotHere": "この端末にファイルがありません(先に取り寄せてください)",
     "clipboardImageTooLarge": "貼り付けた画像が大きすぎます。ファイルとして保存してから取り込んでください",
     "claudeDesktopNotFound": "Claude Desktop が見つかりません",
     "claudeDesktopLaunchFailed": "Claude Desktop を起動できませんでした(インストールを確認してください)",
