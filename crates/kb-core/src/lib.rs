@@ -62,6 +62,9 @@ fn test_data_root() -> std::path::PathBuf {
         .join("kb-app")
 }
 
+/// ローカルユーザーの actor ID(OKF §7)。命名は未決のため暫定値を一箇所に集約。
+pub const OWNER_ACTOR: &str = "human:owner";
+
 #[cfg(test)]
 mod tests {
     /// 2026-08-13: テストが実ユーザーのデータ領域に置き場を作り続けていた
@@ -76,6 +79,3 @@ mod tests {
         assert!(!used.starts_with(dirs::home_dir().unwrap_or_default()));
     }
 }
-
-/// ローカルユーザーの actor ID(OKF §7)。命名は未決のため暫定値を一箇所に集約。
-pub const OWNER_ACTOR: &str = "human:owner";

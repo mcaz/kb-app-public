@@ -75,7 +75,7 @@ pub struct Added {
 }
 
 fn row(vault: &Vault, stores: &Stores, m: &Manifest) -> FileRow {
-    let availability = availability(vault, stores, m.policy, &m.hash);
+    let availability = availability(vault, stores, m);
     FileRow {
         id: m.id.to_string(),
         version: m.version,
@@ -337,6 +337,6 @@ pub fn file_fetch(state: State<'_, AppState>, id: String) -> AppResult<Availabil
                     message: format!("ファイルの台帳が無い: {id}"),
                 })?;
         kb_core::lfs::fetch(vault, &manifest.hash).map_err(AppError::from)?;
-        Ok(availability(vault, stores, manifest.policy, &manifest.hash))
+        Ok(availability(vault, stores, &manifest))
     })
 }
