@@ -5,10 +5,12 @@ import { KbError } from "./error";
 import type { AppError } from "@/lib/bindings";
 
 import type {
+  Availability,
   ConnectState,
   Favorite,
   GraphData,
   HomeState,
+  NoteFiles,
   NoteView,
   SearchOutcome,
   SetupState,
@@ -67,19 +69,35 @@ export const api = {
   careDismiss: async (key: string): Promise<null> =>
     IN_TAURI ? unwrap(commands.careDismiss(key)) : (await demo()).careDismiss(key),
 
-  /** 戻り値は [保存名, 警告]。 */
-  attachmentAdd: async (id: string, name: string, dataBase64: string) =>
+  noteFiles: async (id: string): Promise<NoteFiles> =>
+    IN_TAURI ? unwrap(commands.noteFiles(id)) : (await demo()).noteFiles(id),
+  /** 渡すのはパスだけ(中身は運ばない — ADR-0003 決定8)。 */
+  fileAdd: async (noteId: string, path: string, supersedes: string | null = null) =>
     IN_TAURI
-      ? unwrap(commands.attachmentAdd(id, name, dataBase64))
-      : (await demo()).attachmentAdd(id, name, dataBase64),
-  attachmentAddFromPath: async (id: string, path: string) =>
+      ? unwrap(commands.fileAdd(noteId, path, supersedes))
+      : (await demo()).fileAdd(noteId, path),
+  fileAddFromClipboard: async (noteId: string) =>
     IN_TAURI
-      ? unwrap(commands.attachmentAddFromPath(id, path))
-      : (await demo()).attachmentAddFromPath(id, path),
-  attachmentPaste: async (id: string) =>
-    IN_TAURI ? unwrap(commands.attachmentPaste(id)) : (await demo()).attachmentPaste(id),
-  attachmentRemove: async (id: string, name: string): Promise<null> =>
-    IN_TAURI ? unwrap(commands.attachmentRemove(id, name)) : (await demo()).attachmentRemove(),
+      ? unwrap(commands.fileAddFromClipboard(noteId))
+      : (await demo()).fileAddFromClipboard(),
+  fileDetach: async (noteId: string, id: string, expectedVersion: number): Promise<null> =>
+    IN_TAURI
+      ? unwrap(commands.fileDetach(noteId, id, expectedVersion))
+      : (await demo()).fileDetach(),
+  fileFetch: async (id: string): Promise<Availability> =>
+    IN_TAURI ? unwrap(commands.fileFetch(id)) : (await demo()).fileFetch(),
+
+  /**
+   * ファイルを選ぶ。返るのはパスだけで、中身はここを通らない。
+   * dialog プラグインは invoke を包んでいるので、窓口をこの層に揃える(§4)。
+   */
+  pickFiles: async (multiple = true): Promise<string[]> => {
+    if (!IN_TAURI) return (await demo()).pickFiles();
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({ multiple });
+    if (picked === null) return [];
+    return Array.isArray(picked) ? picked : [picked];
+  },
 
   connectDesktop: async (): Promise<null> =>
     IN_TAURI ? unwrap(commands.connectDesktop()) : (await demo()).connectDesktop(),

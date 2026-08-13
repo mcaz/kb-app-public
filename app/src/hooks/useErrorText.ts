@@ -20,8 +20,6 @@ export function useErrorText(): (e: unknown) => string {
       switch (d.code) {
         case "note_not_found":
           return t("errors.noteNotFound");
-        case "attachment_too_large":
-          return t("errors.attachmentTooLarge", { limit: d.limit_mb });
         case "file_too_large":
           return t("errors.fileTooLarge", { limit: Math.round(d.limit / 1024 / 1024) });
         case "file_conflict":

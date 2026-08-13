@@ -82,8 +82,19 @@ export function useFavoriteRemove() {
   });
 }
 
-/** 添付の増減はノートの内容を変えるので、そのノートだけ引き直す。 */
-function useNoteMutation<TArgs, TData>(
+/** そのノートのファイル(最新版だけ)と、まだ移行していない旧添付。 */
+export const useNoteFiles = (id: string | null) =>
+  useQuery({
+    queryKey: queryKeys.noteFiles(id ?? ""),
+    queryFn: () => api.noteFiles(id!),
+    enabled: id !== null,
+  });
+
+/**
+ * ファイルの操作。ノート本体は変わらないので、無効化するのはファイル欄だけ
+ * (旧添付は note_get にも載っていたが、いまは欄が唯一の持ち主)。
+ */
+function useFileMutation<TArgs, TData>(
   fn: (args: TArgs) => Promise<TData>,
   noteId: (args: TArgs) => string,
 ) {
@@ -91,34 +102,35 @@ function useNoteMutation<TArgs, TData>(
   return useMutation({
     mutationFn: fn,
     onSuccess: async (_data, args) => {
-      await qc.invalidateQueries({ queryKey: queryKeys.note(noteId(args)) });
+      await qc.invalidateQueries({ queryKey: queryKeys.noteFiles(noteId(args)) });
     },
   });
 }
 
-export const useAttachmentAdd = () =>
-  useNoteMutation(
-    (a: { id: string; name: string; dataBase64: string }) =>
-      api.attachmentAdd(a.id, a.name, a.dataBase64),
-    (a) => a.id,
+export const useFileAdd = () =>
+  useFileMutation(
+    (a: { noteId: string; path: string; supersedes?: string }) =>
+      api.fileAdd(a.noteId, a.path, a.supersedes ?? null),
+    (a) => a.noteId,
   );
 
-export const useAttachmentAddFromPath = () =>
-  useNoteMutation(
-    (a: { id: string; path: string }) => api.attachmentAddFromPath(a.id, a.path),
-    (a) => a.id,
+export const useFileAddFromClipboard = () =>
+  useFileMutation(
+    (a: { noteId: string }) => api.fileAddFromClipboard(a.noteId),
+    (a) => a.noteId,
   );
 
-export const useAttachmentPaste = () =>
-  useNoteMutation(
-    (a: { id: string }) => api.attachmentPaste(a.id),
-    (a) => a.id,
+export const useFileDetach = () =>
+  useFileMutation(
+    (a: { noteId: string; id: string; expectedVersion: number }) =>
+      api.fileDetach(a.noteId, a.id, a.expectedVersion),
+    (a) => a.noteId,
   );
 
-export const useAttachmentRemove = () =>
-  useNoteMutation(
-    (a: { id: string; name: string }) => api.attachmentRemove(a.id, a.name),
-    (a) => a.id,
+export const useFileFetch = () =>
+  useFileMutation(
+    (a: { noteId: string; id: string }) => api.fileFetch(a.id),
+    (a) => a.noteId,
   );
 
 export function useConnectDesktop() {

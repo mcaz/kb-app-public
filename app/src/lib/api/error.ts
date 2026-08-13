@@ -29,8 +29,10 @@ function describe(detail: AppError): string {
       return detail.message;
     case "note_not_found":
       return `note not found: ${detail.id}`;
-    case "attachment_too_large":
-      return `attachment too large: ${detail.actual_mb}MB > ${detail.limit_mb}MB`;
+    case "file_too_large":
+      return `file too large: ${detail.size} > ${detail.limit}`;
+    case "file_conflict":
+      return `stale version: ${detail.expected} != ${detail.current}`;
     default:
       return detail.code;
   }
