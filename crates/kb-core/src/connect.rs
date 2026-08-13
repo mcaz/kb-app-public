@@ -197,9 +197,7 @@ fn lfs_available() -> bool {
 /// 失敗しても同期自体は続ける — 同期は派生(契約4)。
 pub fn ensure_lfs_config(vault: &Vault) -> Result<()> {
     let workspace_id = crate::workspace::workspace_id(vault)?;
-    let storage = dirs::data_dir()
-        .context("データ領域が特定できない")?
-        .join("kb-app")
+    let storage = crate::app_data_dir()?
         .join("artifacts")
         .join(&workspace_id)
         .join("full-lfs");

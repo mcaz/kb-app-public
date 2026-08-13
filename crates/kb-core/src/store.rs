@@ -102,10 +102,7 @@ pub struct Stores {
 impl Stores {
     /// 既定の置き場(保管庫の外)。
     pub fn open(workspace_id: &str) -> Result<Self> {
-        let root = dirs::data_dir()
-            .context("データ領域が特定できない")?
-            .join("kb-app")
-            .join("artifacts");
+        let root = crate::app_data_dir()?.join("artifacts");
         Ok(Self::at(root, workspace_id))
     }
 
