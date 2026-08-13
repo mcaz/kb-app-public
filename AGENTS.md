@@ -38,6 +38,12 @@ table is already covered by fmt/clippy/eslint/tsc/CI — do not restate those ru
   `target/release/kb`. Avoid `cargo clean` during normal work because it removes
   the running MCP binary. If cleaning is truly necessary, warn first and rebuild
   the release binary immediately afterward.
+- **That binary does not follow the source tree.** It keeps running the behaviour
+  it was built with, and it writes to the real vault on every MCP call. After
+  changing `kb-core`, run `cargo build --release -p kb-cli`, or the stale binary
+  keeps acting on live data. On 2026-08-14 a two-day-old build silently stripped
+  the Git LFS line from the vault's `.gitattributes` on every call; the damage
+  only surfaced on a fresh clone elsewhere.
 - The repository root has no Node package. Run frontend commands with
   `npm --prefix app`.
 
