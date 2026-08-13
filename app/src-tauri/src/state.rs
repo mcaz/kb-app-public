@@ -10,8 +10,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use kb_core::index::{open_db, sync};
+use kb_core::ledger::Ledger;
 use kb_core::registry::Registry;
 use kb_core::rusqlite::Connection;
+use kb_core::store::Stores;
 use kb_core::vault::Vault;
 
 use crate::error::{AppError, AppResult};
@@ -62,6 +64,22 @@ impl AppState {
         let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
         let ctx = ensure(&mut guard)?;
         f(&ctx.vault)
+    }
+
+    /// ファイル(Artifact)を扱う。台帳・実体の置き場・保管庫 ID を揃えて渡す。
+    ///
+    /// 3つとも保管庫 ID に紐づくので、ここで一度に解決する。生成は毎回で、
+    /// 実費は ID ファイル1回の読み取り(台帳の読み込みは呼ばれた操作の側)。
+    pub fn with_artifacts<T>(
+        &self,
+        f: impl FnOnce(&Vault, &Stores, &Ledger, &str) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
+        let ctx = ensure(&mut guard)?;
+        let workspace_id = kb_core::workspace::workspace_id(&ctx.vault).map_err(AppError::from)?;
+        let stores = Stores::open(&workspace_id).map_err(AppError::from)?;
+        let ledger = Ledger::open(&ctx.vault, &workspace_id).map_err(AppError::from)?;
+        f(&ctx.vault, &stores, &ledger, &workspace_id)
     }
 
     /// vault と索引を使う。`degraded` は索引更新の失敗(fail-open — 原則4)。

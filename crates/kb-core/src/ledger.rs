@@ -139,10 +139,16 @@ impl Ledger {
     }
 
     /// そのノートにひもづく台帳。**ファイルはノートの持ち物**という見え方の実体。
+    ///
+    /// 差し替えられた版は返さない。内容の更新は新しい台帳になり前の版も残る
+    /// (決定7)ので、「そのノートのファイル」が版の数だけ増えてしまう。
+    /// 履歴は `supersedes` を辿れば読める。
     pub fn list_for_note(&self, note_id: &str) -> Vec<Manifest> {
-        self.list()
-            .into_iter()
-            .filter(|m| m.notes.iter().any(|n| n == note_id))
+        let all = self.list();
+        let superseded: std::collections::HashSet<ArtifactId> =
+            all.iter().filter_map(|m| m.supersedes.clone()).collect();
+        all.into_iter()
+            .filter(|m| m.notes.iter().any(|n| n == note_id) && !superseded.contains(&m.id))
             .collect()
     }
 
@@ -205,6 +211,32 @@ impl Ledger {
         self.aliases()
             .get(legacy_path)
             .and_then(|n| RefName::from_str(n).ok())
+    }
+
+    /// その台帳を指している参照(あれば)。
+    ///
+    /// 新しい版を作ったときに参照を付け替えるために要る。付け替えないと、
+    /// 本文リンク(`kb-artifact-ref:`)が古い版を指したままになり、
+    /// 「本文リンクは最新版に追従する」(ADR-0003 決定5)が破れる。
+    pub fn ref_for(&self, id: &ArtifactId) -> Option<ArtifactRef> {
+        for sync in [SyncPolicy::Full, SyncPolicy::LocalOnly] {
+            let dir = self.base(sync).join("refs");
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(text) = fs::read_to_string(entry.path()) else {
+                    continue;
+                };
+                // 壊れた1件で逆引き全体を落とさない(list と同じ扱い)
+                if let Ok(r) = serde_json::from_str::<ArtifactRef>(&text)
+                    && r.artifact_id == *id
+                {
+                    return Some(r);
+                }
+            }
+        }
+        None
     }
 
     /// その名前が既に使われているか(衝突時に別名を提案するため)。
@@ -410,6 +442,45 @@ mod tests {
                 .is_file()
         );
         assert!(!ledger.sidecar.join("refs").join("sketch.json").exists());
+    }
+
+    /// 版を重ねても前の版は残る(内容は不変)ので、素直に一覧すると同じファイルが
+    /// 版の数だけ並ぶ。ノートの持ち物として見えるのは最新版だけ。
+    #[test]
+    fn a_note_shows_only_the_current_version() {
+        let (_d, vault, ledger) = setup();
+        let mut old = manifest(SyncPolicy::Full, false);
+        old.notes.push("notes/decision".into());
+        let new = {
+            let mut m = old.succeed(
+                ArtifactId::new(1_755_000_001_000),
+                ContentHash::of_bytes(b"v2"),
+                old.created.clone(),
+            );
+            m.notes = old.notes.clone();
+            m
+        };
+        ledger.put(&vault, &old).unwrap();
+        ledger.put(&vault, &new).unwrap();
+
+        let listed = ledger.list_for_note("notes/decision");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, new.id);
+        // 前の版は消えていない(履歴は supersedes で辿れる)
+        assert!(ledger.get(&old.id).unwrap().is_some());
+        assert_eq!(ledger.list().len(), 2);
+    }
+
+    #[test]
+    fn a_reference_can_be_found_from_the_artifact_it_points_at() {
+        let (_d, vault, ledger) = setup();
+        let name = RefName::from_str("sketch").unwrap();
+        let id = ArtifactId::new(1_755_000_000_000);
+        let r = ArtifactRef::new("ws-a", name, id.clone());
+        ledger.put_ref(&vault, SyncPolicy::Full, &r).unwrap();
+
+        assert_eq!(ledger.ref_for(&id).as_ref(), Some(&r));
+        assert_eq!(ledger.ref_for(&ArtifactId::new(1_755_000_009_000)), None);
     }
 
     #[test]

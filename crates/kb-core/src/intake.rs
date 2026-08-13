@@ -47,6 +47,8 @@ pub struct Request {
     /// 未指定なら既定。**仕事のリポジトリ内なら指定に関わらず固定される**
     pub policy: Option<Policy>,
     pub ref_name: Option<RefName>,
+    /// 差し替え元。**内容は不変**なので、中身の更新は新しい台帳になる(ADR-0003 決定7)
+    pub supersedes: Option<ArtifactId>,
     /// どこから来たか(会話・取り込み・移行など)
     pub origin: String,
     pub by: String,
@@ -127,8 +129,24 @@ pub fn take(
 ) -> Result<Taken> {
     let client = detect_client_repo(vault, src);
 
+    // 0. 差し替え元。無ければ普通の新規取り込み
+    let previous = match &req.supersedes {
+        Some(id) => Some(
+            ledger
+                .get(id)?
+                .with_context(|| format!("差し替え元が台帳に無い: {id}"))?,
+        ),
+        None => None,
+    };
+
     // 1. 区分を決める。仕事のリポジトリ内なら、指定に関わらず固定する
-    let requested = req.policy.unwrap_or_else(Policy::default_managed);
+    let requested = match &previous {
+        // 版を重ねるときは前の版の区分を引き継ぎ、req.policy を見ない。
+        // 見ると「新しい版として追加」が持ち出し範囲を広げる裏口になる
+        // (決定10 は緩和を対話的な確認の後ろにしか置かない)
+        Some(prev) => prev.policy,
+        None => req.policy.unwrap_or_else(Policy::default_managed),
+    };
     let (policy, forced_local_only) = match &client {
         Some(_) => (
             Policy::client_repo_locked(),
@@ -149,9 +167,14 @@ pub fn take(
         None => Keep::Managed,
     });
 
-    // 3. 参照名の衝突は、上書きせず呼び出し側へ返す(別名を提案するのは UI)
+    // 3. 前の版を指していた参照は、新しい版へ付け替える(本文リンクは最新へ追従する)
+    let inherited = previous.as_ref().and_then(|prev| ledger.ref_for(&prev.id));
+
+    // 参照名の衝突は、上書きせず呼び出し側へ返す(別名を提案するのは UI)。
+    // ただし付け替え先が自分自身なら衝突ではない
     if let Some(name) = &req.ref_name
         && ledger.ref_taken(name)
+        && inherited.as_ref().is_none_or(|r| r.name != *name)
     {
         bail!("参照名 {name} は使われている");
     }
@@ -205,22 +228,37 @@ pub fn take(
         }
     };
 
-    let mut manifest = Manifest::new(
-        ArtifactId::new(unix_ms(&req.at)),
-        hash,
-        Created {
-            media_type: req.media_type.clone(),
-            size,
-            at: req.at.clone(),
-            origin: req.origin.clone(),
-            by: req.by.clone(),
-        },
-        req.display_name.clone(),
-        locator,
-        policy,
-        req.role,
-    );
-    if let Some(note_id) = &req.note_id {
+    let id = ArtifactId::new(unix_ms(&req.at));
+    let created = Created {
+        media_type: req.media_type.clone(),
+        size,
+        at: req.at.clone(),
+        origin: req.origin.clone(),
+        by: req.by.clone(),
+    };
+    let mut manifest = match &previous {
+        Some(prev) => {
+            // 直せる部分は前の版から引き継ぐ。**表示名も引き継ぐ** —
+            // 版を重ねても行の見え方が変わらないほうが同じ物として追える。
+            // 取り込んだファイル名は下の来歴に残るので失われない
+            let mut next = prev.succeed(id, hash, created);
+            next.locator = locator;
+            next.policy = policy;
+            next
+        }
+        None => Manifest::new(
+            id,
+            hash,
+            created,
+            req.display_name.clone(),
+            locator,
+            policy,
+            req.role,
+        ),
+    };
+    if let Some(note_id) = &req.note_id
+        && !manifest.notes.iter().any(|n| n == note_id)
+    {
         manifest.notes.push(note_id.clone());
     }
     manifest.record(
@@ -231,6 +269,16 @@ pub fn take(
         },
         &req.origin,
     );
+    if let Some(prev) = &previous {
+        manifest.record(
+            &req.at,
+            "superseded",
+            &format!(
+                "前の版 {} を差し替え(取り込んだ名前 {})",
+                prev.id, req.display_name
+            ),
+        );
+    }
     if forced_local_only {
         manifest.record(
             &req.at,
@@ -240,13 +288,22 @@ pub fn take(
     }
     ledger.put(vault, &manifest)?;
 
-    let artifact_ref = match req.ref_name {
-        Some(name) => {
-            let r = ArtifactRef::new(workspace_id, name, manifest.id.clone());
+    let artifact_ref = match inherited {
+        // 前の版を指していた参照を最新版へ向け直す。**名前は変えない** —
+        // 参照名を変えると本文リンクが切れるので、それは詳細画面の明示操作にする
+        Some(mut r) => {
+            r.point_to(r.revision, manifest.id.clone())?;
             ledger.put_ref(vault, policy.sync, &r)?;
             Some(r)
         }
-        None => None,
+        None => match req.ref_name {
+            Some(name) => {
+                let r = ArtifactRef::new(workspace_id, name, manifest.id.clone());
+                ledger.put_ref(vault, policy.sync, &r)?;
+                Some(r)
+            }
+            None => None,
+        },
     };
 
     Ok(Taken {
@@ -255,6 +312,37 @@ pub fn take(
         warn_over,
         forced_local_only,
     })
+}
+
+/// 拡張子から媒体種別を推定する。分からなければ `application/octet-stream`。
+///
+/// 呼び口(画面・CLI・MCP)ごとに書くと表記が割れるのでここに置く。
+/// 中身は見ない — 取り込みは streaming なので、判定のために全量を読まない。
+pub fn guess_media_type(path: &Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "heic" => "image/heic",
+        "pdf" => "application/pdf",
+        "csv" => "text/csv",
+        "md" | "markdown" => "text/markdown",
+        "txt" | "log" => "text/plain",
+        "json" => "application/json",
+        "yaml" | "yml" => "application/yaml",
+        "zip" => "application/zip",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 /// 実体をコピーせずに照合値だけ採る(linked 用)。
@@ -320,6 +408,7 @@ mod tests {
             keep: None,
             policy: None,
             ref_name: None,
+            supersedes: None,
             origin: "conversation".into(),
             by: crate::OWNER_ACTOR.into(),
             at: "2026-08-12T09:04:00Z".into(),
@@ -520,6 +609,103 @@ mod tests {
         assert_eq!(out.manifest.events.len(), 1);
         assert_eq!(out.manifest.events[0].kind, "imported");
         assert_eq!(out.manifest.created.origin, "conversation");
+    }
+
+    #[test]
+    fn a_new_version_is_a_new_record_that_points_back() {
+        let e = env();
+        let first = e.root.join("図.png");
+        let second = e.root.join("図-改.png");
+        fs::write(&first, b"v1").unwrap();
+        fs::write(&second, b"v2").unwrap();
+
+        let old = take_at(&e, &first, req()).unwrap();
+        let mut r = req();
+        r.display_name = "図-改.png".into();
+        r.supersedes = Some(old.manifest.id.clone());
+        let new = take_at(&e, &second, r).unwrap();
+
+        assert_eq!(new.manifest.supersedes, Some(old.manifest.id.clone()));
+        // 元の版は書き換わらない(内容は不変 — 決定7)
+        let kept = e.ledger.get(&old.manifest.id).unwrap().unwrap();
+        assert_eq!(kept, old.manifest);
+        // 行の見え方は変えず、取り込んだ名前は来歴に残す
+        assert_eq!(new.manifest.display_name, "表.csv");
+        assert!(
+            new.manifest
+                .events
+                .iter()
+                .any(|ev| ev.kind == "superseded" && ev.detail.contains("図-改.png"))
+        );
+        // ひもづくノートは引き継ぐ(重複させない)
+        assert_eq!(new.manifest.notes, vec!["notes/decision"]);
+    }
+
+    /// 「新しい版として追加」が持ち出し範囲を広げる裏口にならないこと。
+    /// 画面をすり抜けて緩い区分を渡してきても、前の版の区分を引き継ぐ。
+    #[test]
+    fn a_new_version_cannot_widen_the_boundary() {
+        let e = env();
+        let src = e.root.join("秘.txt");
+        fs::write(&src, b"v1").unwrap();
+
+        let mut narrow = req();
+        narrow.policy = Some(Policy {
+            sensitivity: Sensitivity::Private,
+            sync: SyncPolicy::LocalOnly,
+            client_repo: false,
+        });
+        let old = take_at(&e, &src, narrow).unwrap();
+        assert_eq!(old.manifest.policy.sync, SyncPolicy::LocalOnly);
+
+        let next = e.root.join("秘2.txt");
+        fs::write(&next, b"v2").unwrap();
+        let mut wide = req();
+        wide.supersedes = Some(old.manifest.id.clone());
+        wide.policy = Some(Policy {
+            sensitivity: Sensitivity::Shared,
+            sync: SyncPolicy::Full,
+            client_repo: false,
+        });
+        let new = take_at(&e, &next, wide).unwrap();
+
+        assert_eq!(new.manifest.policy.sync, SyncPolicy::LocalOnly);
+        assert_eq!(new.manifest.policy.sensitivity, Sensitivity::Private);
+    }
+
+    /// 参照を付け替えないと、本文リンクが古い版を指したままになる(決定5)。
+    #[test]
+    fn the_reference_follows_the_new_version() {
+        let e = env();
+        let first = e.root.join("a.png");
+        let second = e.root.join("b.png");
+        fs::write(&first, b"a").unwrap();
+        fs::write(&second, b"b").unwrap();
+        let name = RefName::from_str("sketch").unwrap();
+
+        let mut r = req();
+        r.ref_name = Some(name.clone());
+        let old = take_at(&e, &first, r).unwrap();
+
+        let mut r2 = req();
+        r2.supersedes = Some(old.manifest.id.clone());
+        let new = take_at(&e, &second, r2).unwrap();
+
+        let current = e.ledger.get_ref(&name).unwrap().unwrap();
+        assert_eq!(current.artifact_id, new.manifest.id);
+        assert_eq!(current.revision, 2);
+        // 名前は変わらない(本文に書かれているのはこの名前)
+        assert_eq!(current.name, name);
+    }
+
+    #[test]
+    fn superseding_something_that_is_not_in_the_ledger_fails() {
+        let e = env();
+        let src = e.root.join("x.png");
+        fs::write(&src, b"x").unwrap();
+        let mut r = req();
+        r.supersedes = Some(ArtifactId::new(1_755_000_000_000));
+        assert!(take_at(&e, &src, r).is_err());
     }
 
     #[test]

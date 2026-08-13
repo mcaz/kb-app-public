@@ -33,6 +33,30 @@ export const commands = {
 	 */
 	attachmentPaste: (id: string) => typedError<[string, string | null] | null, AppError>(__TAURI_INVOKE("attachment_paste", { id })),
 	attachmentRemove: (id: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("attachment_remove", { id, name })),
+	/**  そのノートのファイル(最新版だけ)と、まだ移行していない旧添付。 */
+	noteFiles: (id: string) => typedError<NoteFiles, AppError>(__TAURI_INVOKE("note_files", { id })),
+	/**
+	 *  パスから取り込む(選択・ドラッグ&ドロップ)。
+	 * 
+	 *  `supersedes` を渡すと**新しい版**になる(前の版は残る)。
+	 */
+	fileAdd: (noteId: string, path: string, supersedes: string | null) => typedError<Added, AppError>(__TAURI_INVOKE("file_add", { noteId, path, supersedes })),
+	/**
+	 *  クリップボードの画像を取り込む。画像が無ければ `None`(テキストの貼り付けを邪魔しない)。
+	 * 
+	 *  WKWebView は DOM の paste にクリップボード画像を渡さないため、この経路が要る。
+	 */
+	fileAddFromClipboard: (noteId: string) => typedError<{
+	file: FileRow,
+	/**  大きいという警告(拒否ではない)。閾値をバイトで返す */
+	warn_over_bytes: number | null,
+	/**  仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す */
+	forced_local_only: boolean,
+} | null, AppError>(__TAURI_INVOKE("file_add_from_clipboard", { noteId })),
+	/**  このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。 */
+	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
+	/**  手元に無い実体を取り寄せる。戻り値は取り寄せた後の状態(都度算出)。 */
+	fileFetch: (id: string) => typedError<Availability, AppError>(__TAURI_INVOKE("file_fetch", { id })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
 	/**  Claude Desktop の設定にこの実行ファイルを MCP サーバーとして登録する。 */
 	connectDesktop: () => typedError<null, AppError>(__TAURI_INVOKE("connect_desktop")),
@@ -56,6 +80,15 @@ export const events = {
 };
 
 /* Types */
+/**  取り込んだ結果。警告と「区分を固定した」は拒否ではないので、行と一緒に返す。 */
+export type Added = {
+	file: FileRow,
+	/**  大きいという警告(拒否ではない)。閾値をバイトで返す */
+	warn_over_bytes: number | null,
+	/**  仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す */
+	forced_local_only: boolean,
+};
+
 export type AppError = 
 /**  vault を開けない(未オンボーディング・レジストリの不整合)。 */
 { code: "vault_unavailable"; message: string } | 
@@ -63,6 +96,23 @@ export type AppError =
 { code: "note_not_found"; id: string } | 
 /**  添付が上限を超えている。 */
 { code: "attachment_too_large"; limit_mb: number; actual_mb: number } | 
+/**  「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。 */
+{ code: "file_too_large"; size: number; limit: number } | 
+/**  別の場所で更新された。**自動再試行も強制上書きもしない**(決定7)。 */
+{ code: "file_conflict"; expected: number; current: number } | 
+/**  端末固有の場所は指せない(他の端末から辿れないため)。 */
+{ code: "file_location_unstable" } | 
+/**  仕事のリポジトリ由来なので、この変更は認めない。 */
+{ code: "file_client_repo_locked" } | 
+/**  持ち出しを広げる変更なので、確認を経ていない限り通さない(決定10)。 */
+{ code: "file_needs_confirm" } | 
+/**  識別子・参照名の形が不正。 */
+{ code: "file_malformed"; field: string } | 
+/**
+ *  クリップボード画像が大きすぎる。**ファイルの上限ではない** —
+ *  この経路だけ streaming できず全量がメモリに載るため(決定8)。
+ */
+{ code: "clipboard_image_too_large" } | 
 /**  Claude Desktop が見つからない(未インストール)。 */
 { code: "claude_desktop_not_found" } | 
 /**  Claude Desktop を起動できなかった。 */
@@ -73,6 +123,15 @@ export type AppError =
 { code: "embed_failed"; message: string } | 
 /**  分類できないもの。message はコアが返した文言(いまは日本語)。 */
 { code: "unexpected"; message: string };
+
+/**  この端末で実体を開けるか。**台帳には載せない**(上の doc 参照)。 */
+export type Availability = 
+/**  手元にある */
+"local" | 
+/**  この端末には無い(取り寄せられる可能性がある) */
+"missing" | 
+/**  方針により、この端末では開かない。**取得の再試行も提案しない** */
+"unavailable_by_policy";
 
 export type BackupStatus = {
 	/**  origin の URL(未設定なら None = 未接続) */
@@ -137,6 +196,29 @@ export type Favorite_Serialize = {
 	query?: string | null,
 	period?: string | null,
 	sort?: string | null,
+};
+
+/**
+ *  画面が1行を描くのに要る分だけ。台帳をそのまま渡すと、画面が内部の語を
+ *  知ることになる(正本「内部語を見せない語彙」)。
+ */
+export type FileRow = {
+	id: string,
+	/**  更新に必要(競合を検出するため画面が持ち回る) */
+	version: number,
+	name: string,
+	size: number,
+	media_type: string,
+	/**  この端末で開けるか。**同期される値ではなく、都度算出する**(決定9) */
+	availability: Availability,
+	sensitivity: Sensitivity,
+	sync: SyncPolicy,
+	/**  元の場所を指しているだけ(この保管庫は複製を持っていない) */
+	linked: boolean,
+	client_repo: boolean,
+	/**  取り寄せを提案してよいか。**方針で閉じているものには提案しない** */
+	can_fetch: boolean,
+	added_at: string,
 };
 
 export type GraphData = {
@@ -208,6 +290,18 @@ export type HomeState_Serialize = {
 	degraded: string[],
 };
 
+/**  移行前の添付(`<id>.files/`)。読み取り専用の旧経路(決定4)。 */
+export type LegacyFile = {
+	name: string,
+	size: number,
+};
+
+export type NoteFiles = {
+	files: FileRow[],
+	/**  まだ台帳に載っていない旧添付。移行までは並べて見せるだけにする */
+	legacy: LegacyFile[],
+};
+
 export type NoteView = {
 	id: string,
 	title: string,
@@ -241,6 +335,12 @@ export type SearchOutcome_Serialize = {
 	degraded: string[],
 };
 
+/**
+ *  閲覧区分。**転送軸(`SyncPolicy`)とは別の軸**で、UI でも1語に統合しない
+ *  (統合すると、正本が分けた軸を画面で混ぜ直すことになる)。
+ */
+export type Sensitivity = "private" | "shared";
+
 export type SetupState = {
 	needs_onboarding: boolean,
 	vault_name: string | null,
@@ -273,6 +373,15 @@ export type Stats = {
 	/**  現行スタンプで埋め込み済みのノート数(欠損の可視化 — 沈黙停止の教訓) */
 	embedded: number,
 };
+
+/**  転送軸。どこまで端末の外へ出すか。並び順がそのまま「広さ」になる。 */
+export type SyncPolicy = 
+/**  この端末だけ。台帳も外へ出さない */
+"local_only" | 
+/**  名前・役割・来歴は同期する。実体は出さない */
+"manifest_only" | 
+/**  実体も同期する */
+"full";
 
 /**
  *  タグの一覧(使用数+説明)。**説明はアプリが持たず KB の「タグ運用」ノートから読む**
