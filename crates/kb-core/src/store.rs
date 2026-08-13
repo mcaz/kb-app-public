@@ -28,7 +28,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::artifact::{ArtifactError, ContentHash, Hasher, Policy, SyncPolicy, new_ulid};
+use crate::artifact::{
+    ArtifactError, ContentHash, Hasher, Locator, Manifest, SyncPolicy, new_ulid,
+};
 use crate::vault::Vault;
 
 /// 一度に読む塊の大きさ。全量をメモリへ載せない(ADR-0003 決定8)。
@@ -71,19 +73,27 @@ pub struct Imported {
 ///
 /// 境界ごとに実体の持ち主が違うので、ここが唯一の入口になる:
 /// 「本体も同期」は LFS の置き場、それ以外は自前の置き場。
-pub fn availability(
-    vault: &Vault,
-    stores: &Stores,
-    policy: Policy,
-    hash: &ContentHash,
-) -> Availability {
+pub fn availability(vault: &Vault, stores: &Stores, m: &Manifest) -> Availability {
     // 仕事のリポジトリ由来は、取得を試みること自体をしない
-    if policy.client_repo && policy.sync != SyncPolicy::LocalOnly {
+    if m.policy.client_repo && m.policy.sync != SyncPolicy::LocalOnly {
         return Availability::UnavailableByPolicy;
     }
-    let here = match policy.sync {
-        SyncPolicy::Full => crate::lfs::has(vault, hash),
-        other => stores.has_local(other, hash),
+    // **どこにあるかは locator が決める。** 区分(sync)は「どこまで運びたいか」で、
+    // 実体の持ち主とは別軸。区分だけで分岐していたため、保管庫の中に実物がある
+    // 旧添付が「この端末にありません」になっていた(2026-08-13)
+    let here = match &m.locator {
+        Locator::Managed { .. } => match m.policy.sync {
+            SyncPolicy::Full => crate::lfs::has(vault, &m.hash),
+            other => stores.has_local(other, &m.hash),
+        },
+        // 移行前の旧添付は、保管庫の中の実ファイルがそのまま実体
+        Locator::LegacyGit { note_id, file_name } => {
+            vault.attach_dir(note_id).join(file_name).is_file()
+        }
+        // 元の場所を指すだけ。**リポジトリ ID から手元のパスを引く仕組みが無い**ので
+        // 在否を確かめられない。確かめられないことを Local と言わない側に倒す
+        // (リポジトリの所在を持つ台帳は ADR-0003 の残課題)
+        Locator::Linked { .. } => false,
     };
     if here {
         Availability::Local
@@ -102,10 +112,7 @@ pub struct Stores {
 impl Stores {
     /// 既定の置き場(保管庫の外)。
     pub fn open(workspace_id: &str) -> Result<Self> {
-        let root = dirs::data_dir()
-            .context("データ領域が特定できない")?
-            .join("kb-app")
-            .join("artifacts");
+        let root = crate::app_data_dir()?.join("artifacts");
         Ok(Self::at(root, workspace_id))
     }
 
@@ -299,8 +306,27 @@ impl Stores {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::Sensitivity;
+    use crate::artifact::{ArtifactId, Created, Policy, Role, Sensitivity};
     use tempfile::tempdir;
+
+    /// 取得状態の判定に要る分だけの台帳。
+    fn manifest_for(hash: ContentHash, locator: Locator) -> Manifest {
+        Manifest::new(
+            ArtifactId::new(1_755_000_000_000),
+            hash,
+            Created {
+                media_type: "application/octet-stream".into(),
+                size: 4,
+                at: "2026-08-13T00:00:00Z".into(),
+                origin: "test".into(),
+                by: crate::OWNER_ACTOR.into(),
+            },
+            "名前".into(),
+            locator,
+            Policy::default_managed(),
+            Role::File,
+        )
+    }
 
     fn stores(dir: &tempfile::TempDir, ws: &str) -> Stores {
         Stores::at(dir.path().join("artifacts"), ws)
@@ -473,8 +499,11 @@ mod tests {
         );
     }
 
+    /// 取得状態は台帳から読まず、**locator と区分から算出する**。
+    /// 区分だけで分岐していた頃は、保管庫の中に実物がある旧添付まで
+    /// missing になっていた(2026-08-13 に移行の実装で判明)。
     #[test]
-    fn availability_is_derived_here_not_stored() {
+    fn availability_is_derived_from_the_locator_not_stored() {
         let dir = tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let s = stores(&dir, "ws-a");
@@ -482,31 +511,69 @@ mod tests {
             .import(SyncPolicy::ManifestOnly, &mut &b"here"[..])
             .unwrap();
 
-        let policy = Policy {
-            sensitivity: Sensitivity::Private,
-            sync: SyncPolicy::ManifestOnly,
-            client_repo: false,
+        let m = |hash: ContentHash, locator: Locator, client_repo: bool| {
+            let mut manifest = manifest_for(hash.clone(), locator);
+            manifest.policy = Policy {
+                sensitivity: Sensitivity::Private,
+                sync: SyncPolicy::ManifestOnly,
+                client_repo,
+            };
+            manifest
+        };
+
+        let managed = Locator::Managed {
+            hash: out.hash.clone(),
         };
         assert_eq!(
-            availability(&vault, &s, policy, &out.hash),
+            availability(&vault, &s, &m(out.hash.clone(), managed.clone(), false)),
             Availability::Local
         );
 
         let elsewhere = ContentHash::of_bytes(b"not here");
         assert_eq!(
-            availability(&vault, &s, policy, &elsewhere),
+            availability(
+                &vault,
+                &s,
+                &m(
+                    elsewhere.clone(),
+                    Locator::Managed {
+                        hash: elsewhere.clone()
+                    },
+                    false
+                )
+            ),
             Availability::Missing
         );
 
         // 仕事のリポジトリ由来は取得を試みない
-        let client = Policy {
-            client_repo: true,
-            sync: SyncPolicy::ManifestOnly,
-            ..policy
+        assert_eq!(
+            availability(&vault, &s, &m(out.hash.clone(), managed, true)),
+            Availability::UnavailableByPolicy
+        );
+
+        // 旧添付は保管庫の中の実ファイルが実体。置き場を見ても見つからない
+        let note_id = "notes/旧";
+        let files = vault.attach_dir(note_id);
+        fs::create_dir_all(&files).unwrap();
+        fs::write(files.join("図.png"), b"legacy bytes").unwrap();
+        let legacy = Locator::LegacyGit {
+            note_id: note_id.into(),
+            file_name: "図.png".into(),
         };
         assert_eq!(
-            availability(&vault, &s, client, &out.hash),
-            Availability::UnavailableByPolicy
+            availability(
+                &vault,
+                &s,
+                &m(ContentHash::of_bytes(b"legacy bytes"), legacy, false)
+            ),
+            Availability::Local
+        );
+
+        // 元の場所を指すだけのものは在否を確かめられない(Local と言わない)
+        let linked = Locator::linked("github.com/acme/widgets", "README.md").unwrap();
+        assert_eq!(
+            availability(&vault, &s, &m(out.hash, linked, false)),
+            Availability::Missing
         );
     }
 

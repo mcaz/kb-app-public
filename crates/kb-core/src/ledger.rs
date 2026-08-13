@@ -39,9 +39,7 @@ pub struct Ledger {
 impl Ledger {
     /// 既定の置き場で開く。
     pub fn open(vault: &Vault, workspace_id: &str) -> Result<Self> {
-        let sidecar = dirs::data_dir()
-            .context("データ領域が特定できない")?
-            .join("kb-app")
+        let sidecar = crate::app_data_dir()?
             .join("artifacts")
             .join(workspace_id)
             .join("local-only");

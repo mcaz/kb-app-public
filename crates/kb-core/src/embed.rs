@@ -29,9 +29,8 @@ const MODEL_URL: &str = "https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/
 const TOKENIZER_URL: &str = "https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json";
 
 pub fn model_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("kb-app")
+    crate::app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
         .join("models")
         .join("bge-m3")
 }

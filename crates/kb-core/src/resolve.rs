@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 
-use crate::artifact::{ArtifactId, Manifest, RefName, SyncPolicy};
+use crate::artifact::{ArtifactId, Locator, Manifest, RefName, SyncPolicy};
 use crate::ledger::Ledger;
 use crate::store::{Availability, Stores, availability};
 use crate::vault::Vault;
@@ -52,9 +52,18 @@ impl Resolved {
         if self.availability != Availability::Local {
             return Ok(None);
         }
-        match self.manifest.policy.sync {
-            SyncPolicy::Full => crate::lfs::read(vault, &self.manifest.hash),
-            other => stores.read(other, &self.manifest.hash),
+        // 実体の持ち主は locator が決める(availability と同じ理由で区分では分岐しない)
+        match &self.manifest.locator {
+            Locator::Managed { .. } => match self.manifest.policy.sync {
+                SyncPolicy::Full => crate::lfs::read(vault, &self.manifest.hash),
+                other => stores.read(other, &self.manifest.hash),
+            },
+            Locator::LegacyGit { note_id, file_name } => {
+                let path = vault.attach_dir(note_id).join(file_name);
+                Ok(File::open(path).ok())
+            }
+            // 指すだけで実体を持たない。手元のパスを引く仕組みが無い(残課題)
+            Locator::Linked { .. } => Ok(None),
         }
     }
 
@@ -105,7 +114,7 @@ pub fn resolve(
     let Some(manifest) = manifest else {
         return Ok(None);
     };
-    let availability = availability(vault, stores, manifest.policy, &manifest.hash);
+    let availability = availability(vault, stores, &manifest);
     Ok(Some(Resolved {
         manifest,
         availability,
