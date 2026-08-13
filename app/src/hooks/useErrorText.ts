@@ -32,6 +32,8 @@ export function useErrorText(): (e: unknown) => string {
           return t("errors.fileNeedsConfirm");
         case "file_malformed":
           return t("errors.fileMalformed");
+        case "file_not_here":
+          return t("errors.fileNotHere");
         case "clipboard_image_too_large":
           return t("errors.clipboardImageTooLarge");
         case "claude_desktop_not_found":

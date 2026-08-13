@@ -44,6 +44,18 @@ export const commands = {
 	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
 	/**  手元に無い実体を取り寄せる。戻り値は取り寄せた後の状態(都度算出)。 */
 	fileFetch: (id: string) => typedError<Availability, AppError>(__TAURI_INVOKE("file_fetch", { id })),
+	/**
+	 *  開く。**中身は必ず resolver 経由で取り出す。**
+	 * 
+	 *  OS のアプリへ渡すにはパスが要るが、置き場のファイル名は照合値(hash)なので、
+	 *  表示名を付けた複製を一時領域に作ってから渡す。内容は不変なので使い回せる。
+	 * 
+	 *  経路をここに一本化しているのは、**画面へパスを渡さない**ため。パスを渡すと
+	 *  「手元に無いものの中身を開かない」が画面側の作法に落ちる(決定9・resolver の doc)。
+	 */
+	fileOpen: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("file_open", { id })),
+	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */
+	legacyOpen: (noteId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("legacy_open", { noteId, name })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
 	/**  Claude Desktop の設定にこの実行ファイルを MCP サーバーとして登録する。 */
 	connectDesktop: () => typedError<null, AppError>(__TAURI_INVOKE("connect_desktop")),
@@ -93,6 +105,8 @@ export type AppError =
 { code: "file_needs_confirm" } | 
 /**  識別子・参照名の形が不正。 */
 { code: "file_malformed"; field: string } | 
+/**  手元に無い(または方針で閉じている)ので開けない。 */
+{ code: "file_not_here" } | 
 /**
  *  クリップボード画像が大きすぎる。**ファイルの上限ではない** —
  *  この経路だけ streaming できず全量がメモリに載るため(決定8)。

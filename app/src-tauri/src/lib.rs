@@ -38,6 +38,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             files::file_add_from_clipboard,
             files::file_detach,
             files::file_fetch,
+            files::file_open,
+            files::legacy_open,
             connect::connect_state,
             connect::connect_desktop,
             connect::backup_now,
@@ -74,6 +76,9 @@ pub fn run() {
         // ファイルを選ぶ経路。取り込みに渡すのはパスだけなので、
         // 中身を JS 側へ載せない選択肢がこれしかない(ADR-0003 決定8)
         .plugin(tauri_plugin_dialog::init())
+        // 既定のアプリでファイルを開く。**JS 側の権限は与えない** —
+        // 開く経路を files::file_open だけにして、必ず resolver を通す
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             // イベントの購読口を張る(進捗通知など)

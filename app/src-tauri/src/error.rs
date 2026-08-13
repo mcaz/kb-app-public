@@ -34,6 +34,8 @@ pub enum AppError {
     FileNeedsConfirm,
     /// 識別子・参照名の形が不正。
     FileMalformed { field: String },
+    /// 手元に無い(または方針で閉じている)ので開けない。
+    FileNotHere,
     /// クリップボード画像が大きすぎる。**ファイルの上限ではない** —
     /// この経路だけ streaming できず全量がメモリに載るため(決定8)。
     ClipboardImageTooLarge,
@@ -66,6 +68,7 @@ impl std::fmt::Display for AppError {
             Self::FileClientRepoLocked => write!(f, "仕事のリポジトリ由来なので変更できない"),
             Self::FileNeedsConfirm => write!(f, "持ち出しを広げる変更には明示確認が要る"),
             Self::FileMalformed { field } => write!(f, "形式が不正: {field}"),
+            Self::FileNotHere => write!(f, "この端末にファイルが無い"),
             Self::ClipboardImageTooLarge => write!(f, "クリップボードの画像が大きすぎる"),
             Self::ClaudeDesktopNotFound => write!(f, "Claude Desktop が見つからない"),
             Self::ClaudeDesktopLaunchFailed => write!(f, "Claude Desktop を起動できなかった"),

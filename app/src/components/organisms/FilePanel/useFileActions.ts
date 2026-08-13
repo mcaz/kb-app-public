@@ -3,19 +3,21 @@ import { toast } from "sonner";
 
 import { useErrorText } from "@/hooks/useErrorText";
 import { api } from "@/lib/api";
-import { useFileAdd, useFileDetach, useFileFetch } from "@/lib/queries";
+import { useFileAdd, useFileDetach, useFileFetch, useFileOpen, useLegacyOpen } from "@/lib/queries";
 
 import type { Added, FileRow } from "@/lib/api";
 
 const MB = 1024 * 1024;
 
-/** FilePanel 私物: ファイルの取り込み・付け替え・取り寄せと、その通知。 */
+/** FilePanel 私物: ファイルの取り込み・付け替え・取り寄せ・開くと、その通知。 */
 export function useFileActions(noteId: string) {
   const { t } = useTranslation("notes");
   const errorText = useErrorText();
   const add = useFileAdd();
   const detach = useFileDetach();
   const fetch = useFileFetch();
+  const open = useFileOpen();
+  const openLegacy = useLegacyOpen();
 
   /** 拒否ではない知らせ(大きさの警告・区分の固定)は取り込めた後に出す。 */
   const notice = (added: Added) => {
@@ -56,10 +58,28 @@ export function useFileActions(noteId: string) {
     }
   };
 
+  const openFile = async (file: FileRow) => {
+    try {
+      await open.mutateAsync(file.id);
+    } catch (e) {
+      toast(t("file.openFailed", { error: errorText(e) }));
+    }
+  };
+
+  const openLegacyFile = async (name: string) => {
+    try {
+      await openLegacy.mutateAsync({ noteId, name });
+    } catch (e) {
+      toast(t("file.openFailed", { error: errorText(e) }));
+    }
+  };
+
   return {
     addPicked,
     detachFile,
     fetchFile,
+    openFile,
+    openLegacyFile,
     busy: add.isPending || detach.isPending || fetch.isPending,
   };
 }

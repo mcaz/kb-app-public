@@ -86,6 +86,11 @@ export const api = {
       : (await demo()).fileDetach(),
   fileFetch: async (id: string): Promise<Availability> =>
     IN_TAURI ? unwrap(commands.fileFetch(id)) : (await demo()).fileFetch(),
+  /** 中身はコアの resolver 経由でしか出てこない(画面はパスを受け取らない)。 */
+  fileOpen: async (id: string): Promise<null> =>
+    IN_TAURI ? unwrap(commands.fileOpen(id)) : (await demo()).fileOpen(),
+  legacyOpen: async (noteId: string, name: string): Promise<null> =>
+    IN_TAURI ? unwrap(commands.legacyOpen(noteId, name)) : (await demo()).fileOpen(),
 
   /**
    * ファイルを選ぶ。返るのはパスだけで、中身はここを通らない。

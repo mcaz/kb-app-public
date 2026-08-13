@@ -69,6 +69,7 @@
     "fetched": "Copy retrieved",
     "fetchIncomplete": "Could not retrieve it (still not on this device)",
     "fetchFailed": "Retrieval failed: {{error}}",
+    "openFailed": "Could not open it: {{error}}",
     "missing": "Not on this device",
     "unavailable": "Can’t be opened on this device (by setting)",
     "localOnly": "Not synced",

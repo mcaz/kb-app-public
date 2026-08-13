@@ -15,11 +15,19 @@ export interface FileRowProps {
   onDetach: () => void;
   onReplace: () => void;
   onFetch: () => void;
+  onOpen: () => void;
   busy?: boolean;
 }
 
 /** ファイル1行。FilePanel 専用なので同じディレクトリに置く。 */
-export function FileRow({ file, onDetach, onReplace, onFetch, busy = false }: FileRowProps) {
+export function FileRow({
+  file,
+  onDetach,
+  onReplace,
+  onFetch,
+  onOpen,
+  busy = false,
+}: FileRowProps) {
   const { t } = useTranslation("notes");
   const missing = file.availability === "missing";
   const blocked = file.availability === "unavailable_by_policy";
@@ -31,7 +39,21 @@ export function FileRow({ file, onDetach, onReplace, onFetch, busy = false }: Fi
       })}
     >
       <Icon as={file.linked ? Link2 : FileText} size="sm" className="text-muted" />
-      <span className="min-w-0 break-all">{file.name}</span>
+
+      {/* 名前そのものを開く口にする。行の幅を増やさずに済み、開けない行では
+          押せる見た目にしない(手元に無いものに触れる余地を残さない) */}
+      {file.availability === "local" ? (
+        <button
+          type="button"
+          className="hover:text-grow min-w-0 cursor-pointer border-none bg-transparent p-0 text-left break-all"
+          disabled={busy}
+          onClick={onOpen}
+        >
+          {file.name}
+        </button>
+      ) : (
+        <span className="min-w-0 break-all">{file.name}</span>
+      )}
 
       {/* 手元に無い行は大きさも要約も出さない — 中身を知っているかのように見せない */}
       {!missing && <i className="text-muted text-[11px] not-italic">{formatSize(file.size)}</i>}
