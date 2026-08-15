@@ -44,12 +44,6 @@
     "saved": "お気に入りに保存しました",
     "updated": "「{{name}}」を更新しました"
   },
-  "selection": {
-    "head": "選択中",
-    "primary": "主",
-    "secondary": "副",
-    "makePrimary": "主にする"
-  },
   "list": {
     "notFound": "見つかりませんでした",
     "empty": "該当するノートがありません",
@@ -59,6 +53,9 @@
     "open": "関連",
     "dialogTitle": "つながりと近いノート",
     "dialogDescription": "現在のノートにつながっているノートと、内容が近いノートを表示します。",
+    "noteDialogTitle": "関連ノート",
+    "noteDialogDescription": "選択した関連ノートをModalで表示します。",
+    "openAsMain": "本文として開く",
     "openGraph": "グラフで見る",
     "linked": "つながっているノート",
     "linkedEmpty": "まだありません",

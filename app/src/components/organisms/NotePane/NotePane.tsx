@@ -17,21 +17,19 @@ import { useSession } from "@/lib/stores/session";
 
 export interface NotePaneProps {
   noteId: string;
-  /** 並べて開いた副ペインなら true(閉じる/主にするが出る)。 */
-  secondary?: boolean;
   /** 右ペインを置けない幅で、関連情報を Modal として開く。 */
   onOpenRelated?: () => void;
+  /** Modal 内で Wikilink を辿る場合など、既定の画面遷移を差し替える。 */
+  onOpenNote?: (id: string) => void;
 }
 
 /** 1ノート分の表示(本文+操作)。 */
-export function NotePane({ noteId, secondary = false, onOpenRelated }: NotePaneProps) {
+export function NotePane({ noteId, onOpenRelated, onOpenNote }: NotePaneProps) {
   const { t, i18n } = useTranslation(["notes", "common"]);
   const { data: note } = useNote(noteId);
   const { data: home } = useHomeState();
-  const openNote = useSession((s) => s.openNote);
+  const openMainNote = useSession((s) => s.openNote);
   const addTag = useSession((s) => s.addTag);
-  const closeSecondary = useSession((s) => s.closeSecondary);
-  const promoteSecondary = useSession((s) => s.promoteSecondary);
   const errorText = useErrorText();
   const careDismiss = useCareDismiss();
   const launchAi = useLaunchAi();
@@ -41,33 +39,14 @@ export function NotePane({ noteId, secondary = false, onOpenRelated }: NotePaneP
   const at = (iso: string | null) => formatDateTime(iso, i18n.language, t("common:date.unknown"));
 
   return (
-    <article
-      className={`flex min-w-0 flex-1 flex-col overflow-y-auto px-[22px] py-[18px] max-[1040px]:px-4 ${
-        secondary ? "bg-panel min-w-[220px]" : ""
-      }`}
-    >
+    <article className="flex min-w-0 flex-1 flex-col overflow-y-auto px-[22px] py-[18px] max-[1040px]:px-4">
       <div className="mb-1 flex flex-none items-center gap-2.5">
         <h1 className="min-w-0 flex-1 text-lg font-bold">{note.title}</h1>
-        {!secondary && onOpenRelated && (
+        {onOpenRelated && (
           <Button variant="quiet" size="sm" className="min-[1280px]:hidden" onClick={onOpenRelated}>
             <Icon as={Link} size="sm" />
             {t("related.open")}
           </Button>
-        )}
-        {secondary && (
-          <>
-            <Button variant="quiet" size="sm" onClick={promoteSecondary}>
-              {t("selection.makePrimary")}
-            </Button>
-            <Button
-              variant="quiet"
-              size="sm"
-              aria-label={t("common:action.close")}
-              onClick={closeSecondary}
-            >
-              ×
-            </Button>
-          </>
         )}
       </div>
 
@@ -118,7 +97,7 @@ export function NotePane({ noteId, secondary = false, onOpenRelated }: NotePaneP
         body={note.body}
         vaultRoot={note.vault_root}
         inTauri={IN_TAURI}
-        onOpenNote={openNote}
+        onOpenNote={onOpenNote ?? openMainNote}
       />
     </article>
   );

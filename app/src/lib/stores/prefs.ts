@@ -13,9 +13,8 @@ export interface Prefs {
   /** "system" = OS の設定に従う。 */
   theme: Theme;
   sideCollapsed: boolean;
-  /** パネル幅(px)。null = 既定のまま(未調整)。 */
+  /** 関連パネル幅(px)。 */
   relWidth: number;
-  mainWidth: number | null;
 }
 
 interface PrefsStore extends Prefs {
@@ -29,7 +28,6 @@ export const usePrefs = create<PrefsStore>()(
       theme: "system",
       sideCollapsed: false,
       relWidth: 220,
-      mainWidth: null,
       set: (patch) => set(patch),
     }),
     {

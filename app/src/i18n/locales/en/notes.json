@@ -44,12 +44,6 @@
     "saved": "Saved as favorite",
     "updated": "Updated “{{name}}”"
   },
-  "selection": {
-    "head": "Open",
-    "primary": "Main",
-    "secondary": "Side",
-    "makePrimary": "Make main"
-  },
   "list": {
     "notFound": "No matches",
     "empty": "No notes match these filters",
@@ -59,6 +53,9 @@
     "open": "Related",
     "dialogTitle": "Linked and similar notes",
     "dialogDescription": "Shows notes linked to the current note and notes with similar content.",
+    "noteDialogTitle": "Related note",
+    "noteDialogDescription": "Shows the selected related note in a modal.",
+    "openAsMain": "Open as main note",
     "openGraph": "View in graph",
     "linked": "Linked notes",
     "linkedEmpty": "None yet",
