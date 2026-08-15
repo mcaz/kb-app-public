@@ -3,6 +3,7 @@
     "home": "ホーム",
     "search": "検索",
     "notes": "ノート",
+    "notesEmpty": "ノートはまだありません",
     "graph": "グラフ",
     "connect": "繋ぐ",
     "collapse": "畳む",

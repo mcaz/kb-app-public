@@ -52,6 +52,7 @@ export function App() {
         sidebar={
           <Sidebar
             vaultName={setup?.vault_name ?? "kb"}
+            notes={home?.notes ?? []}
             onOpenSearch={openSearch}
             settingsOpen={settingsOpen}
             onOpenSettings={openSettings}

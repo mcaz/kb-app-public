@@ -3,6 +3,7 @@
     "home": "Home",
     "search": "Search",
     "notes": "Notes",
+    "notesEmpty": "No notes yet",
     "graph": "Graph",
     "connect": "Connect",
     "collapse": "Collapse",
