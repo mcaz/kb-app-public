@@ -58,7 +58,11 @@ export function SearchFilterBar({
             )}
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-[320px] p-3">
+        <PopoverContent
+          align="start"
+          className="w-[320px] p-3"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
           <div className="mb-2 text-xs font-semibold">{t("notes:filter.tagPlaceholder")}</div>
           <TagCombobox
             className="border-line mx-0 mb-4 rounded-md border px-2 py-1"
