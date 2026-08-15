@@ -1,5 +1,6 @@
 //! kb — エンジニア向け CLI(FR-C4/C5 の口)。`kb mcp` で MCP サーバー起動。
 
+use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
 
@@ -93,6 +94,11 @@ enum Command {
     },
     /// 索引の増分 sync
     Sync,
+    /// 正本の再現性を検査・論理 export
+    Storage {
+        #[command(subcommand)]
+        command: StorageCommand,
+    },
     /// かしこい検索(段1: 埋め込み内蔵)の管理
     Embed {
         #[command(subcommand)]
@@ -120,6 +126,17 @@ enum EmbedCommand {
     Enable,
     /// 導入状態とカバレッジ
     Status,
+}
+
+#[derive(Subcommand)]
+enum StorageCommand {
+    /// clone 後にも再現すべき論理状態を読み取り専用で検査
+    Verify,
+    /// backend 非依存の比較用 JSON を出力(stdout または --output)
+    Export {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -326,6 +343,26 @@ fn main() -> Result<()> {
             let conn = open_db(&vault)?;
             let n = sync(&vault, &conn)?;
             println!("synced: {n} note(s) updated");
+        }
+        Command::Storage { command } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            match command {
+                StorageCommand::Verify => {
+                    let report = kb_core::storage_contract::verify(&vault)?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                StorageCommand::Export { output } => {
+                    let export = kb_core::storage_contract::export(&vault)?;
+                    let json = serde_json::to_string_pretty(&export)?;
+                    if let Some(path) = output {
+                        fs::write(&path, format!("{json}\n"))
+                            .with_context(|| format!("export を書けない: {}", path.display()))?;
+                        println!("{}", path.display());
+                    } else {
+                        println!("{json}");
+                    }
+                }
+            }
         }
         Command::Embed { command } => {
             let vault = open_vault(cli.vault.as_deref())?;

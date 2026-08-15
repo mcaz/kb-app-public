@@ -21,6 +21,7 @@ pub mod migrate;
 pub mod registry;
 pub mod resolve;
 pub mod search;
+pub mod storage_contract;
 pub mod store;
 pub mod tags;
 pub mod tokenize;

@@ -1,5 +1,5 @@
-//! vault = 1ディレクトリ(内部は git リポ)。正本は Markdown+Git、
-//! .kb/ 以下(索引)は再構築可能な派生(原則1)。
+//! vault = 1ディレクトリ(内部は git リポ)。現行の保存 adapter は Markdown+Git、
+//! .kb/ 以下(索引)は再構築可能な派生(Storage Contract / ADR-0004)。
 //! 規約(frontmatter・index.md・log.md)はアプリが生成し人間に暗記させない(原則7)。
 
 use std::fs;
@@ -27,7 +27,7 @@ impl Vault {
         Ok(Vault { root })
     }
 
-    /// vault を新規作成: git init + .gitignore + index.md + notes/。
+    /// vault を新規作成: git init + 永続 ID + .gitignore + index.md + notes/。
     pub fn create(root: impl AsRef<Path>) -> Result<Vault> {
         let root = root.as_ref().to_path_buf();
         if root.join(".git").exists() {
@@ -37,8 +37,12 @@ impl Vault {
         Repository::init(&root).context("git init")?;
         fs::write(root.join(".gitignore"), ".kb/\n")?;
         let vault = Vault { root };
+        crate::workspace::initialize_workspace_id(&vault)?;
         vault.write_index_md()?;
-        vault.commit(&[".gitignore", "index.md"], "vault: initialize")?;
+        vault.commit(
+            &[".gitignore", crate::workspace::ID_FILE, "index.md"],
+            "vault: initialize",
+        )?;
         Ok(vault)
     }
 

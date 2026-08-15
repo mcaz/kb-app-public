@@ -23,13 +23,39 @@
 
 use std::fs;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::artifact::{is_ulid, new_ulid};
 use crate::vault::Vault;
 
 /// 保管庫直下の ID ファイル。**追跡する**(`.kb/` は ignore 済みなので使わない)。
 pub const ID_FILE: &str = ".kb-workspace";
+
+/// 保管庫に保存済みの ID を**変更せず**読む。
+///
+/// `storage verify` のような検査が、観察しただけで正本を書き換えないための口。
+/// 欠落・破損・競合は自己修復せず、そのまま契約違反として返す。
+pub fn stored_workspace_id(vault: &Vault) -> Result<String> {
+    let path = vault.root.join(ID_FILE);
+    let text = fs::read_to_string(&path)
+        .with_context(|| format!("保管庫 ID が読めない: {}", path.display()))?;
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if lines.len() != 1 || !is_ulid(lines[0]) {
+        bail!("保管庫 ID が一意な ULID ではない: {}", path.display());
+    }
+    Ok(lines[0].to_string())
+}
+
+/// 新規保管庫の最初の commit に ID を含めるため、ファイルだけを発行する。
+pub(crate) fn initialize_workspace_id(vault: &Vault) -> Result<String> {
+    let id = new_ulid(now_ms());
+    fs::write(vault.root.join(ID_FILE), format!("{id}\n")).context("保管庫 ID の書き込み")?;
+    Ok(id)
+}
 
 /// 保管庫の永続 ID を返す。無ければ作って commit する(冪等)。
 ///
@@ -138,5 +164,21 @@ mod tests {
         let (_a, va) = vault();
         let (_b, vb) = vault();
         assert_ne!(workspace_id(&va).unwrap(), workspace_id(&vb).unwrap());
+    }
+
+    #[test]
+    fn new_vault_stores_a_read_only_id_from_the_first_commit() {
+        let (_dir, vault) = vault();
+        let id = stored_workspace_id(&vault).unwrap();
+        assert!(is_ulid(&id), "{id}");
+
+        let repo = git2::Repository::open(&vault.root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert!(
+            head.tree()
+                .unwrap()
+                .get_path(std::path::Path::new(ID_FILE))
+                .is_ok()
+        );
     }
 }

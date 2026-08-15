@@ -13,6 +13,7 @@
 | 3 | **ノートは AI の領分**(update / remove は AI、削除指示は人間) | 所有ガード(コアで強制) |
 | 4 | **同期・索引は派生**。壊れたら画面に出す(沈黙しない) | fail-open+劣化表示 |
 | 5 | **ファイルの実体と持ち出し範囲はコアが守る**(2026-08-12 追加) | 新規取り込みは `managed` のみ(`Linked` は旧 record の互換読み取り専用) / path 経路は picker・drop・paste・CLI が同一のコア API に合流 / MCP へは content 経路だけを公開し path を受け取らない / `client_repo` 由来は `local_only` 固定で instructions・prompt から緩和不能 / **緩和の能力を MCP に公開しない**(能力の不在)/ content と作成時 provenance は不変(更新は新しい版)/ **新しい版は前の版の区分を引き継ぎ、渡された指定を見ない**(2026-08-13 追加)/ availability は同期せず端末ごとに導出 |
+| 6 | **正本は特定の保存形式ではなく再現可能性契約(Storage Contract)で定義する**(2026-08-16 追加) | repository の論理状態を決定的な JSON snapshot へ export / SHA-256 digest で同一性を比較 / `storage verify` は読み取り専用で破損を黙殺しない / fresh clone から同じ digest と派生索引を再構築する受入テスト。現行の Markdown・OKF・Git は交換可能な adapter |
 
 - タグ無しノートは契約違反状態として**お手入れの気づき**に出す(修復は Claude への依頼で)
 - 契約5 の「新しい版は前の版の区分を引き継ぐ」は、確認を1段置いても
@@ -23,6 +24,11 @@
   Artifact の受入条件14項目は [ADR-0003](adr/0003-artifact-storage-and-transport.md) と
   kb-core のテストが持つ。ここに置くのは、instructions では守れず**能力・スキーマ・コアで
   必然にすべきもの**だけ(設計原則の階段の上2段に当たるもの)
+- 契約6 の snapshot は**バックアップファイルそのものではなく比較・検査用の論理表現**。
+  `index.md` と `.kb/index.db` は派生なので含めず、ノート、監査ログ、Git 管理される Artifact
+  台帳・参照、旧添付の path/size/hash を含める。`full` の実体は同じ origin の Git LFS から
+  取得し、明示的に `local_only` とした実体は clone 再現の対象外。後者を別端末へ運ぶ完全 bundle
+  は ADR-0004 の次段で定義する
 - 契約の変更はこの文書の改定+コアの強制点の変更として行う(instructions だけの変更は不可)
 - **語彙の正本は設定ファイルでなく「現に使われているタグ ∪「タグ運用」ノートの `## 語彙` 節」**。
   どの語を使うかは運用(会話で合意し KB のノートに記録する)であり、この文書は
