@@ -34,7 +34,7 @@ export function SettingsPage() {
   return (
     <SinglePaneLayout>
       <div className="max-w-[46em] px-6 py-5">
-        <h1 className="mb-4 text-lg font-bold">{t("settings.title")}</h1>
+        <h1 className="mb-4 text-lg font-bold">{t("settings.theme")}</h1>
         <h2 className="text-muted mb-2 text-xs tracking-[0.08em]">{t("settings.appearance")}</h2>
 
         <div className="border-line bg-panel flex flex-col gap-3 rounded-xl border px-4 py-3.5">

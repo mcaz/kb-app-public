@@ -35,6 +35,7 @@
   },
   "settings": {
     "title": "Settings",
+    "dialogDescription": "Manage connections and appearance for this device.",
     "appearance": "Appearance",
     "theme": "Theme",
     "themeSystem": "Match the system",

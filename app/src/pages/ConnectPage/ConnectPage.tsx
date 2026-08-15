@@ -31,6 +31,7 @@ export function ConnectPage() {
   if (isPending || !state) {
     return (
       <SinglePaneLayout>
+        <h1 className="px-5 pt-4 text-lg font-bold">{t("common:nav.connect")}</h1>
         <p className="text-muted px-5 py-4">{t("common:state.checking")}</p>
       </SinglePaneLayout>
     );
@@ -40,6 +41,7 @@ export function ConnectPage() {
 
   return (
     <SinglePaneLayout>
+      <h1 className="px-5 pt-4 text-lg font-bold">{t("common:nav.connect")}</h1>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] content-start gap-3 px-5 py-4">
         <ConnectCard
           name={t("ai.name")}

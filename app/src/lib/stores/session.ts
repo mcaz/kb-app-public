@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { Favorite, Period, SortKey } from "@/lib/api";
 
-export type View = "home" | "notes" | "graph" | "connect" | "settings";
+export type View = "home" | "notes" | "graph";
 
 /**
  * 起動中だけの状態(保存しない)。

@@ -8,13 +8,13 @@ import { Sidebar } from "@/components/organisms/Sidebar";
 import { AppShell } from "@/components/templates/AppShell";
 import { useNoteFileIntake } from "@/hooks/useNoteFileIntake";
 import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
+import { useSettingsShortcut } from "@/hooks/useSettingsShortcut";
 import { useTheme } from "@/hooks/useTheme";
-import { ConnectPage } from "@/pages/ConnectPage";
 import { GraphPage } from "@/pages/GraphPage";
 import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
-import { SettingsPage } from "@/pages/SettingsPage";
+import { SettingsDialog } from "@/pages/SettingsDialog";
 import { useHomeState, useSetupState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
@@ -24,7 +24,15 @@ export function App() {
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
-  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const openSearch = useCallback(() => {
+    setSettingsOpen(false);
+    setSearchOpen(true);
+  }, []);
+  const openSettings = useCallback(() => {
+    setSearchOpen(false);
+    setSettingsOpen(true);
+  }, []);
 
   // 選んだテーマ(システム/ライト/ダーク)を <html data-theme> へ反映する
   const theme = useTheme();
@@ -32,6 +40,7 @@ export function App() {
   // ノートを開いている間だけ、ペースト・ドロップを添付として受ける
   useNoteFileIntake(selectedId, view === "notes");
   useGlobalSearchShortcut(openSearch, !isPending && !setup?.needs_onboarding);
+  useSettingsShortcut(openSettings, !isPending && !setup?.needs_onboarding);
 
   if (isPending) return null;
   if (setup?.needs_onboarding) return <OnboardingPage />;
@@ -40,16 +49,22 @@ export function App() {
     <TooltipProvider delayDuration={200}>
       <AppShell
         banner={<DegradedBanner messages={home?.degraded ?? []} />}
-        sidebar={<Sidebar vaultName={setup?.vault_name ?? "kb"} onOpenSearch={openSearch} />}
+        sidebar={
+          <Sidebar
+            vaultName={setup?.vault_name ?? "kb"}
+            onOpenSearch={openSearch}
+            settingsOpen={settingsOpen}
+            onOpenSettings={openSettings}
+          />
+        }
       >
         {view === "home" && <HomePage />}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
         {view === "graph" && <GraphPage />}
-        {view === "connect" && <ConnectPage />}
-        {view === "settings" && <SettingsPage />}
       </AppShell>
 
       <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <Toaster theme={theme} />
     </TooltipProvider>
   );
