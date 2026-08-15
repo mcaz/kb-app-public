@@ -12,7 +12,6 @@ export type View = "home" | "notes" | "graph" | "connect" | "settings";
 interface SessionStore {
   view: View;
   selectedId: string | null;
-  secondaryId: string | null;
   query: string;
   selectedTags: string[];
   period: Period;
@@ -24,9 +23,6 @@ interface SessionStore {
   /** ナビの「ノート」= 検索条件と選択を解除した本文画面へ戻す。 */
   resetNotes: () => void;
   openNote: (id: string) => void;
-  openBeside: (id: string) => void;
-  closeSecondary: () => void;
-  promoteSecondary: () => void;
   setQuery: (query: string) => void;
   addTag: (tag: string) => void;
   removeTag: (tag: string) => void;
@@ -41,7 +37,6 @@ interface SessionStore {
 const INITIAL = {
   view: "notes" as View,
   selectedId: null,
-  secondaryId: null,
   query: "",
   selectedTags: [] as string[],
   period: "all" as Period,
@@ -50,20 +45,12 @@ const INITIAL = {
   graphFocus: null,
 };
 
-export const useSession = create<SessionStore>()((set, get) => ({
+export const useSession = create<SessionStore>()((set) => ({
   ...INITIAL,
 
   go: (view) => set({ view }),
   resetNotes: () => set({ ...INITIAL }),
-  openNote: (id) =>
-    // 主ノートが変わったら並べ表示は畳む(前のノートの関連が残らないように)
-    set({ selectedId: id, secondaryId: null, view: "notes" }),
-  openBeside: (id) => set({ secondaryId: get().secondaryId === id ? null : id }),
-  closeSecondary: () => set({ secondaryId: null }),
-  promoteSecondary: () => {
-    const { secondaryId } = get();
-    if (secondaryId) set({ selectedId: secondaryId, secondaryId: null });
-  },
+  openNote: (id) => set({ selectedId: id, view: "notes" }),
   setQuery: (query) => set({ query }),
   addTag: (tag) =>
     set((s) =>

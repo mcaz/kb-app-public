@@ -11,14 +11,14 @@ import { useSession } from "@/lib/stores/session";
 export interface RelatedPanelProps {
   noteId: string;
   width: number;
+  openId: string | null;
+  onOpenNote: (id: string) => void;
 }
 
-/** ノート一覧の右のカラム。開いているノートのリンク・近いノート・グラフ入口。 */
-export function RelatedPanel({ noteId, width }: RelatedPanelProps) {
+/** 本文の右カラム。リンク・近いノート・グラフ入口を表示する。 */
+export function RelatedPanel({ noteId, width, openId, onOpenNote }: RelatedPanelProps) {
   const { t } = useTranslation("notes");
   const { data: note } = useNote(noteId);
-  const secondaryId = useSession((s) => s.secondaryId);
-  const openBeside = useSession((s) => s.openBeside);
   const focusGraph = useSession((s) => s.focusGraph);
 
   if (!note) return <aside style={{ width }} className="bg-panel-2 flex-none" />;
@@ -38,8 +38,8 @@ export function RelatedPanel({ noteId, width }: RelatedPanelProps) {
           headIcon={Link}
           tone="linked"
           emptyLabel={t("related.linkedEmpty")}
-          openId={secondaryId}
-          onOpen={openBeside}
+          openId={openId}
+          onOpen={onOpenNote}
           entries={note.related.map(([id, title]) => ({ id, title: title ?? id }))}
         />
         <div className="mt-3" />
@@ -48,8 +48,8 @@ export function RelatedPanel({ noteId, width }: RelatedPanelProps) {
           headIcon={Sparkles}
           tone="similar"
           emptyLabel={t("related.similarEmpty")}
-          openId={secondaryId}
-          onOpen={openBeside}
+          openId={openId}
+          onOpen={onOpenNote}
           entries={note.similar.map(([id, title, distance]) => ({
             id,
             title: title ?? id,
