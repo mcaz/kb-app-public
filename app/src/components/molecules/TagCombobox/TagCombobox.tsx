@@ -10,8 +10,10 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/atoms/ui/command";
+import { cn } from "@/lib/cn";
 
 export interface TagComboboxProps {
+  className?: string;
   allTags: string[];
   selected: string[];
   onAdd: (tag: string) => void;
@@ -31,6 +33,7 @@ export interface TagComboboxProps {
  * キーボードで選べなくなる。旧実装と同じく入力欄の直下に重ねる。
  */
 export function TagCombobox({
+  className,
   allTags,
   selected,
   onAdd,
@@ -52,7 +55,7 @@ export function TagCombobox({
   };
 
   return (
-    <div className="relative mx-2.5 mb-2.5 flex flex-wrap items-center gap-1">
+    <div className={cn("relative mx-2.5 mb-2.5 flex flex-wrap items-center gap-1", className)}>
       {selected.map((tag) => (
         <TagChip key={tag} tag={tag} selected onRemove={() => onRemove(tag)} />
       ))}

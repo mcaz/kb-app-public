@@ -29,6 +29,7 @@ const notes: NoteView[] = [
   {
     id: "notes/引っ越し手続きメモ",
     title: "引っ越し手続きメモ",
+    description: "引っ越し前後に必要な手続きと期限をまとめたチェックリスト。",
     status: "stable",
     origin: "agent",
     tags: ["手続き"],
@@ -44,6 +45,7 @@ const notes: NoteView[] = [
   {
     id: "notes/確定申告の準備",
     title: "確定申告の準備",
+    description: "確定申告までに集める書類と確認事項。",
     status: "stable",
     origin: "agent",
     tags: ["手続き", "税金"],
@@ -57,6 +59,7 @@ const notes: NoteView[] = [
   {
     id: "notes/沖縄旅行の持ち物リスト",
     title: "沖縄旅行の持ち物リスト",
+    description: null,
     status: "stable",
     origin: "agent",
     tags: ["旅行"],

@@ -1,1 +1,1 @@
-export { NotesPage } from "./NotesPage";
+export { NotesPage, type NotesPageProps } from "./NotesPage";

@@ -11,6 +11,7 @@ use crate::state::{AppState, Sync};
 pub struct NoteView {
     id: String,
     title: String,
+    description: Option<String>,
     body: String,
     status: String,
     origin: Option<String>,
@@ -34,6 +35,7 @@ pub fn note_get(state: State<'_, AppState>, id: String) -> AppResult<NoteView> {
         let _ = kb_core::connect::set_current_note(vault, &id);
         Ok(NoteView {
             title: note.front.title.clone().unwrap_or_else(|| id.clone()),
+            description: note.front.description.clone(),
             body: note.body.clone(),
             status: note.front.effective_status().to_string(),
             origin: note.front.origin.clone(),
