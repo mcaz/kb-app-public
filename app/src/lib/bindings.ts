@@ -304,6 +304,7 @@ export type NoteFiles = {
 export type NoteView = {
 	id: string,
 	title: string,
+	description: string | null,
 	body: string,
 	status: string,
 	origin: string | null,

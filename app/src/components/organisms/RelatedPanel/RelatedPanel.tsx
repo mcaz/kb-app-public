@@ -26,7 +26,7 @@ export function RelatedPanel({ noteId, width }: RelatedPanelProps) {
   return (
     <aside
       style={{ width }}
-      className="bg-panel-2 flex flex-none flex-col overflow-y-auto px-2.5 py-3 max-[1040px]:hidden"
+      className="bg-panel-2 flex flex-none flex-col overflow-y-auto px-2.5 py-3"
     >
       <Button className="mb-2.5 w-full justify-start" onClick={() => focusGraph(note.id)}>
         <Icon as={Waypoints} size="sm" />

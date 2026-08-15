@@ -1,6 +1,21 @@
 {
   "search": {
-    "placeholder": "Search notes"
+    "placeholder": "Search notes",
+    "open": "Open search",
+    "dialogTitle": "Search notes",
+    "dialogDescription": "Choose a result, preview it, and open the note.",
+    "results": "Results",
+    "recent": "Recent notes",
+    "savedSearches": "Saved searches",
+    "previewEmpty": "Choose a result to preview it here.",
+    "backToResults": "Back to results",
+    "openNote": "Open note",
+    "degraded": "Part of search is temporarily unavailable. Showing the results that are available.",
+    "clearFilters": "Clear filters",
+    "removeFilter": "Remove the {{tag}} filter",
+    "keyMove": "↑↓ Select",
+    "keyOpen": "Enter Open",
+    "keyClose": "Esc Close"
   },
   "filter": {
     "title": "Filters",
@@ -41,6 +56,9 @@
     "placeholder": "Pick a note on the left to read it here. Notes grow out of your conversations with Claude."
   },
   "related": {
+    "open": "Related",
+    "dialogTitle": "Linked and similar notes",
+    "dialogDescription": "Shows notes linked to the current note and notes with similar content.",
     "openGraph": "View in graph",
     "linked": "Linked notes",
     "linkedEmpty": "None yet",

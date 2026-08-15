@@ -1,0 +1,151 @@
+import { SlidersHorizontal } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { Button } from "@/components/atoms/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/atoms/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/atoms/ui/select";
+import { TagChip } from "@/components/atoms/TagChip";
+import type { Period, SortKey } from "@/lib/api";
+
+const PERIODS: Period[] = ["all", "7", "30", "90"];
+const SORTS: SortKey[] = ["updated", "created", "title"];
+
+interface SearchFilterBarProps {
+  allTags: string[];
+  tags: string[];
+  period: Period;
+  sort: SortKey;
+  onAddTag: (tag: string) => void;
+  onRemoveTag: (tag: string) => void;
+  onClearTags: () => void;
+  onPeriodChange: (period: Period) => void;
+  onSortChange: (sort: SortKey) => void;
+}
+
+/** Modal 内では検索入力を主役にし、絞り込みは必要なときだけ開く。 */
+export function SearchFilterBar({
+  allTags,
+  tags,
+  period,
+  sort,
+  onAddTag,
+  onRemoveTag,
+  onClearTags,
+  onPeriodChange,
+  onSortChange,
+}: SearchFilterBarProps) {
+  const { t } = useTranslation(["notes", "common"]);
+  const activeCount = tags.length + (period === "all" ? 0 : 1);
+
+  return (
+    <div className="border-line flex min-h-11 flex-wrap items-center gap-1.5 border-b px-3 py-2">
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button size="sm" variant={activeCount > 0 ? "default" : "quiet"}>
+            <SlidersHorizontal className="size-3.5" />
+            {t("notes:filter.title")}
+            {activeCount > 0 && (
+              <span className="bg-grow text-on-accent rounded-full px-1.5 text-[10px]">
+                {activeCount}
+              </span>
+            )}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-[320px] p-3">
+          <div className="mb-3 text-xs font-semibold">{t("notes:filter.tagPlaceholder")}</div>
+          <div className="mb-4 flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+            {allTags.map((tag) => {
+              const selected = tags.includes(tag);
+              return (
+                <TagChip
+                  key={tag}
+                  tag={tag}
+                  selected={selected}
+                  onClick={() => (selected ? onRemoveTag(tag) : onAddTag(tag))}
+                />
+              );
+            })}
+          </div>
+
+          <label className="text-muted mb-3 flex items-center gap-3 text-xs">
+            <span className="w-12">{t("notes:filter.period")}</span>
+            <Select value={period} onValueChange={(v) => onPeriodChange(v as Period)}>
+              <SelectTrigger size="sm" className="flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PERIODS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value === "all"
+                      ? t("notes:filter.periodAll")
+                      : t("notes:filter.periodDays", { count: Number(value) })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+
+          <label className="text-muted flex items-center gap-3 text-xs">
+            <span className="w-12">{t("notes:filter.sort")}</span>
+            <Select value={sort} onValueChange={(v) => onSortChange(v as SortKey)}>
+              <SelectTrigger size="sm" className="flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SORTS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {value === "updated"
+                      ? t("notes:filter.sortUpdated")
+                      : value === "created"
+                        ? t("notes:filter.sortCreated")
+                        : t("notes:filter.sortTitle")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+
+          {activeCount > 0 && (
+            <Button
+              variant="quiet"
+              size="sm"
+              className="mt-3"
+              onClick={() => {
+                onClearTags();
+                onPeriodChange("all");
+              }}
+            >
+              {t("notes:search.clearFilters")}
+            </Button>
+          )}
+        </PopoverContent>
+      </Popover>
+
+      {tags.map((tag) => (
+        <TagChip
+          key={tag}
+          tag={tag}
+          selected
+          onRemove={() => onRemoveTag(tag)}
+          removeLabel={t("notes:search.removeFilter", { tag })}
+        />
+      ))}
+
+      {period !== "all" && (
+        <button
+          type="button"
+          className="bg-grow-soft text-grow cursor-pointer rounded-full border-none px-2 py-0.5 text-[11px]"
+          onClick={() => onPeriodChange("all")}
+        >
+          {t("notes:filter.periodDays", { count: Number(period) })} ×
+        </button>
+      )}
+    </div>
+  );
+}

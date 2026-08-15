@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -11,24 +11,26 @@ import {
 } from "@/components/atoms/ui/select";
 import { NoteListItem } from "@/components/molecules/NoteListItem";
 import { Pager } from "@/components/molecules/Pager";
-import { SearchBox } from "@/components/molecules/SearchBox";
 import { SelectionStrip } from "@/components/molecules/SelectionStrip";
 import { FilterPanel } from "@/components/organisms/FilterPanel";
 import type { Hit } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { activeFilterCount, matchesFilter, paginate, sortHits } from "@/lib/hits";
 import { useHomeState, useNote, useNoteSearch } from "@/lib/queries";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { PAGE_SIZES, usePrefs } from "@/lib/stores/prefs";
 import { useSession } from "@/lib/stores/session";
 
-import { useDebouncedValue } from "./useDebouncedValue";
-
 export interface NoteListPanelProps {
   width: number;
+  onOpenSearch: () => void;
 }
 
+const searchShortcut = () =>
+  typeof navigator !== "undefined" && navigator.userAgent.includes("Mac") ? "⌘P" : "Ctrl P";
+
 /** ノート画面の左カラム(検索・絞り込み・一覧・ページャ)。 */
-export function NoteListPanel({ width }: NoteListPanelProps) {
+export function NoteListPanel({ width, onOpenSearch }: NoteListPanelProps) {
   const { t, i18n } = useTranslation(["notes", "common"]);
   const session = useSession();
   const prefs = usePrefs();
@@ -83,11 +85,19 @@ export function NoteListPanel({ width }: NoteListPanelProps) {
       style={{ width }}
       className="border-line flex min-h-0 min-w-[200px] flex-none flex-col border-r py-2.5 text-[13px]"
     >
-      <SearchBox
-        value={session.query}
-        onChange={session.setQuery}
-        placeholder={t("search.placeholder")}
-      />
+      <button
+        type="button"
+        onClick={onOpenSearch}
+        className="border-line bg-chip text-muted hover:border-grow hover:text-ink mx-2.5 mb-1.5 flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-[12.5px]"
+      >
+        <Search className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">
+          {session.query.trim() || t("search.placeholder")}
+        </span>
+        <kbd className="border-line bg-panel-2 rounded border px-1.5 py-0.5 font-sans text-[10px]">
+          {searchShortcut()}
+        </kbd>
+      </button>
 
       <button
         type="button"

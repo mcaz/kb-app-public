@@ -1,6 +1,6 @@
 export interface NotesLayoutProps {
-  list: React.ReactNode;
-  listSplitter: React.ReactNode;
+  list?: React.ReactNode;
+  listSplitter?: React.ReactNode;
   related?: React.ReactNode;
   relatedSplitter?: React.ReactNode;
   children: React.ReactNode;
@@ -8,8 +8,8 @@ export interface NotesLayoutProps {
 
 /**
  * ノート画面だけの多ペイン配置。
- * パネルを跨いで左右に動かせるよう、ここだけ横スクロールを許す
- * (他の画面は単一ペインなので、この指定を共有すると幅0に潰れる — 旧実装の事故)。
+ * 表示幅に収まるペインだけを呼び側が渡す。横スクロールで隠れた列を残すと
+ * 小さな PC で本文が読めなくなるため、ここでははみ出しを許さない。
  */
 export function NotesLayout({
   list,
@@ -19,12 +19,12 @@ export function NotesLayout({
   children,
 }: NotesLayoutProps) {
   return (
-    <div className="flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden [&>*]:flex-none">
+    <div className="flex min-w-0 flex-1 overflow-hidden">
       {list}
       {listSplitter}
       {related}
       {relatedSplitter}
-      <div className="flex min-w-[420px] flex-1 shrink-0 grow overflow-hidden">{children}</div>
+      <div className="flex min-w-0 flex-1 overflow-hidden">{children}</div>
     </div>
   );
 }

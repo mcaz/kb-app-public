@@ -1,6 +1,21 @@
 {
   "search": {
-    "placeholder": "ノートを検索"
+    "placeholder": "ノートを検索",
+    "open": "検索を開く",
+    "dialogTitle": "ノートを検索",
+    "dialogDescription": "検索結果を選び、内容を確認してノートを開きます。",
+    "results": "検索結果",
+    "recent": "最近のノート",
+    "savedSearches": "保存済み検索",
+    "previewEmpty": "結果を選ぶと、ここに内容が表示されます。",
+    "backToResults": "検索結果へ戻る",
+    "openNote": "ノートを開く",
+    "degraded": "検索の一部が一時的に使えません。利用可能な結果を表示しています。",
+    "clearFilters": "フィルターを解除",
+    "removeFilter": "{{tag}} の絞り込みを外す",
+    "keyMove": "↑↓ 選択",
+    "keyOpen": "Enter 開く",
+    "keyClose": "Esc 閉じる"
   },
   "filter": {
     "title": "フィルター",
@@ -41,6 +56,9 @@
     "placeholder": "左の一覧からノートを選ぶと、ここに表示されます。ノートは Claude との会話から育ちます。"
   },
   "related": {
+    "open": "関連",
+    "dialogTitle": "つながりと近いノート",
+    "dialogDescription": "現在のノートにつながっているノートと、内容が近いノートを表示します。",
     "openGraph": "グラフで見る",
     "linked": "つながっているノート",
     "linkedEmpty": "まだありません",
