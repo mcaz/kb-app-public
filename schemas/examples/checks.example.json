@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "recorded_for": {
+    "branch": "feature/context-pack",
+    "base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "state_stamp": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "recorded_at": "2026-08-12T00:00:00Z",
+  "scope": "partial",
+  "commands": [
+    {
+      "command": "python3 tests/context-pack/test_contract.py",
+      "exit_code": 0,
+      "started_at": "2026-08-11T23:59:58Z",
+      "finished_at": "2026-08-12T00:00:00Z",
+      "duration_ms": 2000
+    }
+  ]
+}

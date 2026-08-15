@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0.0",
+  "producer": {
+    "kind": "mcp",
+    "name": "project_context",
+    "version": "1.0.0"
+  },
+  "generated_at": "2026-08-12T00:00:00Z",
+  "mode": "summary",
+  "repository": {
+    "root": "/workspace/kb-app",
+    "branch": "feature/context-pack",
+    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dirty": false,
+    "state_stamp": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "changes": {
+      "staged": 0,
+      "unstaged": 0,
+      "untracked": 0
+    }
+  },
+  "checks": {
+    "validity": "valid",
+    "scope": "full",
+    "result": "passed",
+    "recorded_scope": "full",
+    "recorded_result": "passed",
+    "recorded_at": "2026-08-12T00:00:00Z",
+    "recorded_state_stamp": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "commands": [
+      {
+        "command": "cargo test --workspace",
+        "exit_code": 0
+      }
+    ]
+  },
+  "handoff": {
+    "status": "adopted",
+    "source": "promoted_issue",
+    "source_branch": "feature/context-pack",
+    "source_base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "task": "Continue P0 on another device",
+    "next": [
+      "Review the contract fixtures"
+    ],
+    "discarded": [],
+    "open_questions": [],
+    "updated_at": "2026-08-12T00:00:00Z",
+    "expires_at": "2026-08-13T00:00:00Z",
+    "promotion": {
+      "provider": "github",
+      "issue_url": "https://github.com/mcaz/kb-app/issues/123",
+      "issue_number": 123
+    }
+  },
+  "freshness_warnings": [],
+  "knowledge": {
+    "items": [
+      {
+        "id": "notes/context-contract",
+        "kind": "adr",
+        "title": "Development context contract",
+        "summary": "The durable decision behind this Context Pack.",
+        "freshness": "valid"
+      }
+    ],
+    "omitted_count": 0
+  }
+}
