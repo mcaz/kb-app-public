@@ -3,6 +3,13 @@ import { create } from "zustand";
 import type { Favorite, Period, SortKey } from "@/lib/api";
 
 export type View = "home" | "notes" | "graph";
+export type BrowsePane = "list" | "note";
+
+const categoryOf = (id: string) => {
+  const segments = id.split("/").filter(Boolean);
+  segments.pop();
+  return segments.join("/");
+};
 
 /**
  * 起動中だけの状態(保存しない)。
@@ -12,6 +19,8 @@ export type View = "home" | "notes" | "graph";
 interface SessionStore {
   view: View;
   selectedId: string | null;
+  selectedCategory: string | null;
+  browsePane: BrowsePane;
   query: string;
   selectedTags: string[];
   period: Period;
@@ -23,6 +32,9 @@ interface SessionStore {
   /** ナビの「ノート」= 検索条件と選択を解除した本文画面へ戻す。 */
   resetNotes: () => void;
   openNote: (id: string) => void;
+  selectCategory: (path: string) => void;
+  openListedNote: (id: string) => void;
+  showCategoryList: () => void;
   setQuery: (query: string) => void;
   addTag: (tag: string) => void;
   removeTag: (tag: string) => void;
@@ -37,6 +49,8 @@ interface SessionStore {
 const INITIAL = {
   view: "notes" as View,
   selectedId: null,
+  selectedCategory: null,
+  browsePane: "list" as BrowsePane,
   query: "",
   selectedTags: [] as string[],
   period: "all" as Period,
@@ -50,7 +64,12 @@ export const useSession = create<SessionStore>()((set) => ({
 
   go: (view) => set({ view }),
   resetNotes: () => set({ ...INITIAL }),
-  openNote: (id) => set({ selectedId: id, view: "notes" }),
+  openNote: (id) =>
+    set({ selectedId: id, selectedCategory: categoryOf(id), browsePane: "note", view: "notes" }),
+  selectCategory: (selectedCategory) =>
+    set({ selectedCategory, browsePane: "list", view: "notes" }),
+  openListedNote: (id) => set({ selectedId: id, browsePane: "note", view: "notes" }),
+  showCategoryList: () => set({ browsePane: "list", view: "notes" }),
   setQuery: (query) => set({ query }),
   addTag: (tag) =>
     set((s) =>

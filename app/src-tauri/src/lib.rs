@@ -29,6 +29,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             home::care_dismiss,
             notes::note_get,
             notes::note_search,
+            notes::note_categories,
+            notes::note_list,
             notes::graph_data,
             favorites::favorites_list,
             favorites::favorite_add,

@@ -17,13 +17,13 @@ import { usePrefs } from "@/lib/stores/prefs";
 import { useSession } from "@/lib/stores/session";
 
 import { NavButton } from "./NavButton";
-import { NoteAccordion } from "./NoteAccordion";
+import { CategoryAccordion } from "./CategoryAccordion";
 
-import type { Hit } from "@/lib/api";
+import type { NoteCategory } from "@/lib/api";
 
 export interface SidebarProps {
   vaultName: string;
-  notes: Hit[];
+  categories: NoteCategory[];
   onOpenSearch: () => void;
   settingsOpen: boolean;
   onOpenSettings: () => void;
@@ -32,7 +32,7 @@ export interface SidebarProps {
 /** 左のナビ。畳むとアイコンだけになり、ホバーでラベルを吹き出す。 */
 export function Sidebar({
   vaultName,
-  notes,
+  categories,
   onOpenSearch,
   settingsOpen,
   onOpenSettings,
@@ -40,8 +40,8 @@ export function Sidebar({
   const { t } = useTranslation();
   const view = useSession((s) => s.view);
   const go = useSession((s) => s.go);
-  const selectedId = useSession((s) => s.selectedId);
-  const openNote = useSession((s) => s.openNote);
+  const selectedCategory = useSession((s) => s.selectedCategory);
+  const selectCategory = useSession((s) => s.selectCategory);
   const focusGraph = useSession((s) => s.focusGraph);
   const collapsed = usePrefs((s) => s.sideCollapsed);
   const setPrefs = usePrefs((s) => s.set);
@@ -53,7 +53,7 @@ export function Sidebar({
       className={`border-line bg-panel-2 flex flex-none flex-col gap-0.5 border-r text-[13px] ${
         visuallyCollapsed
           ? "w-[52px] px-1.5 py-3.5"
-          : "w-[176px] px-2.5 py-3.5 max-[1040px]:w-[132px]"
+          : "w-[176px] px-2.5 py-3.5 max-[1040px]:w-[156px]"
       }`}
     >
       <div
@@ -92,12 +92,12 @@ export function Sidebar({
           }}
         />
       ) : (
-        <NoteAccordion
-          notes={notes}
+        <CategoryAccordion
+          categories={categories}
           active={view === "notes" && !settingsOpen}
-          selectedId={selectedId}
+          selectedCategory={selectedCategory}
           onActivate={() => go("notes")}
-          onOpenNote={openNote}
+          onSelectCategory={selectCategory}
         />
       )}
 

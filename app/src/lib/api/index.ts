@@ -10,7 +10,9 @@ import type {
   Favorite,
   GraphData,
   HomeState,
+  NoteCategory,
   NoteFiles,
+  NoteListPage,
   NoteView,
   SearchOutcome,
   SetupState,
@@ -54,6 +56,12 @@ export const api = {
     IN_TAURI ? unwrap(commands.noteGet(id)) : (await demo()).noteGet(id),
   noteSearch: async (query: string): Promise<SearchOutcome> =>
     IN_TAURI ? unwrap(commands.noteSearch(query)) : (await demo()).noteSearch(query),
+  noteCategories: async (): Promise<NoteCategory[]> =>
+    IN_TAURI ? unwrap(commands.noteCategories()) : (await demo()).noteCategories(),
+  noteList: async (category: string, after: string | null, limit = 100): Promise<NoteListPage> =>
+    IN_TAURI
+      ? unwrap(commands.noteList(category, after, limit))
+      : (await demo()).noteList(category, after, limit),
   graphData: async (): Promise<GraphData> =>
     IN_TAURI ? unwrap(commands.graphData()) : (await demo()).graphData(),
   connectState: async (): Promise<ConnectState> =>

@@ -1,61 +1,64 @@
+import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { Splitter } from "@/components/atoms/Splitter";
+import { Icon } from "@/components/atoms/Icon";
+import { Button } from "@/components/atoms/ui/button";
+import { CategoryNoteList } from "@/components/organisms/CategoryNoteList";
 import { NotePane } from "@/components/organisms/NotePane";
 import { RelatedDialog } from "@/components/organisms/RelatedDialog";
 import { RelatedNoteDialog } from "@/components/organisms/RelatedNoteDialog";
-import { RelatedPanel } from "@/components/organisms/RelatedPanel";
 import { NotesLayout } from "@/components/templates/NotesLayout";
-import { Button } from "@/components/atoms/ui/button";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { usePrefs } from "@/lib/stores/prefs";
 import { useSession } from "@/lib/stores/session";
 
 export interface NotesPageProps {
   onOpenSearch: () => void;
 }
 
-/** ノート画面(本文 + 関連)。ノート探索はグローバル検索へ一本化する。 */
+/** カテゴリ → 一覧 → 本文。狭い画面では一覧と本文を1段ずつ進む。 */
 export function NotesPage({ onOpenSearch }: NotesPageProps) {
   const { t } = useTranslation("notes");
   const selectedId = useSession((s) => s.selectedId);
+  const selectedCategory = useSession((s) => s.selectedCategory);
+  const browsePane = useSession((s) => s.browsePane);
   const openNote = useSession((s) => s.openNote);
+  const openListedNote = useSession((s) => s.openListedNote);
+  const showCategoryList = useSession((s) => s.showCategoryList);
   const focusGraph = useSession((s) => s.focusGraph);
-  const prefs = usePrefs();
-  const showRelated = useMediaQuery("(min-width: 1280px)");
+  const showSplitBrowse = useMediaQuery("(min-width: 960px)");
   const [relatedOpen, setRelatedOpen] = useState(false);
   const [relatedNoteId, setRelatedNoteId] = useState<string | null>(null);
 
+  const list = selectedCategory !== null && (
+    <CategoryNoteList
+      category={selectedCategory}
+      selectedId={selectedId}
+      compact={!showSplitBrowse}
+      onOpenNote={openListedNote}
+    />
+  );
+  const showList = selectedCategory !== null && !showSplitBrowse && browsePane === "list";
+
   return (
-    <NotesLayout
-      related={
-        showRelated && selectedId ? (
-          <RelatedPanel
-            noteId={selectedId}
-            width={prefs.relWidth}
-            openId={relatedNoteId}
-            onOpenNote={setRelatedNoteId}
-          />
-        ) : undefined
-      }
-      relatedSplitter={
-        showRelated && selectedId ? (
-          <Splitter
-            label={t("related.linked")}
-            width={prefs.relWidth}
-            min={160}
-            max={420}
-            onChange={(relWidth) => prefs.set({ relWidth })}
-          />
-        ) : undefined
-      }
-    >
-      {selectedId ? (
-        <NotePane noteId={selectedId} onOpenRelated={() => setRelatedOpen(true)} />
+    <NotesLayout browser={showSplitBrowse ? list : undefined}>
+      {showList ? (
+        list
+      ) : selectedId ? (
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {!showSplitBrowse && selectedCategory !== null && (
+            <div className="border-line flex-none border-b px-3 py-2">
+              <Button variant="quiet" size="sm" onClick={showCategoryList}>
+                <Icon as={ArrowLeft} size="sm" />
+                {t("browse.back")}
+              </Button>
+            </div>
+          )}
+          <NotePane noteId={selectedId} onOpenRelated={() => setRelatedOpen(true)} />
+        </div>
       ) : (
         <div className="text-muted flex flex-1 flex-col items-center justify-center gap-3 p-[18px] text-center">
-          <p>{t("list.placeholder")}</p>
+          <p>{selectedCategory === null ? t("browse.chooseCategory") : t("list.placeholder")}</p>
           <Button onClick={onOpenSearch}>{t("search.open")}</Button>
         </div>
       )}

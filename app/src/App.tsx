@@ -15,12 +15,13 @@ import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
 import { SettingsDialog } from "@/pages/SettingsDialog";
-import { useHomeState, useSetupState } from "@/lib/queries";
+import { useHomeState, useNoteCategories, useSetupState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
 export function App() {
   const { data: setup, isPending } = useSetupState();
   const { data: home } = useHomeState();
+  const { data: categories } = useNoteCategories();
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -52,7 +53,7 @@ export function App() {
         sidebar={
           <Sidebar
             vaultName={setup?.vault_name ?? "kb"}
-            notes={home?.notes ?? []}
+            categories={categories ?? []}
             onOpenSearch={openSearch}
             settingsOpen={settingsOpen}
             onOpenSettings={openSettings}

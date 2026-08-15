@@ -365,6 +365,136 @@ pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Op
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+/// サイドバーに出すディレクトリ。count は直下だけでなく子孫ノートを含む。
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct NoteCategory {
+    pub path: String,
+    pub name: String,
+    pub count: usize,
+}
+
+/// カテゴリ別一覧の1行。本文全体を画面へ運ばないための軽量表現。
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct NoteSummary {
+    pub id: String,
+    pub title: Option<String>,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub created: Option<String>,
+    pub updated: Option<String>,
+}
+
+/// ID順のcursor page。全ノートを一度に画面へ渡さない。
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct NoteListPage {
+    pub notes: Vec<NoteSummary>,
+    pub total: usize,
+    pub next_cursor: Option<String>,
+}
+
+pub fn note_categories(conn: &Connection) -> Result<Vec<NoteCategory>> {
+    let mut stmt =
+        conn.prepare_cached("SELECT id FROM notes WHERE status != 'deprecated' ORDER BY id")?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+
+    for id in ids {
+        let mut segments: Vec<&str> = id.split('/').filter(|part| !part.is_empty()).collect();
+        segments.pop();
+        if segments.is_empty() {
+            *counts.entry(String::new()).or_default() += 1;
+            continue;
+        }
+        for index in 0..segments.len() {
+            let path = segments[..=index].join("/");
+            *counts.entry(path).or_default() += 1;
+        }
+    }
+
+    Ok(counts
+        .into_iter()
+        .map(|(path, count)| NoteCategory {
+            name: path.rsplit('/').next().unwrap_or("").to_string(),
+            path,
+            count,
+        })
+        .collect())
+}
+
+pub fn notes_in_category(
+    conn: &Connection,
+    category: &str,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<NoteListPage> {
+    let limit = limit.clamp(1, 100);
+    let after = after.unwrap_or("");
+    let (total, mut notes) = if category.is_empty() {
+        let total = conn.query_row(
+            "SELECT count(*) FROM notes WHERE status != 'deprecated' AND instr(id, '/') = 0",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? as usize;
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, title, coalesce(description, substr(body,1,120)), tags, created, generated_at
+             FROM notes
+             WHERE status != 'deprecated' AND instr(id, '/') = 0 AND id > ?1
+             ORDER BY id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![after, (limit + 1) as i64], note_summary)?;
+        (total, rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    } else {
+        let total = conn.query_row(
+            "SELECT count(*) FROM notes
+             WHERE status != 'deprecated' AND substr(id, 1, length(?1) + 1) = ?1 || '/'",
+            [category],
+            |r| r.get::<_, i64>(0),
+        )? as usize;
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, title, coalesce(description, substr(body,1,120)), tags, created, generated_at
+             FROM notes
+             WHERE status != 'deprecated'
+               AND substr(id, 1, length(?1) + 1) = ?1 || '/'
+               AND id > ?2
+             ORDER BY id LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![category, after, (limit + 1) as i64],
+            note_summary,
+        )?;
+        (total, rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    };
+
+    let has_more = notes.len() > limit;
+    if has_more {
+        notes.truncate(limit);
+    }
+    let next_cursor = has_more
+        .then(|| notes.last().map(|note| note.id.clone()))
+        .flatten();
+    Ok(NoteListPage {
+        notes,
+        total,
+        next_cursor,
+    })
+}
+
+fn note_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
+    Ok(NoteSummary {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get::<_, String>(2)?.replace('\n', " "),
+        tags: split_tags(row.get::<_, Option<String>>(3)?),
+        created: row.get(4)?,
+        updated: row.get(5)?,
+    })
+}
+
 /// 健全性の要約(FR-A2 ホーム表示用)。
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -491,5 +621,50 @@ mod tests {
     fn recent_returns_all() {
         let (_d, _v, conn) = setup();
         assert_eq!(super::recent(&conn, 10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn categories_count_descendant_notes_and_skip_deprecated() {
+        let (_d, _v, conn) = setup();
+        for (id, status) in [
+            ("research/ai/検索", "stable"),
+            ("research/概要", "stable"),
+            ("入口", "stable"),
+            ("research/旧版", "deprecated"),
+        ] {
+            conn.execute(
+                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,?2,'','')",
+                rusqlite::params![id, status],
+            )
+            .unwrap();
+        }
+        let categories = super::note_categories(&conn).unwrap();
+        let counts: std::collections::BTreeMap<_, _> = categories
+            .into_iter()
+            .map(|category| (category.path, category.count))
+            .collect();
+        assert_eq!(counts.get("research"), Some(&2));
+        assert_eq!(counts.get("research/ai"), Some(&1));
+        assert_eq!(counts.get(""), Some(&1));
+    }
+
+    #[test]
+    fn category_list_is_cursor_paginated() {
+        let (_d, _v, conn) = setup();
+        for id in ["research/ai/検索", "research/概要"] {
+            conn.execute(
+                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,'stable','','')",
+                [id],
+            )
+            .unwrap();
+        }
+        let first = super::notes_in_category(&conn, "research", None, 1).unwrap();
+        assert_eq!(first.total, 2);
+        assert_eq!(first.notes.len(), 1);
+        let second =
+            super::notes_in_category(&conn, "research", first.next_cursor.as_deref(), 1).unwrap();
+        assert_eq!(second.notes.len(), 1);
+        assert!(second.next_cursor.is_none());
+        assert_ne!(first.notes[0].id, second.notes[0].id);
     }
 }

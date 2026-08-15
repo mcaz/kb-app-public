@@ -1,6 +1,9 @@
 //! ノートの表示・検索・グラフ。
 
-use kb_core::search::{SearchOutcome, related_of, search};
+use kb_core::search::{
+    NoteCategory, NoteListPage, SearchOutcome, note_categories as categories, notes_in_category,
+    related_of, search,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -58,6 +61,29 @@ pub fn note_search(state: State<'_, AppState>, query: String) -> AppResult<Searc
         let mut out = search(conn, &query, 30);
         out.degraded.extend(degraded);
         Ok(out)
+    })
+}
+
+/// サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。
+#[tauri::command]
+#[specta::specta]
+pub fn note_categories(state: State<'_, AppState>) -> AppResult<Vec<NoteCategory>> {
+    state.with_index(Sync::Throttled, |_, conn, _| {
+        categories(conn).map_err(AppError::from)
+    })
+}
+
+/// 選択ディレクトリ配下のノートをcursor pageで返す。
+#[tauri::command]
+#[specta::specta]
+pub fn note_list(
+    state: State<'_, AppState>,
+    category: String,
+    after: Option<String>,
+    limit: usize,
+) -> AppResult<NoteListPage> {
+    state.with_index(Sync::Throttled, |_, conn, _| {
+        notes_in_category(conn, &category, after.as_deref(), limit).map_err(AppError::from)
     })
 }
 
