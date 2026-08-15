@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {"id": "T1", "expectation": "Fresh Claude and Codex sessions reconstruct task, validation scope, and next action.", "owner": "p0-context-pack"},
+    {"id": "T2", "expectation": "A one-byte tracked edit makes recorded checks stale.", "owner": "p0-context-pack"},
+    {"id": "T3", "expectation": "An untracked test file makes recorded checks stale.", "owner": "p0-context-pack"},
+    {"id": "T4", "expectation": "Claude to Codex handoff on one machine needs no copy and yields the same context.", "owner": "p0-context-pack"},
+    {"id": "T5", "expectation": "A promoted GitHub issue can carry an adopted cross-device handoff.", "owner": "future-mcp-adapter"},
+    {"id": "T6", "expectation": "Superseded knowledge is down-ranked and points to its successor.", "owner": "p0-context-pack"},
+    {"id": "T7", "expectation": "Unverified derived knowledge has unknown freshness.", "owner": "p0-context-pack"},
+    {"id": "T8", "expectation": "A contributor cannot create an unknown tag without allow_new_tags.", "owner": "kb-core-existing"},
+    {"id": "T9", "expectation": "Two updates from one note revision conflict instead of overwriting.", "owner": "future-note-revision"},
+    {"id": "T10", "expectation": "Resolver unavailability never produces fresh knowledge.", "owner": "p0-context-pack"},
+    {"id": "T11", "expectation": "Push or context inspection alone does not create a GitHub issue.", "owner": "p0-context-pack"},
+    {"id": "T12", "expectation": "The bootstrap script and future MCP response validate against one schema.", "owner": "p0-context-pack"},
+    {"id": "T13", "expectation": "Partial validation is never reported as full.", "owner": "p0-context-pack"},
+    {"id": "T14", "expectation": "A handoff for another branch is marked orphaned and not adopted.", "owner": "p0-context-pack"}
+  ]
+}

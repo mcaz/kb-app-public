@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0.0",
+  "task": "Implement the development Context Pack P0",
+  "next": [
+    "Run the contract tests",
+    "Review the schema with the second agent"
+  ],
+  "discarded": [
+    "Do not copy Git status into the durable KB"
+  ],
+  "open_questions": [
+    "Which command will expose project_context over MCP?"
+  ],
+  "branch": "feature/context-pack",
+  "base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "created_at": "2026-08-12T00:00:00Z",
+  "updated_at": "2026-08-12T00:00:00Z",
+  "expires_at": "2026-08-13T00:00:00Z",
+  "promotion": {
+    "provider": "github",
+    "issue_url": "https://github.com/mcaz/kb-app/issues/123",
+    "issue_number": 123
+  }
+}

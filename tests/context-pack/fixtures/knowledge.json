@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "id": "adr/current",
+      "kind": "adr",
+      "title": "Current decision",
+      "summary": "The active decision.",
+      "freshness": "valid",
+      "content": "# Current decision\n\nUse the current contract."
+    },
+    {
+      "id": "adr/old",
+      "kind": "adr",
+      "title": "Old decision",
+      "summary": "An explicitly replaced decision.",
+      "freshness": "valid",
+      "superseded_by": "adr/current",
+      "content": "# Old decision\n\nThis decision was replaced."
+    },
+    {
+      "id": "pitfall/unresolved",
+      "kind": "pitfall",
+      "title": "Resolver unavailable",
+      "summary": "Freshness cannot be established without its resolver.",
+      "freshness": "valid",
+      "derived_from": {
+        "source_kind": "external-contract",
+        "source_id": "service/api",
+        "fingerprint": "v1",
+        "source_fingerprint": "v1",
+        "resolver_available": false
+      }
+    }
+  ]
+}

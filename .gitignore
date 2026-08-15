@@ -3,6 +3,8 @@ poc/*/target
 poc/embed-onnx/models/
 node_modules/
 app/dist/
+.kb-dev/checks.json
+.kb-dev/handoff.json
 
 # macOS が各ディレクトリに勝手に作る
 .DS_Store

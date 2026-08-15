@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/context-pack.schema.json",
+  "title": "kb-app development context pack",
+  "description": "Vendor-neutral startup context returned by the bootstrap script and the future project_context MCP tool.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "producer",
+    "generated_at",
+    "mode",
+    "repository",
+    "checks",
+    "handoff",
+    "freshness_warnings",
+    "knowledge"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "version"],
+      "properties": {
+        "kind": {
+          "enum": ["script", "mcp"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mode": {
+      "enum": ["summary", "detail", "full"]
+    },
+    "detail_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "branch",
+        "head",
+        "dirty",
+        "state_stamp",
+        "changes"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branch": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "head": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "state_stamp": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "changes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["staged", "unstaged", "untracked"],
+          "properties": {
+            "staged": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unstaged": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "untracked": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "validity",
+        "scope",
+        "result",
+        "recorded_scope",
+        "recorded_result",
+        "commands"
+      ],
+      "properties": {
+        "validity": {
+          "enum": ["valid", "stale", "unknown"]
+        },
+        "scope": {
+          "enum": ["full", "partial", "unknown"]
+        },
+        "result": {
+          "enum": ["passed", "failed", "unknown"]
+        },
+        "recorded_scope": {
+          "enum": ["full", "partial", "unknown"]
+        },
+        "recorded_result": {
+          "enum": ["passed", "failed", "unknown"]
+        },
+        "recorded_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "recorded_state_stamp": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/command"
+          }
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source"],
+      "properties": {
+        "status": {
+          "enum": [
+            "adopted",
+            "missing",
+            "expired",
+            "orphaned_handoff",
+            "stale_base",
+            "invalid"
+          ]
+        },
+        "source": {
+          "enum": ["local", "promoted_issue", "none"]
+        },
+        "source_branch": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "source_base_commit": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "next": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "discarded": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "promotion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "issue_url"],
+          "properties": {
+            "provider": {
+              "const": "github"
+            },
+            "issue_url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "issue_number": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "freshness_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "code", "severity", "message"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "severity": {
+            "enum": ["info", "warning", "error"]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "omitted_count"],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/knowledge_item"
+          }
+        },
+        "omitted_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "exit_code"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "knowledge_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "title", "summary", "freshness"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": ["contract", "adr", "pitfall"]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string"
+        },
+        "freshness": {
+          "enum": ["valid", "superseded", "needs_review", "unknown"]
+        },
+        "superseded_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "detail"
+          }
+        },
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["detail_id"]
+      }
+    }
+  ]
+}
