@@ -139,8 +139,8 @@ pub fn ensure_vault_config(vault: &Vault) -> Result<()> {
 fn ensure_merge_config(vault: &Vault) -> Result<()> {
     let lfs = lfs_available();
     let attrs = vault.root.join(".gitattributes");
-    let want = attributes_for(lfs);
     let current = fs::read_to_string(&attrs).unwrap_or_default();
+    let want = merged_attributes(&current, lfs);
     if current != want {
         fs::write(&attrs, &want)?;
         vault.commit(&[".gitattributes"], "vault: 同期用の merge 属性")?;
@@ -159,20 +159,46 @@ fn ensure_merge_config(vault: &Vault) -> Result<()> {
 /// eol=lf は Windows(autocrlf)混在でも差分が全行化しないため。
 /// LFS の行は git-lfs がある時だけ足す — フィルタが無い環境でこの属性を張ると、
 /// 実体がそのまま Git に入ってしまう(決定が却下した形)。
-fn attributes_for(lfs: bool) -> String {
-    let mut want = String::from(
-        "* text=auto eol=lf\n\
-         index.md merge=ours\n\
-         log.md merge=union\n\
-         .kb-workspace merge=union\n",
-    );
+/// アプリが存在を保証する行。**これ以外は知らない行として残す。**
+fn required_attributes(lfs: bool) -> Vec<String> {
+    let mut want = vec![
+        "* text=auto eol=lf".to_string(),
+        "index.md merge=ours".to_string(),
+        "log.md merge=union".to_string(),
+        ".kb-workspace merge=union".to_string(),
+    ];
     if lfs {
-        want.push_str(&format!(
-            "{}/lfs/** filter=lfs diff=lfs merge=lfs -text\n",
+        want.push(format!(
+            "{}/lfs/** filter=lfs diff=lfs merge=lfs -text",
             crate::ledger::DIR
         ));
     }
     want
+}
+
+/// 必要な行の存在**だけ**を保証し、知らない行はそのまま残す。
+///
+/// 2026-08-14 の事故: 以前は全文を作り直して上書きしていた。これは
+/// 「自分がこのファイルの唯一の書き手」という仮定に立っていて、**古い版のバイナリが
+/// 同じ保管庫を触ると崩れる**。実際、MCP が実行していた2日前のビルドが、
+/// 自分の知らない LFS の追跡行を消してコミットし続けていた(手元は無症状で、
+/// 別の端末で clone したとき初めて「取り寄せ」が空振りする形で出た)。
+///
+/// 足すだけにしておけば、版が違っても互いの設定を消さない。
+fn merged_attributes(current: &str, lfs: bool) -> String {
+    let mut lines: Vec<String> = current
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    for want in required_attributes(lfs) {
+        if !lines.iter().any(|l| l.trim() == want) {
+            lines.push(want);
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 fn lfs_available() -> bool {
@@ -407,17 +433,55 @@ mod tests {
     fn lfs_attribute_is_added_only_when_git_lfs_exists() {
         // フィルタの無い環境でこの属性を張ると、実体がそのまま Git に入る
         // (決定が却下した形)。だから git-lfs がある時だけ足す
-        let without = attributes_for(false);
+        let without = merged_attributes("", false);
         assert!(!without.contains("filter=lfs"));
         assert!(without.contains("index.md merge=ours"));
         assert!(without.contains(".kb-workspace merge=union"));
 
-        let with = attributes_for(true);
+        let with = merged_attributes("", true);
         assert!(with.contains(".kb-artifacts/lfs/** filter=lfs diff=lfs merge=lfs -text"));
-        // 既存の行は落とさない(唯一の書き手なので、消えるとそのまま失われる)
         assert!(with.contains("index.md merge=ours"));
         assert!(with.contains("log.md merge=union"));
         assert!(with.contains(".kb-workspace merge=union"));
+    }
+
+    /// 2026-08-14 の事故の再現。MCP が実行していた2日前のビルドが、自分の知らない
+    /// LFS の追跡行を消して `.gitattributes` を上書きし続けていた。手元では無症状で、
+    /// 別の端末で clone したとき「取り寄せ」が空振りする形で初めて出た。
+    /// **知らない行は消さない**ことをここで固定する。
+    #[test]
+    fn an_older_build_must_not_strip_what_it_does_not_know() {
+        // 新しい版が張った状態
+        let newer = merged_attributes("", true);
+        assert!(newer.contains("filter=lfs"));
+
+        // 古い版(LFS を知らない)が同じファイルを触っても、その行は残る
+        let after_old = merged_attributes(&newer, false);
+        assert!(
+            after_old.contains(".kb-artifacts/lfs/** filter=lfs diff=lfs merge=lfs -text"),
+            "古い版が新しい版の設定を消した: {after_old}"
+        );
+
+        // ユーザーが手で足した行も残す(アプリはこのファイルの唯一の書き手ではない)
+        let hand_written = format!("{newer}*.psd binary\n");
+        let after = merged_attributes(&hand_written, true);
+        assert!(
+            after.contains("*.psd binary"),
+            "手書きの行が消えた: {after}"
+        );
+    }
+
+    #[test]
+    fn merging_the_same_content_changes_nothing() {
+        let once = merged_attributes("", true);
+        assert_eq!(
+            merged_attributes(&once, true),
+            once,
+            "冪等でないと毎回コミットが増える"
+        );
+        // 空行や末尾の空白が混じっても増殖しない
+        let messy = once.replace('\n', "  \n") + "\n\n";
+        assert_eq!(merged_attributes(&messy, true), once);
     }
 
     #[test]
