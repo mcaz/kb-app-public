@@ -35,9 +35,7 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
 
   return (
     <NotesLayout
-      list={
-        showList ? <NoteListPanel width={prefs.listWidth} onOpenSearch={onOpenSearch} /> : undefined
-      }
+      list={showList ? <NoteListPanel width={prefs.listWidth} /> : undefined}
       listSplitter={
         showList ? (
           <Splitter

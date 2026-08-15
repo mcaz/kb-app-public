@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -23,14 +23,10 @@ import { useSession } from "@/lib/stores/session";
 
 export interface NoteListPanelProps {
   width: number;
-  onOpenSearch: () => void;
 }
 
-const searchShortcut = () =>
-  typeof navigator !== "undefined" && navigator.userAgent.includes("Mac") ? "⌘P" : "Ctrl P";
-
-/** ノート画面の左カラム(検索・絞り込み・一覧・ページャ)。 */
-export function NoteListPanel({ width, onOpenSearch }: NoteListPanelProps) {
+/** ノート画面の左カラム(絞り込み・一覧・ページャ)。 */
+export function NoteListPanel({ width }: NoteListPanelProps) {
   const { t, i18n } = useTranslation(["notes", "common"]);
   const session = useSession();
   const prefs = usePrefs();
@@ -85,20 +81,6 @@ export function NoteListPanel({ width, onOpenSearch }: NoteListPanelProps) {
       style={{ width }}
       className="border-line flex min-h-0 min-w-[200px] flex-none flex-col border-r py-2.5 text-[13px]"
     >
-      <button
-        type="button"
-        onClick={onOpenSearch}
-        className="border-line bg-chip text-muted hover:border-grow hover:text-ink mx-2.5 mb-1.5 flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-left text-[12.5px]"
-      >
-        <Search className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate">
-          {session.query.trim() || t("search.placeholder")}
-        </span>
-        <kbd className="border-line bg-panel-2 rounded border px-1.5 py-0.5 font-sans text-[10px]">
-          {searchShortcut()}
-        </kbd>
-      </button>
-
       <button
         type="button"
         aria-expanded={prefs.filterOpen}
