@@ -62,6 +62,20 @@ P0 export は論理比較用であり、それ単独で bytes や Git 履歴を�
 候補は同じ受入 fixture に対し、正しさ、clone/rebuild時間、検索・更新速度、容量、実装複雑性を
 測る。現行 adapter を上回らない限り移行しない。
 
+## P1 backend 比較（2026-08-16）
+
+[storage-backends PoC](../../poc/storage-backends/RESULTS.md) で、file-per-note、SQLite単独正本、
+writer別の分割event log + 派生snapshotを1,000／10,000ノート・各3回で比較した。
+
+- 3方式ともfresh cloneの論理digest一致と破損検知に合格
+- SQLiteと分割event logは10,000ノートの初回書込・commit・exportでfile-per-noteより桁違いに高速
+- SQLite単独正本は、2端末が別ノートを更新しただけでbinary DBがGit merge conflictになり棄却
+- 分割event logは別ノート更新を別segmentでmergeし、両版を保持して同じdigestへ収束した
+
+したがって現行形式はまだ移行せず、次段は「分割event log + content-addressed immutable object +
+SQLite materialized view」のcompaction、同一ノート競合、partial write、schema evolution、実データ
+lossless round-tripを検証する。詳細数値とkill criteriaはPoCレポートを正本とする。
+
 ## 帰結
 
 - Markdown を守ることと、知識を守ることを分離できる
