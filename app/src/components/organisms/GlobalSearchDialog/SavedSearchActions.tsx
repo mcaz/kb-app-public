@@ -83,6 +83,21 @@ export function SavedSearchActions({ query, tags, period, sort }: SavedSearchAct
             <Button variant="quiet" size="sm" onClick={() => setPrompt("save")}>
               {t("common:action.saveAs")}
             </Button>
+            <Button
+              variant="quiet"
+              size="sm"
+              onClick={() =>
+                favoriteRemove.mutate(activeFav, {
+                  onSuccess: () => {
+                    setActiveFav(null);
+                    toast(t("common:toast.deleted"));
+                  },
+                  onError: (error) => toast(errorText(error)),
+                })
+              }
+            >
+              {t("common:action.delete")}
+            </Button>
           </>
         ) : (
           <Button

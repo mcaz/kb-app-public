@@ -7,7 +7,6 @@ import {
   Search,
   Settings,
   Sprout,
-  Star,
   Waypoints,
   type LucideIcon,
 } from "lucide-react";
@@ -24,11 +23,10 @@ import { NavButton } from "./NavButton";
 export interface SidebarProps {
   vaultName: string;
   onOpenSearch: () => void;
-  onOpenFavorites: () => void;
 }
 
 /** 左のナビ。畳むとアイコンだけになり、ホバーでラベルを吹き出す。 */
-export function Sidebar({ vaultName, onOpenSearch, onOpenFavorites }: SidebarProps) {
+export function Sidebar({ vaultName, onOpenSearch }: SidebarProps) {
   const { t } = useTranslation();
   const view = useSession((s) => s.view);
   const go = useSession((s) => s.go);
@@ -41,7 +39,7 @@ export function Sidebar({ vaultName, onOpenSearch, onOpenFavorites }: SidebarPro
 
   const items: { view: View; icon: LucideIcon; label: string; onClick: () => void }[] = [
     { view: "home", icon: House, label: t("nav.home"), onClick: () => go("home") },
-    // ナビの「ノート」はまっさらな一覧に戻す(絞り込み・検索・選択を解除)
+    // ナビの「ノート」は検索条件と選択を解除した本文画面へ戻す
     { view: "notes", icon: NotebookText, label: t("nav.notes"), onClick: resetNotes },
     // ナビからは全体表示(局所グラフの中心を外す)
     { view: "graph", icon: Waypoints, label: t("nav.graph"), onClick: () => focusGraph(null) },
@@ -86,14 +84,6 @@ export function Sidebar({ vaultName, onOpenSearch, onOpenFavorites }: SidebarPro
           onClick={item.onClick}
         />
       ))}
-      <NavButton
-        icon={Star}
-        label={t("nav.favorites")}
-        collapsed={visuallyCollapsed}
-        active={false}
-        onClick={onOpenFavorites}
-      />
-
       {!forcedCompact && (
         <Tooltip>
           <TooltipTrigger asChild>

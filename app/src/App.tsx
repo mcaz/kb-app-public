@@ -3,7 +3,6 @@ import { useCallback, useState } from "react";
 import { Toaster } from "@/components/atoms/ui/sonner";
 import { TooltipProvider } from "@/components/atoms/ui/tooltip";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
-import { FavoritesDialog } from "@/components/organisms/FavoritesDialog";
 import { GlobalSearchDialog } from "@/components/organisms/GlobalSearchDialog";
 import { Sidebar } from "@/components/organisms/Sidebar";
 import { AppShell } from "@/components/templates/AppShell";
@@ -24,7 +23,6 @@ export function App() {
   const { data: home } = useHomeState();
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
-  const [favoritesOpen, setFavoritesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const openSearch = useCallback(() => setSearchOpen(true), []);
 
@@ -42,13 +40,7 @@ export function App() {
     <TooltipProvider delayDuration={200}>
       <AppShell
         banner={<DegradedBanner messages={home?.degraded ?? []} />}
-        sidebar={
-          <Sidebar
-            vaultName={setup?.vault_name ?? "kb"}
-            onOpenSearch={openSearch}
-            onOpenFavorites={() => setFavoritesOpen(true)}
-          />
-        }
+        sidebar={<Sidebar vaultName={setup?.vault_name ?? "kb"} onOpenSearch={openSearch} />}
       >
         {view === "home" && <HomePage />}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
@@ -57,7 +49,6 @@ export function App() {
         {view === "settings" && <SettingsPage />}
       </AppShell>
 
-      <FavoritesDialog open={favoritesOpen} onOpenChange={setFavoritesOpen} />
       <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <Toaster theme={theme} />
     </TooltipProvider>
