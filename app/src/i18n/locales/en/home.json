@@ -10,13 +10,6 @@
     "backupPending": "{{count}} left",
     "backupOk": "✓"
   },
-  "tags": {
-    "head": "Tags",
-    "empty": "No tags yet.",
-    "noDescription": "No description",
-    "openGlossary": "Open the tag guide note",
-    "hint": "Agree on what each tag means with Claude and record it in a “tag guide” note — the descriptions will show up here."
-  },
   "recent": {
     "head": "Recent notes"
   },

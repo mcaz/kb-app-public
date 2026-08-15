@@ -10,13 +10,6 @@
     "backupPending": "残 {{count}}",
     "backupOk": "✓"
   },
-  "tags": {
-    "head": "タグ",
-    "empty": "まだタグがありません。",
-    "noDescription": "説明なし",
-    "openGlossary": "タグ運用ノートを開く",
-    "hint": "タグの役割は Claude との会話で決めて「タグ運用」ノートに記録すると、ここに説明が並びます。"
-  },
   "recent": {
     "head": "最近のノート"
   },
