@@ -73,7 +73,6 @@
   },
   "file": {
     "label": "Files:",
-    "add": "Add a file",
     "added": "Added",
     "addedCount": "Added ({{count}})",
     "replaced": "Added as a new version",
