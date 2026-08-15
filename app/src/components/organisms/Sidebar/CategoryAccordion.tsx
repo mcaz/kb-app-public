@@ -123,18 +123,19 @@ interface CategoryItemProps {
 }
 
 function CategoryItem({ item, depth, selectedCategory, openFolders, onSelect }: CategoryItemProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const selected = selectedCategory === item.path;
   const hasChildren = item.children.length > 0;
   const open = hasChildren && openFolders.has(item.path);
   const name = item.path ? item.name : t("nav.rootNotes");
+  const count = new Intl.NumberFormat(i18n.language).format(item.count);
   const paddingLeft = 10 + depth * 12;
 
   return (
     <div role="treeitem" aria-expanded={hasChildren ? open : undefined} aria-selected={selected}>
       <button
         type="button"
-        title={t("nav.categoryCount", { name, count: item.count })}
+        title={t("nav.categoryCount", { name, count })}
         aria-current={selected ? "page" : undefined}
         onClick={() => onSelect(item)}
         className={`flex w-full cursor-pointer items-center gap-1 rounded-md border-none bg-transparent py-1 pr-2 text-left text-[12px] ${
@@ -149,7 +150,7 @@ function CategoryItem({ item, depth, selectedCategory, openFolders, onSelect }: 
         )}
         <Icon as={open ? FolderOpen : Folder} size="sm" className="flex-none" />
         <span className="min-w-0 flex-1 truncate">{name}</span>
-        <span className="text-muted ml-1 flex-none text-[11px] tabular-nums">{item.count}</span>
+        <span className="text-muted ml-1 flex-none text-[11px] tabular-nums">{count}</span>
       </button>
       {open && (
         <div role="group">

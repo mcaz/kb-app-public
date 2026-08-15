@@ -9,14 +9,13 @@ import { NotePane } from "@/components/organisms/NotePane";
 import { RelatedDialog } from "@/components/organisms/RelatedDialog";
 import { RelatedNoteDialog } from "@/components/organisms/RelatedNoteDialog";
 import { NotesLayout } from "@/components/templates/NotesLayout";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useSession } from "@/lib/stores/session";
 
 export interface NotesPageProps {
   onOpenSearch: () => void;
 }
 
-/** カテゴリ → 一覧 → 本文。狭い画面では一覧と本文を1段ずつ進む。 */
+/** カテゴリ → 一覧 → 本文。一覧と本文は同じ主領域を丸ごと使う。 */
 export function NotesPage({ onOpenSearch }: NotesPageProps) {
   const { t } = useTranslation("notes");
   const selectedId = useSession((s) => s.selectedId);
@@ -26,7 +25,6 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
   const openListedNote = useSession((s) => s.openListedNote);
   const showCategoryList = useSession((s) => s.showCategoryList);
   const focusGraph = useSession((s) => s.focusGraph);
-  const showSplitBrowse = useMediaQuery("(min-width: 960px)");
   const [relatedOpen, setRelatedOpen] = useState(false);
   const [relatedNoteId, setRelatedNoteId] = useState<string | null>(null);
 
@@ -34,19 +32,18 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
     <CategoryNoteList
       category={selectedCategory}
       selectedId={selectedId}
-      compact={!showSplitBrowse}
       onOpenNote={openListedNote}
     />
   );
-  const showList = selectedCategory !== null && !showSplitBrowse && browsePane === "list";
+  const showList = selectedCategory !== null && browsePane === "list";
 
   return (
-    <NotesLayout browser={showSplitBrowse ? list : undefined}>
+    <NotesLayout>
       {showList ? (
         list
       ) : selectedId ? (
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {!showSplitBrowse && selectedCategory !== null && (
+          {selectedCategory !== null && (
             <div className="border-line flex-none border-b px-3 py-2">
               <Button variant="quiet" size="sm" onClick={showCategoryList}>
                 <Icon as={ArrowLeft} size="sm" />
