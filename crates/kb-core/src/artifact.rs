@@ -296,8 +296,6 @@ pub enum Sensitivity {
 pub enum SyncPolicy {
     /// この端末だけ。台帳も外へ出さない
     LocalOnly,
-    /// 名前・役割・来歴は同期する。実体は出さない
-    ManifestOnly,
     /// 実体も同期する
     Full,
 }
@@ -308,7 +306,7 @@ impl SyncPolicy {
     pub fn size_limits(self) -> Option<(u64, u64)> {
         match self {
             Self::Full => Some((FULL_WARN_BYTES, FULL_MAX_BYTES)),
-            Self::LocalOnly | Self::ManifestOnly => None,
+            Self::LocalOnly => None,
         }
     }
 
@@ -418,8 +416,7 @@ impl Policy {
 pub enum Locator {
     /// この保管庫が実体を持つ。置き場は同期境界ごとに分ける
     Managed { hash: ContentHash },
-    /// 元の場所を指す。リポジトリ ID + その中の相対パスだけ
-    /// (安定 URI は後段 — ADR-0003 決定6)
+    /// 2026-08-15 より前の参照 record。互換読み取り専用で、新規には作らない
     Linked { repo_id: String, rel_path: String },
     /// 移行元の旧サイドカー `<note_id>.files/<file_name>`。
     /// **読み取り専用**で、新規の保存先にはしない(ADR-0003 決定4)
@@ -427,29 +424,9 @@ pub enum Locator {
 }
 
 impl Locator {
-    /// リポジトリの中を指す参照を作る。絶対パスや親への遡上は拒否する。
-    pub fn linked(repo_id: &str, rel_path: &str) -> Result<Self> {
-        if repo_id.is_empty() {
-            return Err(ArtifactError::Malformed { field: "repo_id" });
-        }
-        let unstable = rel_path.is_empty()
-            || rel_path.starts_with('/')
-            || rel_path.starts_with('~')
-            || rel_path.split('/').any(|seg| seg == "..")
-            // Windows のドライブレター(C:\… )も端末固有
-            || rel_path.chars().nth(1) == Some(':');
-        if unstable {
-            return Err(ArtifactError::UnstableLocator);
-        }
-        Ok(Self::Linked {
-            repo_id: repo_id.to_string(),
-            rel_path: rel_path.to_string(),
-        })
-    }
-
-    /// 新しく書き込んでよい置き場か。旧サイドカーは読むだけ。
+    /// 新しく書き込んでよい置き場か。旧形式は読むだけ。
     pub fn is_writable(&self) -> bool {
-        !matches!(self, Self::LegacyGit { .. })
+        matches!(self, Self::Managed { .. })
     }
 }
 
@@ -743,41 +720,24 @@ mod tests {
     }
 
     #[test]
-    fn linked_rejects_device_specific_paths() {
-        assert!(Locator::linked("kb-app", "docs/spec.md").is_ok());
-        assert_eq!(
-            Locator::linked("kb-app", "/Users/me/docs/spec.md"),
-            Err(ArtifactError::UnstableLocator)
-        );
-        assert_eq!(
-            Locator::linked("kb-app", "~/docs/spec.md"),
-            Err(ArtifactError::UnstableLocator)
-        );
-        assert_eq!(
-            Locator::linked("kb-app", "../outside.md"),
-            Err(ArtifactError::UnstableLocator)
-        );
-        assert_eq!(
-            Locator::linked("kb-app", r"C:\docs\spec.md"),
-            Err(ArtifactError::UnstableLocator)
-        );
-    }
-
-    #[test]
-    fn legacy_sidecar_is_read_only() {
+    fn legacy_locators_are_read_only() {
         let legacy = Locator::LegacyGit {
             note_id: "notes/foo".into(),
             file_name: "diagram.png".into(),
         };
         assert!(!legacy.is_writable());
-        assert!(Locator::linked("kb-app", "a/b.md").unwrap().is_writable());
+        let linked = Locator::Linked {
+            repo_id: "kb-app".into(),
+            rel_path: "a/b.md".into(),
+        };
+        assert!(!linked.is_writable());
     }
 
     #[test]
     fn narrowing_is_always_allowed_widening_needs_confirmation() {
         let from = Policy::default_managed(); // private + full
         let narrower = Policy {
-            sync: SyncPolicy::ManifestOnly,
+            sync: SyncPolicy::LocalOnly,
             ..from
         };
         assert!(from.check_change(&narrower, false).is_ok());
@@ -823,7 +783,6 @@ mod tests {
     #[test]
     fn size_limits_apply_to_full_only() {
         assert!(SyncPolicy::LocalOnly.check_size(u64::MAX).is_ok());
-        assert!(SyncPolicy::ManifestOnly.check_size(u64::MAX).is_ok());
         assert_eq!(SyncPolicy::Full.check_size(1024).unwrap(), None);
         assert_eq!(
             SyncPolicy::Full.check_size(FULL_WARN_BYTES + 1).unwrap(),

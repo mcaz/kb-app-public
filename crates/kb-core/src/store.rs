@@ -72,7 +72,7 @@ pub struct Imported {
 /// この端末で開けるかを**算出**する。台帳から読むのではない。
 ///
 /// 境界ごとに実体の持ち主が違うので、ここが唯一の入口になる:
-/// 「本体も同期」は LFS の置き場、それ以外は自前の置き場。
+/// `full` は LFS の置き場、`local_only` は自前の置き場。
 pub fn availability(vault: &Vault, stores: &Stores, m: &Manifest) -> Availability {
     // 仕事のリポジトリ由来は、取得を試みること自体をしない
     if m.policy.client_repo && m.policy.sync != SyncPolicy::LocalOnly {
@@ -129,7 +129,6 @@ impl Stores {
     fn boundary_dir(&self, sync: SyncPolicy) -> PathBuf {
         let name = match sync {
             SyncPolicy::Full => "full",
-            SyncPolicy::ManifestOnly => "manifest-only",
             SyncPolicy::LocalOnly => "local-only",
         };
         self.root.join(&self.workspace_id).join(name)
@@ -336,16 +335,14 @@ mod tests {
     fn import_is_content_addressed_and_verifies() {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        let out = s
-            .import(SyncPolicy::ManifestOnly, &mut &b"hello"[..])
-            .unwrap();
+        let out = s.import(SyncPolicy::LocalOnly, &mut &b"hello"[..]).unwrap();
 
         assert_eq!(out.hash, ContentHash::of_bytes(b"hello"));
         assert_eq!(out.size, 5);
         assert!(!out.deduped);
-        assert!(s.has(SyncPolicy::ManifestOnly, &out.hash));
+        assert!(s.has(SyncPolicy::LocalOnly, &out.hash));
         assert_eq!(
-            s.verify(SyncPolicy::ManifestOnly, &out.hash).unwrap(),
+            s.verify(SyncPolicy::LocalOnly, &out.hash).unwrap(),
             Verified::Ok
         );
     }
@@ -354,37 +351,12 @@ mod tests {
     fn same_content_in_same_boundary_is_deduped() {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        let first = s
-            .import(SyncPolicy::ManifestOnly, &mut &b"same"[..])
-            .unwrap();
-        let second = s
-            .import(SyncPolicy::ManifestOnly, &mut &b"same"[..])
-            .unwrap();
+        let first = s.import(SyncPolicy::LocalOnly, &mut &b"same"[..]).unwrap();
+        let second = s.import(SyncPolicy::LocalOnly, &mut &b"same"[..]).unwrap();
         assert_eq!(first.hash, second.hash);
         assert!(!first.deduped);
         assert!(second.deduped);
-        assert_eq!(s.usage(SyncPolicy::ManifestOnly).0, 1);
-    }
-
-    #[test]
-    fn boundaries_do_not_share_objects() {
-        let dir = tempdir().unwrap();
-        let s = stores(&dir, "ws-a");
-        let out = s
-            .import(SyncPolicy::LocalOnly, &mut &b"secret"[..])
-            .unwrap();
-
-        // 同じ bytes でも、別の境界からは「持っている」と答えない。
-        // blob が漏れなくても、存在の有無そのものが情報になるため
-        assert!(s.has(SyncPolicy::LocalOnly, &out.hash));
-        assert!(!s.has(SyncPolicy::ManifestOnly, &out.hash));
-        assert!(!s.has(SyncPolicy::ManifestOnly, &out.hash));
-        assert!(
-            s.read(SyncPolicy::ManifestOnly, &out.hash)
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(s.usage(SyncPolicy::ManifestOnly), (0, 0));
+        assert_eq!(s.usage(SyncPolicy::LocalOnly).0, 1);
     }
 
     #[test]
@@ -393,10 +365,10 @@ mod tests {
         let a = stores(&dir, "ws-a");
         let b = stores(&dir, "ws-b");
         let out = a
-            .import(SyncPolicy::ManifestOnly, &mut &b"shared bytes"[..])
+            .import(SyncPolicy::LocalOnly, &mut &b"shared bytes"[..])
             .unwrap();
-        assert!(a.has(SyncPolicy::ManifestOnly, &out.hash));
-        assert!(!b.has(SyncPolicy::ManifestOnly, &out.hash));
+        assert!(a.has(SyncPolicy::LocalOnly, &out.hash));
+        assert!(!b.has(SyncPolicy::LocalOnly, &out.hash));
     }
 
     #[test]
@@ -424,7 +396,7 @@ mod tests {
         };
 
         let err = s
-            .import_limited(SyncPolicy::ManifestOnly, &mut src, Some(CHUNK as u64))
+            .import_limited(SyncPolicy::LocalOnly, &mut src, Some(CHUNK as u64))
             .unwrap_err();
         assert!(
             matches!(
@@ -435,8 +407,8 @@ mod tests {
         );
         // 上限の2塊ぶんまでで止まっている(全量 4 塊は読んでいない)
         assert!(src.read <= CHUNK * 2, "読み過ぎ: {}", src.read);
-        assert_eq!(s.usage(SyncPolicy::ManifestOnly), (0, 0));
-        let tmp = s.boundary_dir(SyncPolicy::ManifestOnly).join("tmp");
+        assert_eq!(s.usage(SyncPolicy::LocalOnly), (0, 0));
+        let tmp = s.boundary_dir(SyncPolicy::LocalOnly).join("tmp");
         assert!(
             fs::read_dir(tmp).unwrap().next().is_none(),
             "一時ファイルが残っている"
@@ -448,7 +420,6 @@ mod tests {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
         assert_eq!(SyncPolicy::LocalOnly.size_limits(), None);
-        assert_eq!(SyncPolicy::ManifestOnly.size_limits(), None);
         let data = vec![1u8; CHUNK + 1];
         assert!(s.import(SyncPolicy::LocalOnly, &mut &data[..]).is_ok());
     }
@@ -463,9 +434,9 @@ mod tests {
         }
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
-        assert!(s.import(SyncPolicy::ManifestOnly, &mut Broken).is_err());
-        assert_eq!(s.usage(SyncPolicy::ManifestOnly), (0, 0));
-        let tmp = s.boundary_dir(SyncPolicy::ManifestOnly).join("tmp");
+        assert!(s.import(SyncPolicy::LocalOnly, &mut Broken).is_err());
+        assert_eq!(s.usage(SyncPolicy::LocalOnly), (0, 0));
+        let tmp = s.boundary_dir(SyncPolicy::LocalOnly).join("tmp");
         let left: Vec<_> = fs::read_dir(tmp).unwrap().collect();
         assert!(left.is_empty(), "一時ファイルが残っている");
     }
@@ -475,15 +446,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let s = stores(&dir, "ws-a");
         let out = s
-            .import(SyncPolicy::ManifestOnly, &mut &b"original"[..])
+            .import(SyncPolicy::LocalOnly, &mut &b"original"[..])
             .unwrap();
-        fs::write(
-            s.object_path(SyncPolicy::ManifestOnly, &out.hash),
-            b"tampered",
-        )
-        .unwrap();
+        fs::write(s.object_path(SyncPolicy::LocalOnly, &out.hash), b"tampered").unwrap();
         assert_eq!(
-            s.verify(SyncPolicy::ManifestOnly, &out.hash).unwrap(),
+            s.verify(SyncPolicy::LocalOnly, &out.hash).unwrap(),
             Verified::Mismatch
         );
     }
@@ -494,7 +461,7 @@ mod tests {
         let s = stores(&dir, "ws-a");
         let absent = ContentHash::of_bytes(b"never imported");
         assert_eq!(
-            s.verify(SyncPolicy::ManifestOnly, &absent).unwrap(),
+            s.verify(SyncPolicy::LocalOnly, &absent).unwrap(),
             Verified::Missing
         );
     }
@@ -507,15 +474,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let s = stores(&dir, "ws-a");
-        let out = s
-            .import(SyncPolicy::ManifestOnly, &mut &b"here"[..])
-            .unwrap();
+        let out = s.import(SyncPolicy::LocalOnly, &mut &b"here"[..]).unwrap();
 
         let m = |hash: ContentHash, locator: Locator, client_repo: bool| {
             let mut manifest = manifest_for(hash.clone(), locator);
             manifest.policy = Policy {
                 sensitivity: Sensitivity::Private,
-                sync: SyncPolicy::ManifestOnly,
+                sync: SyncPolicy::LocalOnly,
                 client_repo,
             };
             manifest
@@ -545,10 +510,10 @@ mod tests {
             Availability::Missing
         );
 
-        // 仕事のリポジトリ由来は取得を試みない
+        // client repo 由来でも managed + local_only なら、この端末の複製を開ける
         assert_eq!(
             availability(&vault, &s, &m(out.hash.clone(), managed, true)),
-            Availability::UnavailableByPolicy
+            Availability::Local
         );
 
         // 旧添付は保管庫の中の実ファイルが実体。置き場を見ても見つからない
@@ -570,7 +535,10 @@ mod tests {
         );
 
         // 元の場所を指すだけのものは在否を確かめられない(Local と言わない)
-        let linked = Locator::linked("github.com/acme/widgets", "README.md").unwrap();
+        let linked = Locator::Linked {
+            repo_id: "github.com/acme/widgets".into(),
+            rel_path: "README.md".into(),
+        };
         assert_eq!(
             availability(&vault, &s, &m(out.hash, linked, false)),
             Availability::Missing
@@ -594,11 +562,11 @@ mod tests {
         let data: Vec<u8> = (0..(CHUNK * 2 + 7)).map(|i| (i % 251) as u8).collect();
         fs::write(&src, &data).unwrap();
 
-        let out = s.import_path(SyncPolicy::ManifestOnly, &src).unwrap();
+        let out = s.import_path(SyncPolicy::LocalOnly, &src).unwrap();
         assert_eq!(out.hash, ContentHash::of_bytes(&data));
         assert_eq!(out.size, data.len() as u64);
         assert_eq!(
-            s.verify(SyncPolicy::ManifestOnly, &out.hash).unwrap(),
+            s.verify(SyncPolicy::LocalOnly, &out.hash).unwrap(),
             Verified::Ok
         );
     }

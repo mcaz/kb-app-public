@@ -158,7 +158,7 @@ mod tests {
             Locator::Managed { hash },
             Policy {
                 sensitivity: Sensitivity::Private,
-                sync: SyncPolicy::ManifestOnly,
+                sync: SyncPolicy::LocalOnly,
                 client_repo: false,
             },
             role,
@@ -242,9 +242,9 @@ mod tests {
 
         // 台帳から外れたら索引からも消える(作り直しなので取りこぼさない)
         let path = e
-            .vault
-            .root
-            .join(crate::ledger::DIR)
+            ._dir
+            .path()
+            .join("sidecar")
             .join("manifests")
             .join(format!("{}.json", m.id));
         std::fs::remove_file(path).unwrap();
