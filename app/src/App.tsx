@@ -9,12 +9,11 @@ import { AppShell } from "@/components/templates/AppShell";
 import { useNoteFileIntake } from "@/hooks/useNoteFileIntake";
 import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
 import { useTheme } from "@/hooks/useTheme";
-import { ConnectPage } from "@/pages/ConnectPage";
 import { GraphPage } from "@/pages/GraphPage";
 import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
-import { SettingsPage } from "@/pages/SettingsPage";
+import { SettingsDialog } from "@/pages/SettingsDialog";
 import { useHomeState, useSetupState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
@@ -24,6 +23,7 @@ export function App() {
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const openSearch = useCallback(() => setSearchOpen(true), []);
 
   // 選んだテーマ(システム/ライト/ダーク)を <html data-theme> へ反映する
@@ -40,16 +40,22 @@ export function App() {
     <TooltipProvider delayDuration={200}>
       <AppShell
         banner={<DegradedBanner messages={home?.degraded ?? []} />}
-        sidebar={<Sidebar vaultName={setup?.vault_name ?? "kb"} onOpenSearch={openSearch} />}
+        sidebar={
+          <Sidebar
+            vaultName={setup?.vault_name ?? "kb"}
+            onOpenSearch={openSearch}
+            settingsOpen={settingsOpen}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        }
       >
         {view === "home" && <HomePage />}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
         {view === "graph" && <GraphPage />}
-        {view === "connect" && <ConnectPage />}
-        {view === "settings" && <SettingsPage />}
       </AppShell>
 
       <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <Toaster theme={theme} />
     </TooltipProvider>
   );

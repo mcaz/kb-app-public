@@ -35,6 +35,7 @@
   },
   "settings": {
     "title": "設定",
+    "dialogDescription": "接続とこの端末の見た目を設定します。",
     "appearance": "見た目",
     "theme": "テーマ",
     "themeSystem": "システムに合わせる",

@@ -3,7 +3,6 @@ import {
   ChevronRight,
   House,
   NotebookText,
-  Plug,
   Search,
   Settings,
   Sprout,
@@ -23,10 +22,12 @@ import { NavButton } from "./NavButton";
 export interface SidebarProps {
   vaultName: string;
   onOpenSearch: () => void;
+  settingsOpen: boolean;
+  onOpenSettings: () => void;
 }
 
 /** 左のナビ。畳むとアイコンだけになり、ホバーでラベルを吹き出す。 */
-export function Sidebar({ vaultName, onOpenSearch }: SidebarProps) {
+export function Sidebar({ vaultName, onOpenSearch, settingsOpen, onOpenSettings }: SidebarProps) {
   const { t } = useTranslation();
   const view = useSession((s) => s.view);
   const go = useSession((s) => s.go);
@@ -43,10 +44,6 @@ export function Sidebar({ vaultName, onOpenSearch }: SidebarProps) {
     { view: "notes", icon: NotebookText, label: t("nav.notes"), onClick: resetNotes },
     // ナビからは全体表示(局所グラフの中心を外す)
     { view: "graph", icon: Waypoints, label: t("nav.graph"), onClick: () => focusGraph(null) },
-    // 「繋ぐ」= 外部アプリとの接続。ノート間の「つながり」(Link)とは別物なので
-    // 記号も分ける(絵文字ではどちらも 🔗 で区別が付かなかった)
-    { view: "connect", icon: Plug, label: t("nav.connect"), onClick: () => go("connect") },
-    { view: "settings", icon: Settings, label: t("nav.settings"), onClick: () => go("settings") },
   ];
 
   return (
@@ -84,6 +81,13 @@ export function Sidebar({ vaultName, onOpenSearch }: SidebarProps) {
           onClick={item.onClick}
         />
       ))}
+      <NavButton
+        icon={Settings}
+        label={t("nav.settings")}
+        collapsed={visuallyCollapsed}
+        active={settingsOpen}
+        onClick={onOpenSettings}
+      />
       {!forcedCompact && (
         <Tooltip>
           <TooltipTrigger asChild>
