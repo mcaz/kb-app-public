@@ -198,9 +198,8 @@ fn take(
             display_name: name.clone(),
             media_type: intake::guess_media_type(src),
             role: Role::File,
-            // 保存方法と区分はコアが場所から決める。画面が既定を持つと、
+            // 区分はコアが場所から決める。画面が既定を持つと、
             // 画面を通らない経路と食い違う(決定6)
-            keep: None,
             policy: None,
             ref_name: None,
             supersedes: supersedes.clone(),

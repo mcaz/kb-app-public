@@ -376,8 +376,6 @@ export type Stats = {
 export type SyncPolicy = 
 /**  この端末だけ。台帳も外へ出さない */
 "local_only" | 
-/**  名前・役割・来歴は同期する。実体は出さない */
-"manifest_only" | 
 /**  実体も同期する */
 "full";
 

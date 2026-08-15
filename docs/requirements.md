@@ -154,7 +154,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   内部語も、ディレクトリという言葉も見せない — 原則7)。
   - **実体は Vault Git の外**に置き、Vault Git に入るのは manifest・参照・
     full 転送用の pointer まで。`sensitivity`(非公開/共有)と `sync_policy`
-    (同期しない/情報のみ/本体も)の**二軸**を持ち、client repo 由来は `local_only` 固定で
+    (このPCのみ/別PCでも復元)の**二軸**を持ち、client repo 由来は `local_only` 固定で
     プロンプトから緩和できない。availability は同期せず端末ごとに導出する
   - **full 転送は同一 origin の Git LFS**(`git-lfs` は同梱。ユーザーに追加設定を求めない)。
     manifest の取得と blob の取得を分離し、取得失敗は端末ごとの「この端末にない」として出す
@@ -166,14 +166,15 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     (MVP では削除しない)。**移行前に全端末から取得できた添付は、移行で取得不能にしない**
   - 「1ノート=1単位」の対の管理(rename/move/archive 時の同伴)はアプリが保証する。
     検索対象は manifest まで(blob の中身は既定で対象外、transcript は既定で除外)
-  - サイズは `local_only` / `manifest_only` に固定上限を置かず、`full` のみ 100MB 警告・
+  - サイズは `local_only` に固定上限を置かず、`full` のみ 100MB 警告・
     2GB 拒否。**旧来の 10MB / 50MB は GitHub 同期の保全が根拠で、実体が Vault Git を
     出た時点で失効する**。取り込みは path ベースの streaming(base64 IPC は廃止)
   - 出典は OKF `sources[].resource` に `kb-artifact:<artifact_id>` を書いて**版を固定**する
     (標準語彙の provenance)。本文リンクは参照名で最新版を追い、既存の `/…files/…` は
     本文を書き換えず alias で解決する
-  - 画像はペーストで自動取り込み+リンク挿入、プレビューで表示(取り込み経路は
-    picker / drop / paste / CLI / MCP すべてコア API 一本に合流させる)
+  - 画像はペーストで自動取り込み+リンク挿入、プレビューで表示。path を扱う
+    picker / drop / paste / CLI は同じコア API に合流させる。MCP へは path を渡さず、
+    将来の content 経路だけを公開する
   - ファイルの中身検索(PDF 抽出等)、dataset の複数ファイル管理、実削除を伴う GC は将来
 - **FR-C7 お手入れ(ライフサイクルの自動運転)— 最小形実装済み(2026-08-10。①意味的な近接の検知=埋め込み距離 0.45 以下で「つなげておきますか?」②リンク切れの気づき。受信箱で承諾/却下、却下は再提案しない・1回5件上限。つなげるは agent ノート側へ追記しメモの本文改変を最小化)**: 重複・リンク切れ・古い情報・未整理を検出し、
   平易な提案に変換する。最小形(重複・リンク切れ検知)はローカルで完結、提案文の生成は

@@ -148,11 +148,11 @@ mod tests {
         }
     }
 
-    /// 「情報のみ」で1件置く(full は LFS が要るので、解決の筋を見るにはこれで足りる)
+    /// `local_only` で1件置く(full は LFS が要るので、解決の筋を見るにはこれで足りる)
     fn put(e: &Env, bytes: &[u8], name: &str) -> Manifest {
         let imported = e
             .stores
-            .import(SyncPolicy::ManifestOnly, &mut &bytes[..])
+            .import(SyncPolicy::LocalOnly, &mut &bytes[..])
             .unwrap();
         let m = Manifest::new(
             ArtifactId::new(1_755_000_000_000),
@@ -170,7 +170,7 @@ mod tests {
             },
             Policy {
                 sensitivity: Sensitivity::Private,
-                sync: SyncPolicy::ManifestOnly,
+                sync: SyncPolicy::LocalOnly,
                 client_repo: false,
             },
             Role::File,
@@ -207,7 +207,7 @@ mod tests {
         let name = RefName::from_str("diagram").unwrap();
         let mut r = ArtifactRef::new("ws-a", name.clone(), first.id.clone());
         e.ledger
-            .put_ref(&e.vault, SyncPolicy::ManifestOnly, &r)
+            .put_ref(&e.vault, SyncPolicy::LocalOnly, &r)
             .unwrap();
 
         let link = Link::Ref(name.clone());
@@ -220,7 +220,7 @@ mod tests {
         let second = put(&e, b"v2", "図.png");
         r.point_to(1, second.id.clone()).unwrap();
         e.ledger
-            .put_ref(&e.vault, SyncPolicy::ManifestOnly, &r)
+            .put_ref(&e.vault, SyncPolicy::LocalOnly, &r)
             .unwrap();
         let got = resolve(&e.vault, &e.stores, &e.ledger, &link)
             .unwrap()
@@ -235,13 +235,13 @@ mod tests {
         let name = RefName::from_str("table").unwrap();
         let mut r = ArtifactRef::new("ws-a", name, first.id.clone());
         e.ledger
-            .put_ref(&e.vault, SyncPolicy::ManifestOnly, &r)
+            .put_ref(&e.vault, SyncPolicy::LocalOnly, &r)
             .unwrap();
 
         let second = put(&e, b"v2", "表.csv");
         r.point_to(1, second.id.clone()).unwrap();
         e.ledger
-            .put_ref(&e.vault, SyncPolicy::ManifestOnly, &r)
+            .put_ref(&e.vault, SyncPolicy::LocalOnly, &r)
             .unwrap();
 
         // 出典は動かない。証拠が後から別の内容に変わってはいけない
@@ -264,7 +264,7 @@ mod tests {
         let name = RefName::from_str("old-diagram").unwrap();
         let r = ArtifactRef::new("ws-a", name.clone(), m.id.clone());
         e.ledger
-            .put_ref(&e.vault, SyncPolicy::ManifestOnly, &r)
+            .put_ref(&e.vault, SyncPolicy::LocalOnly, &r)
             .unwrap();
 
         let legacy = "/notes/foo.files/旧図.png";
@@ -290,7 +290,7 @@ mod tests {
         let name = RefName::from_str("x").unwrap();
         let r = ArtifactRef::new("ws-a", name.clone(), m.id.clone());
         e.ledger
-            .put_ref(&e.vault, SyncPolicy::ManifestOnly, &r)
+            .put_ref(&e.vault, SyncPolicy::LocalOnly, &r)
             .unwrap();
 
         // 手元にある間は開ける
@@ -310,14 +310,14 @@ mod tests {
         // **中身は取れない。** 呼び出し側が availability を見忘れても漏れない
         assert!(got.open(&e.vault, &e.stores).unwrap().is_none());
 
-        // 仕事のリポジトリ由来は、取り寄せの提案もしない
+        // 仕事のリポジトリ由来は local_only なので、欠損しても取り寄せを提案しない
         m.policy.client_repo = true;
-        m.policy.sync = SyncPolicy::ManifestOnly;
+        m.policy.sync = SyncPolicy::LocalOnly;
         e.ledger.put(&e.vault, &m).unwrap();
         let got = resolve(&e.vault, &e.stores, &e.ledger, &Link::Ref(name))
             .unwrap()
             .unwrap();
-        assert_eq!(got.availability, Availability::UnavailableByPolicy);
+        assert_eq!(got.availability, Availability::Missing);
         assert!(!got.can_fetch());
         assert!(got.open(&e.vault, &e.stores).unwrap().is_none());
     }
@@ -330,7 +330,7 @@ mod tests {
             .path()
             .join("artifacts")
             .join("ws-a")
-            .join("manifest-only")
+            .join("local-only")
             .join("objects")
             .join(head)
             .join(rest);

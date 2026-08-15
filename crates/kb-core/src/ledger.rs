@@ -11,7 +11,7 @@
 //!
 //! したがって置き場は同期区分で分かれる:
 //!
-//! - `full` / `manifest_only` → 保管庫の `.kb-artifacts/`(Git で運ばれる)
+//! - `full` → 保管庫の `.kb-artifacts/`(Git で運ばれる)
 //! - `local_only` → 保管庫の外の sidecar(Git に触れない)
 //!
 //! 区分を変えると台帳は**引っ越す**。緩めたときに sidecar 側へ残しておくと、
@@ -60,7 +60,7 @@ impl Ledger {
     fn base(&self, sync: SyncPolicy) -> PathBuf {
         match sync {
             SyncPolicy::LocalOnly => self.sidecar.clone(),
-            SyncPolicy::ManifestOnly | SyncPolicy::Full => self.vault_root.join(DIR),
+            SyncPolicy::Full => self.vault_root.join(DIR),
         }
     }
 
@@ -379,7 +379,7 @@ mod tests {
         let mut m = manifest(SyncPolicy::LocalOnly, false);
         ledger.put(&vault, &m).unwrap();
 
-        m.policy.sync = SyncPolicy::ManifestOnly;
+        m.policy.sync = SyncPolicy::Full;
         ledger.put(&vault, &m).unwrap();
 
         let in_vault = vault

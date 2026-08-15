@@ -1,38 +1,26 @@
 //! ファイルの取り込み — ADR-0003 決定6・contract.md 契約5。
 //!
-//! **すべての取り込み経路(選択・ドラッグ&ドロップ・貼り付け・CLI・MCP)は
-//! ここへ合流する。** 現行の添付は画面側から実体書き込みを直接呼べてしまい、
+//! **path を扱う取り込み経路(選択・ドラッグ&ドロップ・貼り付け・CLI)は
+//! ここへ合流する。** MCP には別の content 経路だけを公開し、同じ store / ledger 処理へ
+//! 合流させる。現行の添付は画面側から実体書き込みを直接呼べてしまい、
 //! ダイアログを通らない経路が存在する。判定を UI に置くと、その UI を通らない
 //! 経路の数だけ穴が空くので、**拒否はここで行い、画面の無効化は補助**とする。
 //!
-//! ここが引き受ける判断は3つ:
+//! ここが引き受ける判断は2つ:
 //!
 //! 1. **仕事のリポジトリの中にあるか**(あれば「同期しない」に固定し、緩められなくする)
-//! 2. **元の場所を指せるか**(リポジトリの同一性が確定できないなら指さない)
-//! 3. どの置き場へ入れるか(区分ごとに物理的に分かれている)
+//! 2. どの置き場へ入れるか(区分ごとに物理的に分かれている)
 
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
 use crate::artifact::{
-    ArtifactError, ArtifactId, ArtifactRef, ContentHash, Created, Hasher, Locator, Manifest,
-    Policy, RefName, Role, SyncPolicy,
+    ArtifactId, ArtifactRef, Created, Locator, Manifest, Policy, RefName, Role, SyncPolicy,
 };
 use crate::ledger::Ledger;
 use crate::store::Stores;
 use crate::vault::Vault;
-
-/// 保存方法。UI の語彙では「kb-app にコピーして保管」/「元の場所のまま参照」。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Keep {
-    /// この保管庫が実体を持つ
-    Managed,
-    /// 元の場所を指す(リポジトリ ID + その中の相対パス)
-    Linked,
-}
 
 /// 取り込みの指定。区分を指定しなくても、場所から安全側の既定が決まる。
 #[derive(Debug, Clone)]
@@ -42,8 +30,6 @@ pub struct Request {
     pub display_name: String,
     pub media_type: String,
     pub role: Role,
-    /// 未指定なら場所から決める(仕事のリポジトリ内なら参照、それ以外はコピー)
-    pub keep: Option<Keep>,
     /// 未指定なら既定。**仕事のリポジトリ内なら指定に関わらず固定される**
     pub policy: Option<Policy>,
     pub ref_name: Option<RefName>,
@@ -67,55 +53,26 @@ pub struct Taken {
     pub forced_local_only: bool,
 }
 
-/// 元ファイルが属するリポジトリ。保管庫自身は**含めない**
-/// (自分の保管庫は「仕事のリポジトリ」ではない)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientRepo {
-    pub root: PathBuf,
-    /// remote から導いた安定 ID。確定できないときは None
-    pub id: Option<String>,
-}
-
-/// `src` を含む Git リポジトリを探す。保管庫の中なら None。
-pub fn detect_client_repo(vault: &Vault, src: &Path) -> Option<ClientRepo> {
-    let vault_root = vault.root.canonicalize().ok()?;
-    let start = src.canonicalize().ok()?;
-    let mut cur = start.parent()?;
+/// `src` を含む Git リポジトリを探す。保管庫自身は client repo とみなさない。
+fn is_client_repo(vault: &Vault, src: &Path) -> bool {
+    let Ok(vault_root) = vault.root.canonicalize() else {
+        return false;
+    };
+    let Ok(start) = src.canonicalize() else {
+        return false;
+    };
+    let Some(mut cur) = start.parent() else {
+        return false;
+    };
     loop {
         if cur.join(".git").exists() {
-            // 自分の保管庫は client repo ではない
-            if cur == vault_root {
-                return None;
-            }
-            return Some(ClientRepo {
-                root: cur.to_path_buf(),
-                id: repo_identity(cur),
-            });
+            return cur != vault_root;
         }
-        cur = cur.parent()?;
+        let Some(parent) = cur.parent() else {
+            return false;
+        };
+        cur = parent;
     }
-}
-
-/// remote から安定した ID を作る。`https://github.com/acme/widgets.git` も
-/// `git@github.com:acme/widgets.git` も `github.com/acme/widgets` に揃える。
-///
-/// **remote が無ければ None。** ローカルパスは端末固有なので ID にしない。
-fn repo_identity(root: &Path) -> Option<String> {
-    let repo = git2::Repository::open(root).ok()?;
-    let remote = repo.find_remote("origin").ok()?;
-    let url = remote.url()?;
-    let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
-    let without_scheme = trimmed
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-    // scp 形式(user@host:owner/repo)を host/owner/repo へ寄せる
-    let without_user = without_scheme
-        .split_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(without_scheme);
-    let normalized = without_user.replacen(':', "/", 1);
-    (!normalized.is_empty()).then_some(normalized)
 }
 
 /// 取り込む。**この関数を通らない書き込み経路を作らないこと。**
@@ -127,7 +84,7 @@ pub fn take(
     src: &Path,
     req: Request,
 ) -> Result<Taken> {
-    let client = detect_client_repo(vault, src);
+    let client_repo = is_client_repo(vault, src);
 
     // 0. 差し替え元。無ければ普通の新規取り込み
     let previous = match &req.supersedes {
@@ -147,27 +104,27 @@ pub fn take(
         Some(prev) => prev.policy,
         None => req.policy.unwrap_or_else(Policy::default_managed),
     };
-    let (policy, forced_local_only) = match &client {
-        Some(_) => (
+    let (policy, forced_local_only) = if client_repo {
+        (
             Policy::client_repo_locked(),
             requested.sync != SyncPolicy::LocalOnly,
-        ),
-        None => (
+        )
+    } else if previous.is_some() {
+        // 差し替え元の印も含めて区分を丸ごと引き継ぐ。
+        // client repo 由来の旧版を一度 repo 外へコピーしてから差し替えることで
+        // hard gate を外せる抜け道を作らない。
+        (requested, false)
+    } else {
+        (
             Policy {
                 client_repo: false,
                 ..requested
             },
             false,
-        ),
+        )
     };
 
-    // 2. 保存方法を決める。仕事のリポジトリ内は既定で「元の場所を指す」
-    let keep = req.keep.unwrap_or(match client {
-        Some(_) => Keep::Linked,
-        None => Keep::Managed,
-    });
-
-    // 3. 前の版を指していた参照は、新しい版へ付け替える(本文リンクは最新へ追従する)
+    // 2. 前の版を指していた参照は、新しい版へ付け替える(本文リンクは最新へ追従する)
     let inherited = previous.as_ref().and_then(|prev| ledger.ref_for(&prev.id));
 
     // 参照名の衝突は、上書きせず呼び出し側へ返す(別名を提案するのは UI)。
@@ -179,53 +136,30 @@ pub fn take(
         bail!("参照名 {name} は使われている");
     }
 
-    let (locator, hash, size, warn_over) = match keep {
-        Keep::Managed if policy.sync == SyncPolicy::Full => {
-            // 「本体も同期」の実体は LFS の置き場が持つ(自前 CAS には置かない)。
-            // 大きさは複製する前に見る — 2GB を写してから断らない
-            let size = std::fs::metadata(src)
-                .with_context(|| format!("読めない: {}", src.display()))?
-                .len();
-            let warn_over = policy.sync.check_size(size)?;
-            let (hash, size) = crate::lfs::import(vault, src)?;
-            (
-                Locator::Managed { hash: hash.clone() },
-                hash,
-                size,
-                warn_over,
-            )
-        }
-        Keep::Managed => {
-            let imported = stores.import_path(policy.sync, src)?;
-            (
-                Locator::Managed {
-                    hash: imported.hash.clone(),
-                },
-                imported.hash,
-                imported.size,
-                imported.warn_over,
-            )
-        }
-        Keep::Linked => {
-            let Some(client) = &client else {
-                // 保管庫の外の、リポジトリでもない場所は指せない。
-                // 端末固有のパスになるため(正本の受入条件)
-                return Err(ArtifactError::UnstableLocator.into());
-            };
-            let Some(repo_id) = &client.id else {
-                // リポジトリの同一性が確定できない。指すのをやめてコピーを案内する
-                bail!("このリポジトリは他の端末から辿れない。コピーして保管してください");
-            };
-            let rel = src
-                .canonicalize()?
-                .strip_prefix(client.root.canonicalize()?)
-                .context("リポジトリ内の位置が取れない")?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let locator = Locator::linked(repo_id, &rel)?;
-            let (hash, size) = hash_file(src)?;
-            (locator, hash, size, None)
-        }
+    let (locator, hash, size, warn_over) = if policy.sync == SyncPolicy::Full {
+        // 「本体も同期」の実体は LFS の置き場が持つ(自前 CAS には置かない)。
+        // 大きさは複製する前に見る — 2GB を写してから断らない
+        let size = std::fs::metadata(src)
+            .with_context(|| format!("読めない: {}", src.display()))?
+            .len();
+        let warn_over = policy.sync.check_size(size)?;
+        let (hash, size) = crate::lfs::import(vault, src)?;
+        (
+            Locator::Managed { hash: hash.clone() },
+            hash,
+            size,
+            warn_over,
+        )
+    } else {
+        let imported = stores.import_path(policy.sync, src)?;
+        (
+            Locator::Managed {
+                hash: imported.hash.clone(),
+            },
+            imported.hash,
+            imported.size,
+            imported.warn_over,
+        )
     };
 
     let id = ArtifactId::new(unix_ms(&req.at));
@@ -261,14 +195,7 @@ pub fn take(
     {
         manifest.notes.push(note_id.clone());
     }
-    manifest.record(
-        &req.at,
-        match keep {
-            Keep::Managed => "imported",
-            Keep::Linked => "linked",
-        },
-        &req.origin,
-    );
+    manifest.record(&req.at, "imported", &req.origin);
     if let Some(prev) = &previous {
         manifest.record(
             &req.at,
@@ -345,22 +272,6 @@ pub fn guess_media_type(path: &Path) -> String {
     .to_string()
 }
 
-/// 実体をコピーせずに照合値だけ採る(linked 用)。
-fn hash_file(path: &Path) -> Result<(ContentHash, u64)> {
-    let mut f = File::open(path).with_context(|| format!("読み込めない: {}", path.display()))?;
-    let mut hasher = Hasher::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-    }
-    let size = hasher.len();
-    Ok((hasher.finish(), size))
-}
-
 /// RFC3339 から ULID 用のミリ秒。読めなければ 0(ID の一意性は乱数側が担保する)。
 fn unix_ms(at: &str) -> u64 {
     time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
@@ -371,8 +282,9 @@ fn unix_ms(at: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::Sensitivity;
+    use crate::artifact::{ArtifactError, Sensitivity};
     use std::fs;
+    use std::path::PathBuf;
     use std::str::FromStr;
     use tempfile::{TempDir, tempdir};
 
@@ -405,7 +317,6 @@ mod tests {
             display_name: "表.csv".into(),
             media_type: "text/csv".into(),
             role: Role::File,
-            keep: None,
             policy: None,
             ref_name: None,
             supersedes: None,
@@ -472,6 +383,8 @@ mod tests {
         assert_eq!(out.manifest.policy.sync, SyncPolicy::LocalOnly);
         assert_eq!(out.manifest.policy.sensitivity, Sensitivity::Private);
         assert!(out.forced_local_only);
+        assert!(matches!(out.manifest.locator, Locator::Managed { .. }));
+        assert!(e.stores.has(SyncPolicy::LocalOnly, &out.manifest.hash));
         // 固定した理由が来歴に残る
         assert!(
             out.manifest
@@ -491,55 +404,25 @@ mod tests {
     }
 
     #[test]
-    fn client_repo_file_is_linked_by_repo_id_not_absolute_path() {
+    fn client_repo_file_is_copied_into_the_local_only_store() {
         let e = env();
         let src = client_repo(&e.root, "work", true);
         let out = take_at(&e, &src, req()).unwrap();
 
-        match &out.manifest.locator {
-            Locator::Linked { repo_id, rel_path } => {
-                assert_eq!(repo_id, "github.com/acme/widgets");
-                assert_eq!(rel_path, "data/table.csv");
-            }
-            other => panic!("linked のはず: {other:?}"),
-        }
-        // 実体はコピーしていない
-        assert!(!e.stores.has(SyncPolicy::LocalOnly, &out.manifest.hash));
+        assert!(matches!(out.manifest.locator, Locator::Managed { .. }));
+        assert!(e.stores.has(SyncPolicy::LocalOnly, &out.manifest.hash));
     }
 
     #[test]
-    fn client_repo_without_remote_refuses_to_link() {
+    fn client_repo_without_remote_is_also_copied() {
         let e = env();
         let src = client_repo(&e.root, "work", false);
 
-        let err = take_at(&e, &src, req()).unwrap_err();
-        assert!(
-            err.to_string().contains("コピーして保管"),
-            "コピーを案内すること: {err}"
-        );
-        // 明示的にコピーを選べば通る(正本は managed を禁じていない)
-        let mut r = req();
-        r.keep = Some(Keep::Managed);
-        let out = take_at(&e, &src, r).unwrap();
+        let out = take_at(&e, &src, req()).unwrap();
         assert_eq!(out.manifest.policy.sync, SyncPolicy::LocalOnly);
-        // 複製はこの端末から出ない置き場に入る
+        assert!(matches!(out.manifest.locator, Locator::Managed { .. }));
         assert!(e.stores.has(SyncPolicy::LocalOnly, &out.manifest.hash));
         assert!(!e.stores.has(SyncPolicy::Full, &out.manifest.hash));
-    }
-
-    #[test]
-    fn linking_something_outside_any_repo_is_refused() {
-        let e = env();
-        let src = e.root.join("loose.txt");
-        fs::write(&src, b"loose").unwrap();
-
-        let mut r = req();
-        r.keep = Some(Keep::Linked);
-        let err = take_at(&e, &src, r).unwrap_err();
-        assert!(matches!(
-            err.downcast_ref::<ArtifactError>(),
-            Some(ArtifactError::UnstableLocator)
-        ));
     }
 
     #[test]
@@ -549,7 +432,7 @@ mod tests {
         fs::create_dir_all(src.parent().unwrap()).unwrap();
         fs::write(&src, b"img").unwrap();
 
-        assert_eq!(detect_client_repo(&e.vault, &src), None);
+        assert!(!is_client_repo(&e.vault, &src));
         let out = take_at(&e, &src, req()).unwrap();
         assert!(!out.manifest.policy.client_repo);
         assert_eq!(out.manifest.policy.sync, SyncPolicy::Full);
@@ -673,6 +556,24 @@ mod tests {
         assert_eq!(new.manifest.policy.sensitivity, Sensitivity::Private);
     }
 
+    #[test]
+    fn a_new_version_keeps_the_client_repo_lock_outside_the_repo() {
+        let e = env();
+        let first = client_repo(&e.root, "work", true);
+        let old = take_at(&e, &first, req()).unwrap();
+        assert!(old.manifest.policy.client_repo);
+
+        let next = e.root.join("copied-outside.txt");
+        fs::write(&next, b"v2").unwrap();
+        let mut r = req();
+        r.supersedes = Some(old.manifest.id.clone());
+        let new = take_at(&e, &next, r).unwrap();
+
+        assert!(new.manifest.policy.client_repo);
+        assert_eq!(new.manifest.policy.sync, SyncPolicy::LocalOnly);
+        assert!(e.stores.has(SyncPolicy::LocalOnly, &new.manifest.hash));
+    }
+
     /// 参照を付け替えないと、本文リンクが古い版を指したままになる(決定5)。
     #[test]
     fn the_reference_follows_the_new_version() {
@@ -706,27 +607,5 @@ mod tests {
         let mut r = req();
         r.supersedes = Some(ArtifactId::new(1_755_000_000_000));
         assert!(take_at(&e, &src, r).is_err());
-    }
-
-    #[test]
-    fn repo_identity_normalizes_url_shapes() {
-        let dir = tempdir().unwrap();
-        for (url, want) in [
-            ("git@github.com:acme/widgets.git", "github.com/acme/widgets"),
-            (
-                "https://github.com/acme/widgets.git",
-                "github.com/acme/widgets",
-            ),
-            (
-                "https://github.com/acme/widgets/",
-                "github.com/acme/widgets",
-            ),
-        ] {
-            let root = dir.path().join(url.replace(['/', ':', '@', '.'], "_"));
-            fs::create_dir_all(&root).unwrap();
-            let repo = git2::Repository::init(&root).unwrap();
-            repo.remote("origin", url).unwrap();
-            assert_eq!(repo_identity(&root).as_deref(), Some(want), "{url}");
-        }
     }
 }
