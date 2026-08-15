@@ -26,7 +26,6 @@ export function HomePage() {
   const openNote = useSession((s) => s.openNote);
   const go = useSession((s) => s.go);
   const clearTags = useSession((s) => s.clearTags);
-  const addTag = useSession((s) => s.addTag);
   const [recentPage, setRecentPage] = useState(0);
   const [tagPage, setTagPage] = useState(0);
 
@@ -95,15 +94,7 @@ export function HomePage() {
             <div className="text-muted text-xs">{t("tags.empty")}</div>
           ) : (
             tags.items.map((tag) => (
-              <TagRow
-                key={tag.tag}
-                tag={tag}
-                noDescriptionLabel={t("tags.noDescription")}
-                onClick={() => {
-                  clearTags();
-                  addTag(tag.tag);
-                }}
-              />
+              <TagRow key={tag.tag} tag={tag} noDescriptionLabel={t("tags.noDescription")} />
             ))
           )}
           <Pager
