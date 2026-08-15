@@ -1,9 +1,8 @@
-import { FilePlus, Paperclip } from "lucide-react";
+import { Paperclip } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
 import { StatusPill } from "@/components/atoms/StatusPill";
-import { Button } from "@/components/atoms/ui/button";
 import { formatSize } from "@/lib/format";
 import { useNoteFiles } from "@/lib/queries";
 
@@ -71,13 +70,6 @@ export function FilePanel({ noteId }: FilePanelProps) {
           </li>
         ))}
       </ul>
-
-      <div>
-        <Button variant="quiet" size="sm" disabled={busy} onClick={() => void addPicked()}>
-          <Icon as={FilePlus} size="sm" />
-          {t("file.add")}
-        </Button>
-      </div>
     </section>
   );
 }
