@@ -14,10 +14,13 @@ import { TagChip } from "@/components/atoms/TagChip";
 import { TagCombobox } from "@/components/molecules/TagCombobox";
 import type { Period, SortKey } from "@/lib/api";
 
+import { SavedSearchActions } from "./SavedSearchActions";
+
 const PERIODS: Period[] = ["all", "7", "30", "90"];
 const SORTS: SortKey[] = ["updated", "created", "title"];
 
 interface SearchFilterBarProps {
+  query: string;
   allTags: string[];
   tags: string[];
   period: Period;
@@ -31,6 +34,7 @@ interface SearchFilterBarProps {
 
 /** Modal 内では検索入力を主役にし、絞り込みは必要なときだけ開く。 */
 export function SearchFilterBar({
+  query,
   allTags,
   tags,
   period,
@@ -42,7 +46,7 @@ export function SearchFilterBar({
   onSortChange,
 }: SearchFilterBarProps) {
   const { t } = useTranslation(["notes", "common"]);
-  const activeCount = tags.length + (period === "all" ? 0 : 1);
+  const activeCount = tags.length + (period === "all" ? 0 : 1) + (sort === "updated" ? 0 : 1);
 
   return (
     <div className="border-line flex min-h-11 flex-wrap items-center gap-1.5 border-b px-3 py-2">
@@ -125,11 +129,14 @@ export function SearchFilterBar({
               onClick={() => {
                 onClearTags();
                 onPeriodChange("all");
+                onSortChange("updated");
               }}
             >
               {t("notes:search.clearFilters")}
             </Button>
           )}
+
+          <SavedSearchActions query={query} tags={tags} period={period} sort={sort} />
         </PopoverContent>
       </Popover>
 

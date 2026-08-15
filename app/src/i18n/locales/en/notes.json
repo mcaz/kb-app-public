@@ -33,14 +33,14 @@
   "favorite": {
     "save": "Save as favorite",
     "title": "Favorites",
-    "empty": "Nothing saved yet. Save one from the filters in the note list.",
+    "empty": "Nothing saved yet. Save one from the filters in the search modal.",
     "noCondition": "(no conditions)",
     "queryPart": "Search “{{query}}”",
     "defaultName": "Favorite {{n}}",
     "askSave": "Save as favorite",
     "askRename": "Rename favorite",
     "needName": "Please enter a name",
-    "needCondition": "Pick a tag or enter a search term first",
+    "needCondition": "Choose a search condition first",
     "saved": "Saved as favorite",
     "updated": "Updated “{{name}}”"
   },
@@ -53,7 +53,7 @@
   "list": {
     "notFound": "No matches",
     "empty": "No notes match these filters",
-    "placeholder": "Pick a note on the left to read it here. Notes grow out of your conversations with Claude."
+    "placeholder": "Choose a note from search to read it here. Notes grow out of your conversations with Claude."
   },
   "related": {
     "open": "Related",

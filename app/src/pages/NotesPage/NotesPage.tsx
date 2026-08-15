@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Splitter } from "@/components/atoms/Splitter";
-import { NoteListPanel } from "@/components/organisms/NoteListPanel";
 import { NotePane } from "@/components/organisms/NotePane";
 import { RelatedDialog } from "@/components/organisms/RelatedDialog";
 import { RelatedPanel } from "@/components/organisms/RelatedPanel";
@@ -16,7 +15,7 @@ export interface NotesPageProps {
   onOpenSearch: () => void;
 }
 
-/** ノート画面(一覧 + 関連 + 本文)。この製品の中心。 */
+/** ノート画面(本文 + 関連)。ノート探索はグローバル検索へ一本化する。 */
 export function NotesPage({ onOpenSearch }: NotesPageProps) {
   const { t } = useTranslation("notes");
   const selectedId = useSession((s) => s.selectedId);
@@ -25,7 +24,6 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
   const openNote = useSession((s) => s.openNote);
   const focusGraph = useSession((s) => s.focusGraph);
   const prefs = usePrefs();
-  const showList = useMediaQuery("(min-width: 900px)");
   const showRelated = useMediaQuery("(min-width: 1280px)");
   const [relatedOpen, setRelatedOpen] = useState(false);
 
@@ -35,18 +33,6 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
 
   return (
     <NotesLayout
-      list={showList ? <NoteListPanel width={prefs.listWidth} /> : undefined}
-      listSplitter={
-        showList ? (
-          <Splitter
-            label={t("search.placeholder")}
-            width={prefs.listWidth}
-            min={180}
-            max={520}
-            onChange={(listWidth) => prefs.set({ listWidth })}
-          />
-        ) : undefined
-      }
       related={
         showRelated && selectedId ? (
           <RelatedPanel noteId={selectedId} width={prefs.relWidth} />

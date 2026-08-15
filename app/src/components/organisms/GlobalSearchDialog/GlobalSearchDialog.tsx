@@ -127,6 +127,7 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
                 className="text-base"
               />
               <SearchFilterBar
+                query={session.query}
                 allTags={(home?.tags ?? []).map(([tag]) => tag)}
                 tags={session.selectedTags}
                 period={session.period}

@@ -33,14 +33,14 @@
   "favorite": {
     "save": "お気に入りに保存",
     "title": "お気に入り",
-    "empty": "まだありません。ノート一覧のフィルターから保存できます。",
+    "empty": "まだありません。検索Modalのフィルターから保存できます。",
     "noCondition": "(条件なし)",
     "queryPart": "検索「{{query}}」",
     "defaultName": "お気に入り{{n}}",
     "askSave": "お気に入りに保存",
     "askRename": "お気に入りの名前を変更",
     "needName": "名前を入れてください",
-    "needCondition": "タグか検索語を指定してから保存します",
+    "needCondition": "検索条件を指定してから保存します",
     "saved": "お気に入りに保存しました",
     "updated": "「{{name}}」を更新しました"
   },
@@ -53,7 +53,7 @@
   "list": {
     "notFound": "見つかりませんでした",
     "empty": "該当するノートがありません",
-    "placeholder": "左の一覧からノートを選ぶと、ここに表示されます。ノートは Claude との会話から育ちます。"
+    "placeholder": "検索からノートを選ぶと、ここに表示されます。ノートは Claude との会話から育ちます。"
   },
   "related": {
     "open": "関連",

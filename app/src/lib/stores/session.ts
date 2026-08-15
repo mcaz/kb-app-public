@@ -19,10 +19,9 @@ interface SessionStore {
   sort: SortKey;
   activeFav: string | null;
   graphFocus: string | null;
-  listPage: number;
 
   go: (view: View) => void;
-  /** ナビの「ノート」= まっさらな一覧に戻す(絞り込み・検索・選択を解除)。 */
+  /** ナビの「ノート」= 検索条件と選択を解除した本文画面へ戻す。 */
   resetNotes: () => void;
   openNote: (id: string) => void;
   openBeside: (id: string) => void;
@@ -34,7 +33,6 @@ interface SessionStore {
   clearTags: () => void;
   setPeriod: (period: Period) => void;
   setSort: (sort: SortKey) => void;
-  setListPage: (page: number) => void;
   focusGraph: (id: string | null) => void;
   applyFavorite: (fav: Favorite) => void;
   setActiveFav: (name: string | null) => void;
@@ -50,7 +48,6 @@ const INITIAL = {
   sort: "updated" as SortKey,
   activeFav: null,
   graphFocus: null,
-  listPage: 0,
 };
 
 export const useSession = create<SessionStore>()((set, get) => ({
@@ -67,18 +64,15 @@ export const useSession = create<SessionStore>()((set, get) => ({
     const { secondaryId } = get();
     if (secondaryId) set({ selectedId: secondaryId, secondaryId: null });
   },
-  setQuery: (query) => set({ query, listPage: 0 }),
+  setQuery: (query) => set({ query }),
   addTag: (tag) =>
     set((s) =>
-      s.selectedTags.includes(tag)
-        ? s
-        : { selectedTags: [...s.selectedTags, tag], listPage: 0, view: "notes" },
+      s.selectedTags.includes(tag) ? s : { selectedTags: [...s.selectedTags, tag], view: "notes" },
     ),
   removeTag: (tag) => set((s) => ({ selectedTags: s.selectedTags.filter((t) => t !== tag) })),
-  clearTags: () => set({ selectedTags: [], listPage: 0 }),
-  setPeriod: (period) => set({ period, listPage: 0 }),
+  clearTags: () => set({ selectedTags: [] }),
+  setPeriod: (period) => set({ period }),
   setSort: (sort) => set({ sort }),
-  setListPage: (listPage) => set({ listPage }),
   focusGraph: (graphFocus) => set({ graphFocus, view: "graph" }),
   applyFavorite: (fav) =>
     set({
@@ -86,7 +80,6 @@ export const useSession = create<SessionStore>()((set, get) => ({
       query: fav.query ?? "",
       period: (fav.period as Period | null) ?? "all",
       sort: (fav.sort as SortKey | null) ?? "updated",
-      listPage: 0,
       activeFav: fav.name,
       view: "notes",
     }),
