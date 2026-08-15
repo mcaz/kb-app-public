@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/atoms/ui/select";
 import { TagChip } from "@/components/atoms/TagChip";
+import { TagCombobox } from "@/components/molecules/TagCombobox";
 import type { Period, SortKey } from "@/lib/api";
 
 const PERIODS: Period[] = ["all", "7", "30", "90"];
@@ -58,20 +59,21 @@ export function SearchFilterBar({
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-[320px] p-3">
-          <div className="mb-3 text-xs font-semibold">{t("notes:filter.tagPlaceholder")}</div>
-          <div className="mb-4 flex max-h-28 flex-wrap gap-1 overflow-y-auto">
-            {allTags.map((tag) => {
-              const selected = tags.includes(tag);
-              return (
-                <TagChip
-                  key={tag}
-                  tag={tag}
-                  selected={selected}
-                  onClick={() => (selected ? onRemoveTag(tag) : onAddTag(tag))}
-                />
-              );
-            })}
-          </div>
+          <div className="mb-2 text-xs font-semibold">{t("notes:filter.tagPlaceholder")}</div>
+          <TagCombobox
+            className="border-line mx-0 mb-4 rounded-md border px-2 py-1"
+            allTags={allTags}
+            selected={tags}
+            onAdd={onAddTag}
+            onRemove={onRemoveTag}
+            onClear={onClearTags}
+            labels={{
+              placeholder: t("notes:filter.tagPlaceholder"),
+              clear: t("notes:filter.clearTags"),
+              clearTitle: t("notes:filter.clearTagsTitle"),
+              empty: t("notes:list.notFound"),
+            }}
+          />
 
           <label className="text-muted mb-3 flex items-center gap-3 text-xs">
             <span className="w-12">{t("notes:filter.period")}</span>
