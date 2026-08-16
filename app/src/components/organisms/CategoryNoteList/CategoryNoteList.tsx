@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
-import { formatDay } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { useCategoryNotes } from "@/lib/queries";
 
 export interface CategoryNoteListProps {
@@ -14,7 +14,7 @@ export interface CategoryNoteListProps {
 
 /** 選択カテゴリだけをcursor pageで読み、主領域全体に表示するノート一覧。 */
 export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryNoteListProps) {
-  const { t, i18n } = useTranslation("notes");
+  const { t, i18n } = useTranslation(["notes", "common"]);
   const query = useCategoryNotes(category);
   const notes = query.data?.pages.flatMap((page) => page.notes) ?? [];
   const total = query.data?.pages[0]?.total ?? 0;
@@ -86,7 +86,7 @@ export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryN
                 )}
                 {note.updated && (
                   <span className="text-muted flex-none text-[11px] tabular-nums">
-                    {formatDay(note.updated, i18n.language)}
+                    {formatDateTime(note.updated, i18n.language, t("common:date.unknown"))}
                   </span>
                 )}
               </button>

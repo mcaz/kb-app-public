@@ -7,7 +7,7 @@ import { Pager } from "@/components/molecules/Pager";
 import { RecentNoteRow } from "@/components/molecules/RecentNoteRow";
 import { StatTile } from "@/components/molecules/StatTile";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
-import { formatDay } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { paginate } from "@/lib/hits";
 import { useConnectState, useHomeState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
@@ -86,8 +86,8 @@ export function HomePage() {
               key={hit.id}
               hit={hit}
               datesLabel={t("common:date.createdUpdated", {
-                created: formatDay(hit.created, i18n.language),
-                updated: formatDay(hit.updated, i18n.language),
+                created: formatDateTime(hit.created, i18n.language, t("common:date.unknown")),
+                updated: formatDateTime(hit.updated, i18n.language, t("common:date.unknown")),
               })}
               onOpen={() => openNote(hit.id)}
             />
