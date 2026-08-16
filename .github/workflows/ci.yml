@@ -33,11 +33,16 @@ jobs:
   rust:
     name: コア(fmt・clippy・テスト・型生成の追従)
     runs-on: ubuntu-latest
+    env:
+      KB_GIT_LFS_BIN: ${{ github.workspace }}/app/src-tauri/binaries/git-lfs
     steps:
       - uses: actions/checkout@v5
         with:
           # 契約変更をコミット単位で検査するため、PRのbaseまで取得する。
           fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -62,6 +67,9 @@ jobs:
         run: |
           git config --global user.email "ci@kb-app.invalid"
           git config --global user.name "kb-app CI"
+      # Tauri build.rs は clippy 時にも externalBin の存在を検査する。
+      - name: checksum検証済みsidecarをRust検査にも用意
+        run: node scripts/prepare-git-lfs.mjs --target x86_64-unknown-linux-gnu
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
