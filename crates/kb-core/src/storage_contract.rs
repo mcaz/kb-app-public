@@ -356,7 +356,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let vault = Vault::create(dir.path().join("vault")).unwrap();
         vault
-            .propose(
+            .propose_for_test(
                 "再現テスト",
                 "索引は消せる。",
                 None,
@@ -381,7 +381,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let source = Vault::create(dir.path().join("source")).unwrap();
         let note_id = source
-            .propose(
+            .propose_for_test(
                 "クローン再現",
                 "[[別端末]]でも意味が同じ。",
                 Some("Storage Contract の受入テスト"),

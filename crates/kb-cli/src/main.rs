@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
 use kb_core::search::recent;
-use kb_core::vault::Vault;
+use kb_core::vault::{NoteProposal, Vault};
 
 #[derive(Parser)]
 #[command(
@@ -69,6 +69,9 @@ enum Command {
     Import {
         /// 例: ~/old-kb/vault ~/old-team/vault=team
         sources: Vec<String>,
+        /// 語彙にない新語を明示的に許す(個数・形の契約は常に強制)
+        #[arg(long)]
+        allow_new_tags: bool,
     },
     /// お手入れ(FR-C7)の一覧・承諾・却下(エンジニア向けの口)
     Care {
@@ -219,14 +222,25 @@ fn main() -> Result<()> {
         } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let body = body_or_stdin(body)?;
-            // 語彙の判定には索引が要る(MCP と同じ強制点を CLI にも通す)
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
-            kb_core::tags::check_vocabulary(&conn, &tags, allow_new_tags)?;
-            let id = vault.propose(&title, &body, description.as_deref(), &tags, &client)?;
+            let id = vault.propose(
+                &conn,
+                NoteProposal {
+                    title: &title,
+                    body: &body,
+                    description: description.as_deref(),
+                    tags: &tags,
+                    allow_new_tags,
+                    client: &client,
+                },
+            )?;
             println!("{id}");
         }
-        Command::Import { sources } => {
+        Command::Import {
+            sources,
+            allow_new_tags,
+        } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let parsed: Vec<kb_core::import::Source> = sources
                 .iter()
@@ -247,7 +261,7 @@ fn main() -> Result<()> {
                     }
                 })
                 .collect();
-            let report = kb_core::import::import(&vault, &parsed)?;
+            let report = kb_core::import::import(&vault, &parsed, allow_new_tags)?;
             println!("移植: {} 本", report.imported.len());
             for s in &report.skipped {
                 println!("スキップ: {s}");
@@ -393,5 +407,16 @@ mod tests {
             );
         }
         assert!(command.find_subcommand("propose").is_some());
+    }
+
+    #[test]
+    fn import_requires_an_explicit_flag_to_allow_new_vocabulary() {
+        let command = Cli::command();
+        let import = command.find_subcommand("import").unwrap();
+        assert!(
+            import
+                .get_arguments()
+                .any(|argument| argument.get_id() == "allow_new_tags")
+        );
     }
 }

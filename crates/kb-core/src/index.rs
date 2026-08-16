@@ -247,7 +247,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         vault
-            .propose(
+            .propose_for_test(
                 "認証 メモ",
                 "認証フローの見直し。[設計](/notes/設計.md) 参照。",
                 None,

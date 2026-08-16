@@ -924,7 +924,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         vault
-            .propose("メモ", "本文", None, &["test".into()], "test/client")
+            .propose_for_test("メモ", "本文", None, &["test".into()], "test/client")
             .unwrap();
         let st = backup_status(&vault).unwrap();
         assert!(st.remote.is_none());
@@ -953,7 +953,7 @@ mod tests {
         // デバイス A: vault 作成 → バックアップ先設定(初回 push)→ ノート追加(随時 push)
         let a = Vault::create(dir.path().join("a")).unwrap();
         set_backup_remote(&a, bare.to_str().unwrap()).unwrap();
-        a.propose(
+        a.propose_for_test(
             "同期テスト",
             "デバイス A で書いた。",
             None,
@@ -985,7 +985,7 @@ mod tests {
         run(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
         let b = Vault::open(dir.path().join("b")).unwrap();
         assert_eq!(b.list_note_files().len(), 1);
-        a.propose(
+        a.propose_for_test(
             "追加分",
             "A の2本目。",
             None,
@@ -1001,7 +1001,7 @@ mod tests {
         );
 
         // B 側で書いても push が通る(非 fast-forward 時の rebase 再試行経路)
-        a.propose(
+        a.propose_for_test(
             "三本目",
             "A の3本目(B の pull 後)。",
             None,
@@ -1009,7 +1009,7 @@ mod tests {
             "test/client",
         )
         .unwrap();
-        b.propose(
+        b.propose_for_test(
             "B のメモ",
             "デバイス B で書いた。",
             None,
@@ -1141,7 +1141,7 @@ mod tests {
         run(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
         let source = Vault::create(dir.path().join("source")).unwrap();
         source
-            .propose(
+            .propose_for_test(
                 "別端末",
                 "既存 Vault から来た。",
                 None,

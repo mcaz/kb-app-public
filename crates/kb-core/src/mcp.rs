@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::index::{open_db, sync};
 use crate::search::{recent, search};
-use crate::vault::Vault;
+use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
 
@@ -346,8 +346,17 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 .get("allow_new_tags")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            crate::tags::check_vocabulary(&conn, &tags, allow_new)?;
-            let id = vault.propose(title, body, description, &tags, client)?;
+            let id = vault.propose(
+                &conn,
+                NoteProposal {
+                    title,
+                    body,
+                    description,
+                    tags: &tags,
+                    allow_new_tags: allow_new,
+                    client,
+                },
+            )?;
             let added = if allow_new {
                 "\n新語を追加した。語彙の合意は「タグ運用」ノートに反映すること。"
             } else {
@@ -365,20 +374,21 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     .filter_map(|t| t.as_str().map(String::from))
                     .collect()
             });
-            if let Some(ts) = tags.as_deref() {
-                let allow_new = args
-                    .get("allow_new_tags")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                crate::tags::check_vocabulary(&conn, ts, allow_new)?;
-            }
+            let allow_new = args
+                .get("allow_new_tags")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             vault.agent_update_note(
-                id,
-                args.get("title").and_then(|v| v.as_str()),
-                args.get("body").and_then(|v| v.as_str()),
-                args.get("description").and_then(|v| v.as_str()),
-                tags.as_deref(),
-                client,
+                &conn,
+                NoteUpdate {
+                    id,
+                    title: args.get("title").and_then(|v| v.as_str()),
+                    body: args.get("body").and_then(|v| v.as_str()),
+                    description: args.get("description").and_then(|v| v.as_str()),
+                    tags: tags.as_deref(),
+                    allow_new_tags: allow_new,
+                    client,
+                },
             )?;
             Ok(format!("更新した: {id}"))
         }

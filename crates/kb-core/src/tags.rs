@@ -7,7 +7,8 @@
 //! 強制の階段(KB「AI 協働アプリの規律は文章でなく機構で確定させる」)に従い、
 //! 最弱の「常駐文章」から「スキーマ・コア検証」へ引き上げる。
 //!
-//! GUI はノートを作らないため、書き込み経路は MCP と CLI の2つ。どちらもここを通す。
+//! GUI はノートを作らない。MCP・CLI・旧 Markdown import の全書き込み経路をここへ
+//! 合流させ、入口ごとの検証忘れを作らない。
 
 use anyhow::{Result, bail};
 use rusqlite::Connection;
@@ -19,6 +20,20 @@ const MAX_LEN: usize = 20;
 /// 提示する語彙の上限。現状36語なので実質全量が出る — 増殖の構造的原因は
 /// 「起票時に頻度上位20語しか見えず、既存語に気づかず新語を作る」ことだった。
 const VOCAB_SHOWN: usize = 60;
+
+/// 契約1: ノートはタグを1〜4個持つ。語彙判定より前に構造を確定する。
+pub fn validate_structure(tags: &[String]) -> Result<()> {
+    if tags.is_empty() || tags.len() > 4 {
+        bail!(
+            "契約: ノートにはタグを1〜4個付ける(いまは {} 個)。既存の語彙に揃えること",
+            tags.len()
+        );
+    }
+    for tag in tags {
+        validate_shape(tag)?;
+    }
+    Ok(())
+}
 
 /// 契約1: タグは英小文字・数字・ハイフンのみ、先頭は英数。
 ///
@@ -120,67 +135,92 @@ pub fn glossary(conn: &Connection) -> Result<Glossary> {
     Ok(g)
 }
 
-/// 現在の語彙 = 現に使われているタグ ∪ 語彙表のタグ。
+/// 現在の語彙。「タグ運用」ノートがあれば、その語彙表だけを正本にする。
 ///
-/// 正本を設定ファイルに置かないのは、語彙が会話で育つものだから(運用の領域)。
-/// 索引と語彙ノートから毎回組み立てるので、メンテナンスは不要。
+/// 語彙ノートがまだ無い新規 vault だけは、現に使われているタグからブートストラップする。
+/// 語彙表と現用タグを無条件に合成すると、外部編集や旧 import で一度混入した語が自動的に
+/// 正式語彙へ昇格してしまうため、合意済みの語彙表がある場合は fallback を使わない。
 pub fn vocabulary(conn: &Connection) -> Result<BTreeSet<String>> {
-    let mut v: BTreeSet<String> = crate::search::tag_counts(conn, 1000)?
-        .into_iter()
-        .map(|(t, _)| t)
-        .collect();
-    v.extend(glossary(conn)?.entries.into_keys());
-    Ok(v)
+    Ok(validator(conn)?.vocabulary)
 }
 
-/// 語彙外のタグを拒否する(契約1の強制点)。
+/// 1回の検知・書き込みで使うタグ契約のスナップショット。
+///
+/// 語彙表が存在するかを語彙集合とは別に持つ。語彙表に有効な行が0件でも、それを
+/// 「新規 vault なので語彙検証をしない」と誤認しないため。
+pub(crate) struct TagValidator {
+    vocabulary: BTreeSet<String>,
+    enforce_vocabulary: bool,
+}
+
+pub(crate) fn validator(conn: &Connection) -> Result<TagValidator> {
+    let glossary = glossary(conn)?;
+    if glossary.note_id.is_some() {
+        return Ok(TagValidator {
+            vocabulary: glossary.entries.into_keys().collect(),
+            enforce_vocabulary: true,
+        });
+    }
+    let vocabulary: BTreeSet<String> = crate::search::tag_counts(conn, 1000)?
+        .into_iter()
+        .map(|(tag, _)| tag)
+        .collect();
+    let enforce_vocabulary = !vocabulary.is_empty();
+    Ok(TagValidator {
+        vocabulary,
+        enforce_vocabulary,
+    })
+}
+
+/// タグ契約を一括検証する唯一の入口(個数・形・語彙)。
 ///
 /// - `allow_new` が真なら通す。「新語は2本目のノートが見えたときだけ作る」という
 ///   合意を、明示のフラグとして機構化したもの(運用ノート v1・2026-08-12)
 /// - 語彙が空(新規 vault・索引が空)のときは素通し。立ち上げを塞がないため
-pub fn check_vocabulary(conn: &Connection, tags: &[String], allow_new: bool) -> Result<()> {
-    for t in tags {
-        validate_shape(t)?;
-    }
-    if allow_new {
-        return Ok(());
-    }
-    let vocab = vocabulary(conn)?;
-    if vocab.is_empty() {
-        return Ok(());
-    }
-    let unknown: Vec<&String> = tags.iter().filter(|t| !vocab.contains(*t)).collect();
-    if unknown.is_empty() {
-        return Ok(());
-    }
+pub fn validate(conn: &Connection, tags: &[String], allow_new: bool) -> Result<()> {
+    validator(conn)?.validate(tags, allow_new)
+}
 
-    let hints: Vec<String> = unknown
-        .iter()
-        .map(|t| {
-            let near = nearest(&vocab, t, 3);
-            if near.is_empty() {
-                format!("「{t}」")
-            } else {
-                format!("「{t}」→ 近い既存語: {}", near.join(" / "))
-            }
-        })
-        .collect();
-    let shown: Vec<&str> = vocab.iter().take(VOCAB_SHOWN).map(String::as_str).collect();
-    let more = vocab.len().saturating_sub(shown.len());
-    let tail = if more > 0 {
-        format!("(ほか{more}語)")
-    } else {
-        String::new()
-    };
-    bail!(
-        "契約: 語彙にないタグは使えない。{}\n現在の語彙({}語): {}{}\n\
+impl TagValidator {
+    pub(crate) fn validate(&self, tags: &[String], allow_new: bool) -> Result<()> {
+        validate_structure(tags)?;
+        if allow_new || !self.enforce_vocabulary {
+            return Ok(());
+        }
+        let vocab = &self.vocabulary;
+        let unknown: Vec<&String> = tags.iter().filter(|t| !vocab.contains(*t)).collect();
+        if unknown.is_empty() {
+            return Ok(());
+        }
+
+        let hints: Vec<String> = unknown
+            .iter()
+            .map(|t| {
+                let near = nearest(vocab, t, 3);
+                if near.is_empty() {
+                    format!("「{t}」")
+                } else {
+                    format!("「{t}」→ 近い既存語: {}", near.join(" / "))
+                }
+            })
+            .collect();
+        let shown: Vec<&str> = vocab.iter().take(VOCAB_SHOWN).map(String::as_str).collect();
+        let more = vocab.len().saturating_sub(shown.len());
+        let tail = if more > 0 {
+            format!("(ほか{more}語)")
+        } else {
+            String::new()
+        };
+        bail!(
+            "契約: 語彙にないタグは使えない。{}\n現在の語彙({}語): {}{}\n\
 既存語で8割合うならそれを使う。どうしても新語が要るなら allow_new_tags を true にして\
 呼び直す(合意は KB の「タグ運用」ノート)",
-        hints.join(" / "),
-        vocab.len(),
-        shown.join(" / "),
-        tail
-    );
+            hints.join(" / "),
+            vocab.len(),
+            shown.join(" / "),
+            tail
+        );
+    }
 }
 
 /// 編集距離の近い順に上位 n 件(表記ゆれの吸収が目的なので単純な実装で足りる)。
@@ -222,6 +262,7 @@ fn distance(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter::{Frontmatter, Note};
     use crate::index::{open_db, sync};
     use crate::vault::Vault;
 
@@ -241,6 +282,20 @@ mod tests {
         assert!(validate_shape("open questions").is_err()); // 空白
         assert!(validate_shape("-lead").is_err()); // 先頭がハイフン
         assert!(validate_shape("").is_err());
+    }
+
+    #[test]
+    fn cardinality_is_enforced_even_when_new_tags_are_allowed() {
+        let (_d, _v, conn) = setup();
+        assert!(validate(&conn, &[], true).is_err());
+        assert!(
+            validate(
+                &conn,
+                &["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
+                true,
+            )
+            .is_err()
+        );
     }
 
     /// 2026-08-12 の事故の再現テスト。語彙節の外にある普通の本文
@@ -271,7 +326,7 @@ mod tests {
 - ops: 日々の運用 — これは語彙表の外なので拾わない
 ";
         vault
-            .propose(
+            .propose_for_test(
                 "タグ運用 — 合意の置き場",
                 body,
                 None,
@@ -288,13 +343,33 @@ mod tests {
         );
         assert_eq!(g.skipped, vec!["知見管理".to_string()]);
         assert!(g.note_id.is_some());
+
+        // 語彙表がある vault では、外部編集で混入した現用タグを正式語彙へ昇格させない。
+        let mut front = Frontmatter::new_note("混入");
+        front.origin = Some("agent".into());
+        front.tags = vec!["stray".into()];
+        vault
+            .write_note_fixture(
+                "notes/混入",
+                &Note {
+                    front,
+                    body: "本文".into(),
+                },
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+        assert_eq!(
+            vocabulary(&conn).unwrap(),
+            BTreeSet::from(["kb-app".to_string(), "knowledge-base".to_string()])
+        );
+        assert!(validate(&conn, &["stray".into()], false).is_err());
     }
 
     #[test]
     fn unknown_tag_is_rejected_with_suggestions() {
         let (_d, vault, conn) = setup();
         vault
-            .propose(
+            .propose_for_test(
                 "既存ノート",
                 "本文",
                 None,
@@ -305,25 +380,44 @@ mod tests {
         sync(&vault, &conn).unwrap();
 
         // 既存語に近い新語は拒否され、近い語が示される
-        let err = check_vocabulary(&conn, &["knowledge-bases".into()], false).unwrap_err();
+        let err = validate(&conn, &["knowledge-bases".into()], false).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("語彙にないタグは使えない"), "{msg}");
         assert!(msg.contains("knowledge-base"), "{msg}");
         // 既存語なら通る
-        check_vocabulary(&conn, &["kb-app".into()], false).unwrap();
+        validate(&conn, &["kb-app".into()], false).unwrap();
         // 明示フラグがあれば新語も通る
-        check_vocabulary(&conn, &["brand-new".into()], true).unwrap();
+        validate(&conn, &["brand-new".into()], true).unwrap();
     }
 
     #[test]
     fn empty_vocabulary_does_not_block_bootstrap() {
         let (_d, _v, conn) = setup();
-        check_vocabulary(&conn, &["anything".into()], false).unwrap();
+        validate(&conn, &["anything".into()], false).unwrap();
+    }
+
+    #[test]
+    fn empty_glossary_still_enforces_the_vocabulary_boundary() {
+        let (_d, vault, conn) = setup();
+        vault
+            .propose_for_test(
+                "タグ運用 — 合意の置き場",
+                "## 語彙\n\n| タグ | 説明 |\n|---|---|\n",
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+
+        assert!(vocabulary(&conn).unwrap().is_empty());
+        assert!(validate(&conn, &["anything".into()], false).is_err());
+        validate(&conn, &["anything".into()], true).unwrap();
     }
 
     #[test]
     fn shape_is_enforced_even_when_new_tags_are_allowed() {
         let (_d, _v, conn) = setup();
-        assert!(check_vocabulary(&conn, &["日本語".into()], true).is_err());
+        assert!(validate(&conn, &["日本語".into()], true).is_err());
     }
 }
