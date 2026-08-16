@@ -56,3 +56,14 @@ Git で追跡される `.kb-workspace` の永続 ID が既にある。
   `gh` CLIの設定有無に依存しない。
 - 復元の再試行は検証済みobjectを再利用するため、大容量Vaultでも最初から全件を取り直さない。
   一方、Git履歴のcloneとStorage Contract検査は毎回やり直し、古い一時cloneを信用しない。
+
+## 実受入(2026-08-16)
+
+- `mcaz` 所有の OAuth App `kb-app` を登録し、Device Flow と期限付き access token を有効化した。
+  client secret は作成していない。
+- `repo` scope を認可する画面を確認し、`/user` の検証後に `mcaz` としてOSキーチェーンへ保存できた。
+  Organizationへのアクセス要求は行っていない。
+- 非機密 fixture 専用の `mcaz/kb-app-oauth-acceptance-20260816` をアプリのAPI経路で作成し、
+  `private=true`、`visibility=private`、`permissions.push=true` を再確認してから初回pushした。
+- 同じHTTPS clone URLから別ディレクトリへ復元し、Storage Contractとfixtureノートの内容を確認した。
+  source / restored双方のremote URLとGit設定を走査し、tokenや認証headerが残っていないことを確認した。
