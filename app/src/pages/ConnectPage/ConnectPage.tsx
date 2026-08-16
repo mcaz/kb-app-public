@@ -5,28 +5,36 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/atoms/ui/button";
 import { ConnectCard } from "@/components/molecules/ConnectCard";
+import { GitHubAuthPanel } from "@/components/organisms/GitHubAuthPanel";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
 import { useEmbedProgress } from "@/hooks/useEmbedProgress";
-import { useErrorText } from "@/hooks/useErrorText";
+import { useBackupErrorText, useErrorText } from "@/hooks/useErrorText";
 import {
   useBackupNow,
+  useBackupCreateRepository,
   useBackupSetRemote,
   useConnectDesktop,
   useConnectState,
   useEmbedEnable,
+  useGitHubAuthState,
 } from "@/lib/queries";
 
 /** 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)。 */
 export function ConnectPage() {
   const { t } = useTranslation(["connect", "common"]);
   const { data: state, isPending } = useConnectState();
+  const { data: githubAuth } = useGitHubAuthState();
   const errorText = useErrorText();
+  const backupErrorText = useBackupErrorText();
   const embedProgress = useEmbedProgress();
   const connectDesktop = useConnectDesktop();
   const embedEnable = useEmbedEnable();
   const backupSetRemote = useBackupSetRemote();
+  const backupCreateRepository = useBackupCreateRepository();
   const backupNow = useBackupNow();
   const [remoteUrl, setRemoteUrl] = useState("");
+  const [repositoryName, setRepositoryName] = useState("kb-vault");
+  const [backupMode, setBackupMode] = useState<"create" | "existing">("create");
 
   if (isPending || !state) {
     return (
@@ -125,14 +133,18 @@ export function ConnectPage() {
               )}
               {state.sync_error && (
                 <div className="text-danger mb-3 text-[12.5px]">
-                  {t("backup.error", { error: state.sync_error })}
+                  {t("backup.error", {
+                    error: backupErrorText(state.sync_error_kind, state.sync_error),
+                  })}
                 </div>
               )}
             </>
           }
         >
-          {state.backup.remote ? (
+          <GitHubAuthPanel heading />
+          {githubAuth?.signed_in && state.backup.remote ? (
             <Button
+              className="mt-2"
               variant="primary"
               size="sm"
               disabled={backupNow.isPending}
@@ -145,20 +157,58 @@ export function ConnectPage() {
             >
               {t("backup.syncNow")}
             </Button>
-          ) : (
+          ) : githubAuth?.signed_in ? (
             <>
-              <input
-                className="border-line bg-chip text-ink mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs"
-                placeholder={t("backup.urlPlaceholder")}
-                aria-label={t("backup.urlPlaceholder")}
-                value={remoteUrl}
-                onChange={(e) => setRemoteUrl(e.target.value)}
-              />
+              <div className="mt-2 mb-2 flex gap-1">
+                <Button
+                  variant={backupMode === "create" ? "primary" : "default"}
+                  size="sm"
+                  onClick={() => setBackupMode("create")}
+                >
+                  {t("backup.createMode")}
+                </Button>
+                <Button
+                  variant={backupMode === "existing" ? "primary" : "default"}
+                  size="sm"
+                  onClick={() => setBackupMode("existing")}
+                >
+                  {t("backup.existingMode")}
+                </Button>
+              </div>
+              {backupMode === "create" ? (
+                <input
+                  className="border-line bg-chip text-ink mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs"
+                  placeholder={t("backup.namePlaceholder")}
+                  aria-label={t("backup.namePlaceholder")}
+                  value={repositoryName}
+                  onChange={(e) => setRepositoryName(e.target.value)}
+                />
+              ) : (
+                <input
+                  className="border-line bg-chip text-ink mb-2 w-full rounded-md border px-2.5 py-1.5 text-xs"
+                  placeholder={t("backup.urlPlaceholder")}
+                  aria-label={t("backup.urlPlaceholder")}
+                  value={remoteUrl}
+                  onChange={(e) => setRemoteUrl(e.target.value)}
+                />
+              )}
               <Button
                 variant="primary"
                 size="sm"
-                disabled={backupSetRemote.isPending}
+                disabled={backupSetRemote.isPending || backupCreateRepository.isPending}
                 onClick={() => {
+                  if (backupMode === "create") {
+                    const name = repositoryName.trim();
+                    if (!name) {
+                      toast(t("backup.needName"));
+                      return;
+                    }
+                    backupCreateRepository.mutate(name, {
+                      onSuccess: () => toast(t("backup.done")),
+                      onError: (e) => toast(errorText(e)),
+                    });
+                    return;
+                  }
                   const url = remoteUrl.trim();
                   if (!url) {
                     toast(t("backup.needUrl"));
@@ -170,10 +220,10 @@ export function ConnectPage() {
                   });
                 }}
               >
-                {t("backup.connect")}
+                {backupMode === "create" ? t("backup.create") : t("backup.connect")}
               </Button>
             </>
-          )}
+          ) : null}
         </ConnectCard>
       </div>
     </SinglePaneLayout>

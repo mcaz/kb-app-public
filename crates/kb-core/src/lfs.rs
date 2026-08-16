@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::artifact::{ContentHash, Hasher};
+use crate::backup::{BackupFailureKind, failure, git_failure};
 use crate::ledger;
 use crate::vault::Vault;
 
@@ -42,13 +43,25 @@ fn rel(hash: &ContentHash) -> String {
 }
 
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .args(args)
         .current_dir(&vault.root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-        .output()
-        .context("git 実行")
+        .env("GCM_INTERACTIVE", "Never");
+    let accesses_remote = args.starts_with(&["lfs", "push"])
+        || args.starts_with(&["lfs", "pull"])
+        || args.starts_with(&["lfs", "fetch"]);
+    if accesses_remote {
+        let repo = git2::Repository::open(&vault.root)?;
+        if let Ok(remote) = repo.find_remote("origin")
+            && let Some(url) = remote.url()
+        {
+            crate::github_auth::configure_git_auth(&mut command, url)?;
+        }
+    }
+    command.output().context("git 実行")
 }
 
 /// LFS の置き場にある実体のパス。LFS の配置は `objects/aa/bb/<oid>`。
@@ -164,6 +177,26 @@ fn shrink_to_pointer(vault: &Vault, hash: &ContentHash) -> Result<()> {
     Ok(())
 }
 
+/// LFS object 1件を origin へ送る。
+///
+/// Git ref より先に実体の到達を確認するため、通常の `git push` の pre-push hookへ
+/// 任せず object ID を明示する。成功後にだけ manifest を含む ref を push すれば、
+/// 別端末から見える台帳が「remote に実体が無い」状態を作らない。
+pub fn push_object(vault: &Vault, hash: &ContentHash) -> Result<()> {
+    let out = git(
+        vault,
+        &["lfs", "push", "--object-id", "origin", hash.as_str()],
+    )?;
+    if !out.status.success() {
+        return Err(git_failure(
+            "LFS upload に失敗",
+            &String::from_utf8_lossy(&out.stderr),
+            BackupFailureKind::LfsUpload,
+        ));
+    }
+    Ok(())
+}
+
 /// 実体を取り寄せる。
 ///
 /// **`-X ""` が要る。** `.lfsconfig` の `fetchexclude = *` は `-I` だけでは
@@ -173,15 +206,150 @@ pub fn fetch(vault: &Vault, hash: &ContentHash) -> Result<()> {
     let rel = rel(hash);
     let out = git(vault, &["lfs", "pull", "-I", &rel, "-X", ""])?;
     if !out.status.success() {
-        bail!(
-            "取り寄せに失敗: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        return Err(git_failure(
+            "取り寄せに失敗",
+            &String::from_utf8_lossy(&out.stderr),
+            BackupFailureKind::RemoteObjectMissing,
+        ));
     }
     if !has(vault, hash) {
-        bail!("取り寄せたが実体が見つからない");
+        return Err(failure(
+            BackupFailureKind::RemoteObjectMissing,
+            format!("取り寄せたが実体が見つからない: {hash}"),
+        ));
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestoreReport {
+    pub total: usize,
+    pub fetched: usize,
+    pub reused: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectRestoreProgress {
+    pub completed: usize,
+    pub total: usize,
+    pub fetched: usize,
+    pub reused: usize,
+}
+
+/// fresh clone にある全 `full` Artifact を明示的に復元して hash 照合する。
+///
+/// `.lfsconfig` は通常の clone で実体を取らないため、この一括処理を通ったときだけ
+/// 「別端末で復元済み」と言える。先に Storage Contract を検査し、壊れた台帳を一覧処理が
+/// 黙って飛ばす余地を作らない。同じ content hash は1回だけ取得する。
+pub fn restore_all(vault: &Vault) -> Result<RestoreReport> {
+    restore_all_with_progress(vault, |_| {})
+}
+
+/// 取得済みobjectはworkspace ID単位のLFS storageで再利用する。途中失敗で一時cloneが
+/// 消えても実体は残るため、同じVaultを再度復元すると未完了分から再開できる。
+pub fn restore_all_with_progress(
+    vault: &Vault,
+    mut progress: impl FnMut(ObjectRestoreProgress),
+) -> Result<RestoreReport> {
+    if let Err(error) = crate::storage_contract::verify(vault) {
+        return Err(failure(
+            BackupFailureKind::InvalidVault,
+            format!("復元元が Storage Contract を満たさない: {error}"),
+        ));
+    }
+    crate::connect::ensure_vault_config(vault)?;
+    let workspace_id = crate::workspace::stored_workspace_id(vault).map_err(|error| {
+        failure(
+            BackupFailureKind::InvalidVault,
+            format!("復元元の workspace ID を確認できない: {error}"),
+        )
+    })?;
+    let ledger = crate::ledger::Ledger::open(vault, &workspace_id).map_err(|error| {
+        failure(
+            BackupFailureKind::InvalidVault,
+            format!("復元元の Artifact 台帳を確認できない: {error}"),
+        )
+    })?;
+    let hashes: std::collections::BTreeSet<ContentHash> = ledger
+        .list()
+        .into_iter()
+        .filter(|manifest| manifest.policy.sync == crate::artifact::SyncPolicy::Full)
+        .filter_map(|manifest| match manifest.locator {
+            crate::artifact::Locator::Managed { hash } => Some(hash),
+            _ => None,
+        })
+        .collect();
+    let mut fetched = 0;
+    let mut reused = 0;
+    progress(ObjectRestoreProgress {
+        completed: 0,
+        total: hashes.len(),
+        fetched,
+        reused,
+    });
+    for (index, hash) in hashes.iter().enumerate() {
+        let existing = verify(vault, hash).map_err(|error| {
+            failure(
+                BackupFailureKind::IntegrityMismatch,
+                format!("取得済み実体を検証できない({hash}): {error}"),
+            )
+        })?;
+        if existing == crate::store::Verified::Ok {
+            reused += 1;
+        } else {
+            // 中断された転送が不完全なobjectを残しても、再実行時にそれを完成品として
+            // 扱わない。hash不一致のcacheだけを捨て、この1件を取り直す。
+            if existing == crate::store::Verified::Mismatch {
+                discard_object(vault, hash)?;
+            }
+            fetch(vault, hash)?;
+            fetched += 1;
+        }
+        let restored = verify(vault, hash).map_err(|error| {
+            failure(
+                BackupFailureKind::IntegrityMismatch,
+                format!("復元した実体を検証できない({hash}): {error}"),
+            )
+        })?;
+        match restored {
+            crate::store::Verified::Ok => {}
+            crate::store::Verified::Missing => {
+                return Err(failure(
+                    BackupFailureKind::RemoteObjectMissing,
+                    format!("復元後も実体がない: {hash}"),
+                ));
+            }
+            crate::store::Verified::Mismatch => {
+                return Err(failure(
+                    BackupFailureKind::IntegrityMismatch,
+                    format!("復元した実体の hash が一致しない: {hash}"),
+                ));
+            }
+        }
+        progress(ObjectRestoreProgress {
+            completed: index + 1,
+            total: hashes.len(),
+            fetched,
+            reused,
+        });
+    }
+    Ok(RestoreReport {
+        total: hashes.len(),
+        fetched,
+        reused,
+    })
+}
+
+fn discard_object(vault: &Vault, hash: &ContentHash) -> Result<()> {
+    let path = object_path(vault, hash)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(failure(
+            BackupFailureKind::IntegrityMismatch,
+            format!("壊れた実体を再取得のため破棄できない: {error}"),
+        )),
+    }
 }
 
 /// 実体を読む。無ければ `None`(呼び出し側が「この端末にない」として扱う)。
@@ -312,5 +480,119 @@ mod tests {
         assert!(!has(&vault, &absent));
         assert!(read(&vault, &absent).unwrap().is_none());
         assert_eq!(verify(&vault, &absent).unwrap(), Verified::Missing);
+    }
+
+    #[test]
+    fn fresh_clone_restores_every_full_object_and_verifies_hashes() {
+        if !lfs_ready() {
+            eprintln!("git-lfs が無いので飛ばす");
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("backup.git");
+        let run = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .env("GIT_LFS_SKIP_SMUDGE", "1")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
+
+        let source = Vault::create(dir.path().join("source")).unwrap();
+        ensure_vault_config(&source).unwrap();
+        crate::connect::set_backup_remote(&source, bare.to_str().unwrap()).unwrap();
+        let workspace_id = crate::workspace::stored_workspace_id(&source).unwrap();
+        let stores = crate::store::Stores::at(dir.path().join("stores"), &workspace_id);
+        let ledger =
+            crate::ledger::Ledger::at(source.root.clone(), dir.path().join("source-local-only"));
+        let input = dir.path().join("full.bin");
+        let bytes: Vec<u8> = (0..350_000).map(|i| (i % 239) as u8).collect();
+        fs::write(&input, &bytes).unwrap();
+        let taken = crate::intake::take(
+            &source,
+            &stores,
+            &ledger,
+            &workspace_id,
+            &input,
+            crate::intake::Request {
+                note_id: None,
+                display_name: "full.bin".into(),
+                media_type: "application/octet-stream".into(),
+                role: crate::artifact::Role::File,
+                policy: None,
+                ref_name: None,
+                supersedes: None,
+                origin: "test".into(),
+                by: "test/agent".into(),
+                at: "2026-08-16T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(taken.delivery, crate::intake::DeliveryStatus::Confirmed);
+        // 同一プロセスのテストは workspace ID ごとの LFS storage を共有する。
+        // 送信後に手元の object を消して、別端末の fresh clone を再現する。
+        fs::remove_file(object_path(&source, &taken.manifest.hash).unwrap()).unwrap();
+        let branch = git2::Repository::open(&source.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+        run(
+            &bare,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+        );
+
+        run(dir.path(), &["clone", bare.to_str().unwrap(), "restored"]);
+        let restored = Vault::open(dir.path().join("restored")).unwrap();
+        ensure_vault_config(&restored).unwrap();
+        assert!(!has(&restored, &taken.manifest.hash));
+        let report = restore_all(&restored).unwrap();
+        assert_eq!(report.total, 1);
+        assert_eq!(report.fetched, 1);
+        assert_eq!(report.reused, 0);
+        assert_eq!(
+            verify(&restored, &taken.manifest.hash).unwrap(),
+            Verified::Ok
+        );
+
+        // 再試行は一時cloneのpathではなくworkspace ID単位のstoreを引き継ぐ。
+        // 別のfresh cloneでも検証済みobjectを再取得しない。
+        run(
+            dir.path(),
+            &["clone", bare.to_str().unwrap(), "restored-again"],
+        );
+        let restored_again = Vault::open(dir.path().join("restored-again")).unwrap();
+        ensure_vault_config(&restored_again).unwrap();
+        let mut progress = Vec::new();
+        let resumed =
+            restore_all_with_progress(&restored_again, |state| progress.push(state)).unwrap();
+        assert_eq!(resumed.total, 1);
+        assert_eq!(resumed.fetched, 0);
+        assert_eq!(resumed.reused, 1);
+        assert_eq!(progress.first().unwrap().completed, 0);
+        assert_eq!(progress.last().unwrap().completed, 1);
+
+        // 中断等でcacheが壊れてもhashだけで再利用せず、そのobjectだけ取り直す。
+        let cached = object_path(&restored_again, &taken.manifest.hash).unwrap();
+        // file:// LFS remote はlocal objectをhard-linkすることがある。unlinkしてから
+        // 別inodeの壊れたcacheを置き、remote側の正本まで書き換えない。
+        fs::remove_file(&cached).unwrap();
+        fs::write(&cached, b"incomplete transfer").unwrap();
+        let repaired = restore_all(&restored_again).unwrap();
+        assert_eq!(repaired.fetched, 1);
+        assert_eq!(repaired.reused, 0);
+        assert_eq!(
+            verify(&restored_again, &taken.manifest.hash).unwrap(),
+            Verified::Ok
+        );
     }
 }

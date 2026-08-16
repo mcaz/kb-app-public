@@ -6,11 +6,14 @@ pub use rusqlite;
 
 pub mod artifact;
 pub mod artifact_search;
+pub mod backup;
 pub mod care;
 pub mod connect;
 pub mod embed;
 pub mod favorites;
 pub mod frontmatter;
+pub mod github;
+pub mod github_auth;
 pub mod import;
 pub mod index;
 pub mod intake;

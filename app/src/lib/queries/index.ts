@@ -26,6 +26,9 @@ export const useGraphData = () => useQuery({ queryKey: queryKeys.graph, queryFn:
 export const useConnectState = () =>
   useQuery({ queryKey: queryKeys.connect, queryFn: api.connectState });
 
+export const useGitHubAuthState = (enabled = true) =>
+  useQuery({ queryKey: queryKeys.githubAuth, queryFn: api.githubAuthState, enabled });
+
 export const useNote = (id: string | null) =>
   useQuery({
     queryKey: queryKeys.note(id ?? ""),
@@ -61,6 +64,19 @@ export function useOnboard() {
     mutationFn: api.onboard,
     onSuccess: async () => {
       await qc.invalidateQueries();
+    },
+  });
+}
+
+export function useOnboardExisting() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (url: string) => api.onboardExisting(url),
+    onSuccess: async () => {
+      await qc.invalidateQueries();
+    },
+    onError: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.githubAuth });
     },
   });
 }
@@ -186,6 +202,22 @@ export function useBackupSetRemote() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.connect });
     },
+    onSettled: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.githubAuth });
+    },
+  });
+}
+
+export function useBackupCreateRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.backupCreateRepository(name),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.connect });
+    },
+    onSettled: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.githubAuth });
+    },
   });
 }
 
@@ -196,8 +228,33 @@ export function useBackupNow() {
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.connect });
     },
+    onSettled: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.githubAuth });
+    },
   });
 }
+
+export function useGitHubSignIn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.githubSignIn,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.githubAuth });
+    },
+  });
+}
+
+export function useGitHubSignOut() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.githubSignOut,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.githubAuth });
+    },
+  });
+}
+
+export const useGitHubOpenDevicePage = () => useMutation({ mutationFn: api.githubOpenDevicePage });
 
 export const useLaunchAi = () =>
   useMutation({ mutationFn: (id: string | null) => api.launchAi(id) });

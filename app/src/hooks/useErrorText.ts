@@ -3,6 +3,59 @@ import { useTranslation } from "react-i18next";
 
 import { isKbError } from "@/lib/api";
 
+import type { BackupFailureKind } from "@/lib/bindings";
+
+function backupErrorKey(kind: BackupFailureKind) {
+  switch (kind) {
+    case "authentication":
+      return "errors.backupAuthentication";
+    case "permission":
+      return "errors.backupPermission";
+    case "privacy_check":
+      return "errors.backupPrivacyCheck";
+    case "network":
+      return "errors.backupNetwork";
+    case "invalid_repository":
+      return "errors.backupInvalidRepository";
+    case "remote_missing":
+      return "errors.backupRemoteMissing";
+    case "quota":
+      return "errors.backupQuota";
+    case "lfs_unavailable":
+      return "errors.backupLfsUnavailable";
+    case "remote_object_missing":
+      return "errors.backupRemoteObjectMissing";
+    case "integrity_mismatch":
+      return "errors.backupIntegrityMismatch";
+    case "invalid_vault":
+      return "errors.backupInvalidVault";
+    case "workspace_mismatch":
+      return "errors.backupWorkspaceMismatch";
+    case "destination_exists":
+      return "errors.backupDestinationExists";
+    case "commit":
+      return "errors.backupCommit";
+    case "lfs_upload":
+      return "errors.backupLfsUpload";
+    case "git_push":
+      return "errors.backupGitPush";
+    case "git_pull":
+      return "errors.backupGitPull";
+    case "git_conflict":
+      return "errors.backupGitConflict";
+  }
+}
+
+/** 同期sidecarとコマンド失敗に共通の分類を、同じ案内文へ変換する。 */
+export function useBackupErrorText(): (kind: BackupFailureKind | null, fallback: string) => string {
+  const { t } = useTranslation();
+  return useCallback(
+    (kind, fallback) =>
+      kind ? t(backupErrorKey(kind)) : t("errors.backupFailed", { message: fallback }),
+    [t],
+  );
+}
+
 /**
  * 例外を画面に出す文字列へ。
  *
@@ -12,6 +65,7 @@ import { isKbError } from "@/lib/api";
  */
 export function useErrorText(): (e: unknown) => string {
   const { t } = useTranslation();
+  const backupErrorText = useBackupErrorText();
 
   return useCallback(
     (e: unknown) => {
@@ -41,7 +95,7 @@ export function useErrorText(): (e: unknown) => string {
         case "claude_desktop_launch_failed":
           return t("errors.claudeDesktopLaunchFailed");
         case "backup_failed":
-          return t("errors.backupFailed", { message: d.message });
+          return backupErrorText(d.kind, d.message);
         case "embed_failed":
           return t("errors.embedFailed", { message: d.message });
         case "vault_unavailable":
@@ -50,6 +104,6 @@ export function useErrorText(): (e: unknown) => string {
           return d.message;
       }
     },
-    [t],
+    [backupErrorText, t],
   );
 }

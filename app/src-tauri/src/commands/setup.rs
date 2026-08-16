@@ -3,7 +3,8 @@
 use kb_core::registry::Registry;
 use kb_core::vault::Vault;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_specta::Event;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -13,6 +14,28 @@ pub struct SetupState {
     needs_onboarding: bool,
     vault_name: Option<String>,
     vault_path: Option<String>,
+}
+
+/// 既存Vaultの検査・clone・Full Artifact復元の進捗。
+#[derive(Clone, Serialize, specta::Type, Event)]
+pub struct VaultRestoreProgress {
+    phase: kb_core::connect::RestorePhase,
+    completed: usize,
+    total: usize,
+    fetched: usize,
+    reused: usize,
+}
+
+impl From<kb_core::connect::RestoreProgress> for VaultRestoreProgress {
+    fn from(progress: kb_core::connect::RestoreProgress) -> Self {
+        Self {
+            phase: progress.phase,
+            completed: progress.completed,
+            total: progress.total,
+            fetched: progress.fetched,
+            reused: progress.reused,
+        }
+    }
 }
 
 #[tauri::command]
@@ -53,6 +76,48 @@ pub fn onboard(state: State<'_, AppState>) -> AppResult<SetupState> {
         .map_err(AppError::from)?;
     reg.save().map_err(AppError::from)?;
     // 作ったばかりの vault を次のコマンドから使えるようにする
+    state.reset();
+    setup_state()
+}
+
+/// 2台目以降: private GitHub repository にある既存 Vault を検査・復元して登録する。
+/// 復元先は未使用 path を選び、既存フォルダへ overlay しない。
+#[tauri::command]
+#[specta::specta]
+pub fn onboard_existing(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> AppResult<SetupState> {
+    let repository = kb_core::github::parse_repository_url(&url).map_err(AppError::backup)?;
+    let root = dirs::home_dir()
+        .ok_or_else(|| AppError::VaultUnavailable {
+            message: "home が特定できない".into(),
+        })?
+        .join("kb");
+    let mut registry = Registry::load().map_err(AppError::from)?;
+    let (name, path) = (1usize..)
+        .map(|number| {
+            let name = if number == 1 {
+                repository.repo.clone()
+            } else {
+                format!("{}-{number}", repository.repo)
+            };
+            let path = root.join(&name);
+            (name, path)
+        })
+        .find(|(name, path)| {
+            !path.exists() && !registry.vaults.iter().any(|entry| entry.name == *name)
+        })
+        .expect("無限の連番から未使用名が必ず見つかる");
+
+    kb_core::connect::clone_existing_vault_with_progress(&url, &path, |progress| {
+        // 進捗通知が閉じた画面へ届かなくても、復元そのものは続ける。
+        let _ = VaultRestoreProgress::from(progress).emit(&app);
+    })
+    .map_err(AppError::backup)?;
+    registry.add(&name, path).map_err(AppError::from)?;
+    registry.save().map_err(AppError::from)?;
     state.reset();
     setup_state()
 }

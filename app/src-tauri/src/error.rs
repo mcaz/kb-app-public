@@ -43,8 +43,11 @@ pub enum AppError {
     ClaudeDesktopNotFound,
     /// Claude Desktop を起動できなかった。
     ClaudeDesktopLaunchFailed,
-    /// バックアップ(git)の失敗。
-    BackupFailed { message: String },
+    /// バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。
+    BackupFailed {
+        kind: Option<kb_core::backup::BackupFailureKind>,
+        message: String,
+    },
     /// かしこい検索の準備に失敗。
     EmbedFailed { message: String },
     /// 分類できないもの。message はコアが返した文言(いまは日本語)。
@@ -72,7 +75,7 @@ impl std::fmt::Display for AppError {
             Self::ClipboardImageTooLarge => write!(f, "クリップボードの画像が大きすぎる"),
             Self::ClaudeDesktopNotFound => write!(f, "Claude Desktop が見つからない"),
             Self::ClaudeDesktopLaunchFailed => write!(f, "Claude Desktop を起動できなかった"),
-            Self::BackupFailed { message } => write!(f, "バックアップに失敗: {message}"),
+            Self::BackupFailed { message, .. } => write!(f, "バックアップに失敗: {message}"),
             Self::EmbedFailed { message } => write!(f, "かしこい検索の準備に失敗: {message}"),
         }
     }
@@ -84,6 +87,9 @@ impl std::error::Error for AppError {}
 /// ただし Artifact 層だけは型付きなので、包まれていても取り出して訳せるようにする。
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
+        if kb_core::backup::failure_kind(&e).is_some() {
+            return Self::backup(e);
+        }
         match e.downcast_ref::<ArtifactError>() {
             Some(artifact) => artifact.clone().into(),
             None => Self::Unexpected {
@@ -125,6 +131,31 @@ impl AppError {
             message: e.to_string(),
         }
     }
+
+    pub fn backup(error: anyhow::Error) -> Self {
+        Self::BackupFailed {
+            kind: kb_core::backup::failure_kind(&error),
+            message: error.to_string(),
+        }
+    }
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_reason_reaches_the_serialized_app_error() {
+        let error =
+            kb_core::github::parse_repository_url("https://example.com/not-github").unwrap_err();
+        match AppError::backup(error) {
+            AppError::BackupFailed { kind, .. } => assert_eq!(
+                kind,
+                Some(kb_core::backup::BackupFailureKind::InvalidRepository)
+            ),
+            other => panic!("別のエラーへ変換された: {other}"),
+        }
+    }
+}

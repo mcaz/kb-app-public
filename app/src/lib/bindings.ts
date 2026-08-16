@@ -9,6 +9,11 @@ export const commands = {
 	setupState: () => typedError<SetupState, AppError>(__TAURI_INVOKE("setup_state")),
 	/**  最初の vault を自動作成(既定名「わたしのノート」実体 my-notes)。 */
 	onboard: () => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard")),
+	/**
+	 *  2台目以降: private GitHub repository にある既存 Vault を検査・復元して登録する。
+	 *  復元先は未使用 path を選び、既存フォルダへ overlay しない。
+	 */
+	onboardExisting: (url: string) => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard_existing", { url })),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
@@ -43,6 +48,8 @@ export const commands = {
 	warn_over_bytes: number | null,
 	/**  仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す */
 	forced_local_only: boolean,
+	/**  Full Artifact の remote 到達状態。失敗の詳細は同期状態に集約する。 */
+	delivery: DeliveryStatus,
 } | null, AppError>(__TAURI_INVOKE("file_add_from_clipboard", { noteId })),
 	/**  このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。 */
 	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
@@ -61,9 +68,17 @@ export const commands = {
 	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */
 	legacyOpen: (noteId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("legacy_open", { noteId, name })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
+	/**  Vault の有無に依存しないため、初回の「既存 Vault を復元」画面からも呼べる。 */
+	githubAuthState: () => typedError<GitHubAuthState, AppError>(__TAURI_INVOKE("github_auth_state")),
+	/**  OAuth device flow は polling を含む blocking 処理なので同期 command にする。 */
+	githubSignIn: () => typedError<GitHubAuthState, AppError>(__TAURI_INVOKE("github_sign_in")),
+	githubSignOut: () => typedError<null, AppError>(__TAURI_INVOKE("github_sign_out")),
+	/**  Webview に任意 URL を開く権限を渡さず、GitHub の固定ページだけを OS へ渡す。 */
+	githubOpenDevicePage: () => typedError<null, AppError>(__TAURI_INVOKE("github_open_device_page")),
 	/**  Claude Desktop の設定にこの実行ファイルを MCP サーバーとして登録する。 */
 	connectDesktop: () => typedError<null, AppError>(__TAURI_INVOKE("connect_desktop")),
 	backupNow: () => typedError<string, AppError>(__TAURI_INVOKE("backup_now")),
+	backupCreateRepository: (name: string) => typedError<null, AppError>(__TAURI_INVOKE("backup_create_repository", { name })),
 	backupSetRemote: (url: string) => typedError<null, AppError>(__TAURI_INVOKE("backup_set_remote", { url })),
 	/**
 	 *  かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
@@ -80,6 +95,8 @@ export const commands = {
 /** Events */
 export const events = {
 	embedProgress: makeEvent<EmbedProgress>("embed-progress"),
+	gitHubDeviceAuthorization: makeEvent<GitHubDeviceAuthorization>("git-hub-device-authorization"),
+	vaultRestoreProgress: makeEvent<VaultRestoreProgress>("vault-restore-progress"),
 };
 
 /* Types */
@@ -90,6 +107,8 @@ export type Added = {
 	warn_over_bytes: number | null,
 	/**  仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す */
 	forced_local_only: boolean,
+	/**  Full Artifact の remote 到達状態。失敗の詳細は同期状態に集約する。 */
+	delivery: DeliveryStatus,
 };
 
 export type AppError = 
@@ -120,8 +139,8 @@ export type AppError =
 { code: "claude_desktop_not_found" } | 
 /**  Claude Desktop を起動できなかった。 */
 { code: "claude_desktop_launch_failed" } | 
-/**  バックアップ(git)の失敗。 */
-{ code: "backup_failed"; message: string } | 
+/**  バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。 */
+{ code: "backup_failed"; kind: BackupFailureKind | null; message: string } | 
 /**  かしこい検索の準備に失敗。 */
 { code: "embed_failed"; message: string } | 
 /**  分類できないもの。message はコアが返した文言(いまは日本語)。 */
@@ -135,6 +154,8 @@ export type Availability =
 "missing" | 
 /**  方針により、この端末では開かない。**取得の再試行も提案しない** */
 "unavailable_by_policy";
+
+export type BackupFailureKind = "authentication" | "permission" | "privacy_check" | "network" | "invalid_repository" | "remote_missing" | "quota" | "lfs_unavailable" | "remote_object_missing" | "integrity_mismatch" | "invalid_vault" | "workspace_mismatch" | "destination_exists" | "commit" | "lfs_upload" | "git_push" | "git_pull" | "git_conflict";
 
 export type BackupStatus = {
 	/**  origin の URL(未設定なら None = 未接続) */
@@ -155,8 +176,19 @@ export type ConnectState = {
 	desktop: DesktopStatus,
 	backup: BackupStatus,
 	sync_error: string | null,
+	sync_error_kind: BackupFailureKind | null,
 	smart_search: SmartSearchState,
 };
+
+export type DeliveryStatus = 
+/**  `local_only` なので送信対象ではない。 */
+"local_only" | 
+/**  `full` だがバックアップ先がまだ無い。 */
+"remote_not_configured" | 
+/**  LFS object と Git ref の双方が remote へ到達した。 */
+"confirmed" | 
+/**  ローカル取り込みは成功したが commit / privacy gate / upload のいずれかが失敗した。 */
+"degraded";
 
 export type DesktopStatus = 
 /**  Claude Desktop の設定ファイルが見つからない(未インストールか未起動) */
@@ -222,6 +254,21 @@ export type FileRow = {
 	/**  取り寄せを提案してよいか。**方針で閉じているものには提案しない** */
 	can_fetch: boolean,
 	added_at: string,
+};
+
+export type GitHubAuthState = {
+	/**  OAuth App の client ID が build または実行環境に設定済みか。 */
+	configured: boolean,
+	/**  OS keychain に利用可能な credential があるか。 */
+	signed_in: boolean,
+	account_login: string | null,
+};
+
+/**  GitHub device flow で画面へ出してよい情報。device code / token は含めない。 */
+export type GitHubDeviceAuthorization = {
+	user_code: string,
+	verification_uri: string,
+	expires_in: number,
 };
 
 export type GraphData = {
@@ -350,6 +397,8 @@ export type NoteView = {
 	vault_root: string,
 };
 
+export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";
+
 export type SearchOutcome = SearchOutcome_Serialize | SearchOutcome_Deserialize;
 
 export type SearchOutcome_Deserialize = {
@@ -428,6 +477,15 @@ export type TagInfo = {
 export type TagOverview = {
 	tags: TagInfo[],
 	glossary_note: string | null,
+};
+
+/**  既存Vaultの検査・clone・Full Artifact復元の進捗。 */
+export type VaultRestoreProgress = {
+	phase: RestorePhase,
+	completed: number,
+	total: number,
+	fetched: number,
+	reused: number,
 };
 
 /* Tauri Specta runtime */

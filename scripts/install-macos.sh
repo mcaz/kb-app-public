@@ -14,9 +14,11 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_name="kb-app.app"
 built="$root/target/release/bundle/macos/$app_name"
 dest_dir="/Applications"
+# OAuth App の Client ID は公開情報。fork / 受入では環境変数で上書きできる。
+github_client_id="${KB_GITHUB_CLIENT_ID:-Ov23li1xyWYmAMscYlj8}"
 
 echo "==> ビルド(release。初回は10〜20分かかる)"
-npm --prefix "$root/app" run tauri build
+KB_GITHUB_CLIENT_ID="$github_client_id" npm --prefix "$root/app" run tauri build
 
 if [[ ! -d "$built" ]]; then
   echo "ビルド結果が見つからない: $built" >&2
