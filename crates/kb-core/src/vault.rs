@@ -392,10 +392,13 @@ impl Vault {
         let relative = id.attachments_relative_path();
         if let Some(dir) = self.checked_optional_path(&relative)? {
             let entries = fs::read_dir(dir)?;
-            for e in entries.flatten() {
-                if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-                    out.push((e.file_name().to_string_lossy().to_string(), size));
+            for entry in entries {
+                let e = entry?;
+                if e.file_type()?.is_file() {
+                    let size = e.metadata()?.len();
+                    let name = e.file_name();
+                    let name = name.to_str().context("旧添付名がUTF-8ではない")?;
+                    out.push((name.to_string(), size));
                 }
             }
         }
@@ -404,7 +407,7 @@ impl Vault {
     }
 
     /// 全ノートの (id, 絶対パス)。予約ファイル・.kb・.git・添付(*.files)は除外。
-    pub fn list_note_files(&self) -> Vec<(String, PathBuf)> {
+    pub fn list_note_files(&self) -> Result<Vec<(String, PathBuf)>> {
         let mut out = Vec::new();
         for entry in walkdir::WalkDir::new(&self.root)
             .into_iter()
@@ -414,8 +417,9 @@ impl Vault {
                     && name != ".kb"
                     && !(e.file_type().is_dir() && name.ends_with(".files"))
             })
-            .flatten()
         {
+            let entry = entry
+                .with_context(|| format!("Vaultのノート走査に失敗: {}", self.root.display()))?;
             let path = entry.path();
             if !entry.file_type().is_file()
                 || path.extension().and_then(|e| e.to_str()) != Some("md")
@@ -426,13 +430,15 @@ impl Vault {
             if RESERVED.contains(&name.as_ref()) {
                 continue;
             }
-            if let Ok(rel) = path.strip_prefix(&self.root) {
-                let id = rel.with_extension("");
-                out.push((id.to_string_lossy().to_string(), path.to_path_buf()));
-            }
+            let rel = path
+                .strip_prefix(&self.root)
+                .context("Vault走査結果がrootの外にある")?;
+            let id = rel.with_extension("");
+            let id = id.to_str().context("Note IDがUTF-8ではない")?;
+            out.push((id.to_string(), path.to_path_buf()));
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// バンドルルート index.md を自動生成(OKF §8+§12: okf_version 宣言)。
@@ -445,7 +451,7 @@ impl Vault {
             "# Notes".to_string(),
             String::new(),
         ];
-        for (id, path) in self.list_note_files() {
+        for (id, path) in self.list_note_files()? {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
@@ -601,7 +607,7 @@ mod tests {
 
         // 添付ディレクトリはノート走査に映らない(OKF 互換の保全)
         std::fs::write(files.join("紛れ.md"), "---\ntype: Note\n---\nx").unwrap();
-        assert_eq!(vault.list_note_files().len(), 1);
+        assert_eq!(vault.list_note_files().unwrap().len(), 1);
     }
 
     fn agent_note(title: &str, body: &str) -> Note {
@@ -897,6 +903,6 @@ mod tests {
         // index.md / log.md が生成され、予約名はノート一覧に出ない
         assert!(vault.root.join("index.md").exists());
         assert!(vault.root.join("log.md").exists());
-        assert_eq!(vault.list_note_files().len(), 1);
+        assert_eq!(vault.list_note_files().unwrap().len(), 1);
     }
 }

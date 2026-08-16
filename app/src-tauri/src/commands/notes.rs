@@ -160,14 +160,95 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn listing_surfaces_keep_index_degradations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        std::fs::write(vault.root.join("notes/broken.md"), "frontmatterではない").unwrap();
+        let report = kb_core::index::sync_with_degradations(&vault, &conn).unwrap();
+        assert!(report.degraded.iter().any(|item| matches!(
+            item,
+            kb_core::degradation::Degradation::IndexParse { note, .. }
+                if note == "notes/broken"
+        )));
+
+        let categories = note_categories_from(&conn, report.degraded.clone()).unwrap();
+        assert!(categories.categories.is_empty());
+        assert_eq!(categories.degraded, report.degraded);
+
+        let page = note_list_from(&conn, "", None, 100, categories.degraded.clone()).unwrap();
+        assert!(page.notes.is_empty());
+        assert_eq!(page.degraded, categories.degraded);
+    }
+
+    #[test]
+    fn graph_row_failures_keep_valid_data_and_add_typed_degradations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "INSERT INTO notes(id,title,status,body,tags) VALUES ('notes/a','A','stable','','')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,'broken','stable','','')",
+            [vec![0xff]],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links(src,dst) VALUES ('notes/a','notes/a')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links(src,dst) VALUES (?1,'notes/a')",
+            [vec![0xff]],
+        )
+        .unwrap();
+
+        let graph = graph_data_from(&conn, Vec::new()).unwrap();
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.edges, vec![("notes/a".into(), "notes/a".into())]);
+        assert!(
+            graph
+                .degraded
+                .iter()
+                .any(|item| matches!(item, kb_core::degradation::Degradation::GraphNodes { .. }))
+        );
+        assert!(
+            graph
+                .degraded
+                .iter()
+                .any(|item| matches!(item, kb_core::degradation::Degradation::GraphEdges { .. }))
+        );
+    }
 }
 
 /// サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。
+#[derive(Serialize, specta::Type)]
+pub struct NoteCategories {
+    categories: Vec<NoteCategory>,
+    degraded: Vec<kb_core::degradation::Degradation>,
+}
+
 #[tauri::command]
 #[specta::specta]
-pub fn note_categories(state: State<'_, AppState>) -> AppResult<Vec<NoteCategory>> {
-    state.with_index(Sync::Throttled, |_, conn, _| {
-        categories(conn).map_err(AppError::index)
+pub fn note_categories(state: State<'_, AppState>) -> AppResult<NoteCategories> {
+    state.with_index(Sync::Throttled, |_, conn, degraded| {
+        note_categories_from(conn, degraded)
+    })
+}
+
+fn note_categories_from(
+    conn: &kb_core::rusqlite::Connection,
+    degraded: Vec<kb_core::degradation::Degradation>,
+) -> AppResult<NoteCategories> {
+    Ok(NoteCategories {
+        categories: categories(conn).map_err(AppError::index)?,
+        degraded,
     })
 }
 
@@ -180,8 +261,8 @@ pub fn note_list(
     after: Option<String>,
     limit: usize,
 ) -> AppResult<NoteListPage> {
-    let mut page = state.with_index(Sync::Throttled, |_, conn, _| {
-        notes_in_category(conn, &category, after.as_deref(), limit).map_err(AppError::index)
+    let mut page = state.with_index(Sync::Throttled, |_, conn, degraded| {
+        note_list_from(conn, &category, after.as_deref(), limit, degraded)
     })?;
     state.with_artifacts(|vault, _, ledger, _| {
         let managed_counts = ledger.current_counts_by_note();
@@ -197,6 +278,18 @@ pub fn note_list(
     })
 }
 
+fn note_list_from(
+    conn: &kb_core::rusqlite::Connection,
+    category: &str,
+    after: Option<&str>,
+    limit: usize,
+    degraded: Vec<kb_core::degradation::Degradation>,
+) -> AppResult<NoteListPage> {
+    let mut page = notes_in_category(conn, category, after, limit).map_err(AppError::index)?;
+    page.degraded.extend(degraded);
+    Ok(page)
+}
+
 #[derive(Serialize, specta::Type)]
 pub struct GraphNode {
     id: String,
@@ -210,54 +303,84 @@ pub struct GraphNode {
 pub struct GraphData {
     nodes: Vec<GraphNode>,
     edges: Vec<(String, String)>,
+    degraded: Vec<kb_core::degradation::Degradation>,
 }
 
 /// グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。
 #[tauri::command]
 #[specta::specta]
 pub fn graph_data(state: State<'_, AppState>) -> AppResult<GraphData> {
-    state.with_index(Sync::Throttled, |_, conn, _| {
-        let mut nodes: Vec<GraphNode> = {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT id, coalesce(title, id), origin, status \
+    state.with_index(Sync::Throttled, |_, conn, degraded| {
+        graph_data_from(conn, degraded)
+    })
+}
+
+fn graph_data_from(
+    conn: &kb_core::rusqlite::Connection,
+    mut degraded: Vec<kb_core::degradation::Degradation>,
+) -> AppResult<GraphData> {
+    let mut nodes: Vec<GraphNode> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, coalesce(title, id), origin, status \
                      FROM notes WHERE status != 'deprecated'",
-                )
-                .map_err(AppError::index)?;
-            let rows = stmt
-                .query_map([], |r| {
-                    Ok(GraphNode {
-                        id: r.get(0)?,
-                        title: r.get(1)?,
-                        origin: r.get(2)?,
-                        status: r.get(3)?,
-                        degree: 0,
-                    })
+            )
+            .map_err(AppError::index)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(GraphNode {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    origin: r.get(2)?,
+                    status: r.get(3)?,
+                    degree: 0,
                 })
-                .map_err(AppError::index)?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(AppError::index)?
-        };
-
-        let ids: std::collections::HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
-        let edges: Vec<(String, String)> = {
-            let mut stmt = conn
-                .prepare("SELECT src, dst FROM links")
-                .map_err(AppError::index)?;
-            let rows = stmt
-                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .map_err(AppError::index)?;
-            rows.filter_map(|r| r.ok())
-                .filter(|(s, d)| ids.contains(s) && ids.contains(d))
-                .collect()
-        };
-
-        for n in &mut nodes {
-            n.degree = edges
-                .iter()
-                .filter(|(s, d)| *s == n.id || *d == n.id)
-                .count();
+            })
+            .map_err(AppError::index)?;
+        let mut nodes = Vec::new();
+        for row in rows {
+            match row {
+                Ok(node) => nodes.push(node),
+                Err(error) => degraded.push(kb_core::degradation::Degradation::GraphNodes {
+                    detail: error.to_string(),
+                }),
+            }
         }
-        Ok(GraphData { nodes, edges })
+        nodes
+    };
+
+    let ids: std::collections::HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+    let edges: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT src, dst FROM links")
+            .map_err(AppError::index)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(AppError::index)?;
+        let mut edges = Vec::new();
+        for row in rows {
+            match row {
+                Ok((src, dst)) if ids.contains(&src) && ids.contains(&dst) => {
+                    edges.push((src, dst));
+                }
+                Ok(_) => {}
+                Err(error) => degraded.push(kb_core::degradation::Degradation::GraphEdges {
+                    detail: error.to_string(),
+                }),
+            }
+        }
+        edges
+    };
+
+    for n in &mut nodes {
+        n.degree = edges
+            .iter()
+            .filter(|(s, d)| *s == n.id || *d == n.id)
+            .count();
+    }
+    Ok(GraphData {
+        nodes,
+        edges,
+        degraded,
     })
 }

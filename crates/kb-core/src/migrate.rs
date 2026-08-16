@@ -67,7 +67,7 @@ pub fn survey(vault: &Vault, ledger: &Ledger) -> Result<Vec<Pending>> {
         .collect();
 
     let mut out = Vec::new();
-    for (note_id, _) in vault.list_note_files() {
+    for (note_id, _) in vault.list_note_files()? {
         for (file_name, size) in vault.list_attachments(&note_id)? {
             if done.contains(&(note_id.clone(), file_name.clone())) {
                 continue;

@@ -60,6 +60,9 @@
   "degradation": {
     "remote_sync": "同期に失敗しました: {{detail}}",
     "index_sync": "索引を更新できませんでした。古い結果を表示している可能性があります: {{detail}}",
+    "index_metadata": "{{note}} の更新状態を確認できません。以前の索引を残しています: {{detail}}",
+    "index_read": "{{note}} を読み込めません。以前の索引を残しています: {{detail}}",
+    "index_parse": "{{note}} の形式を読み取れません。以前の索引を残しています: {{detail}}",
     "embedding_index_pending": "かしこい検索の索引が追い付き中です(残り {{remaining}} 件)",
     "embedding_index": "かしこい検索の索引を更新できませんでした: {{detail}}",
     "main_search": "主検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
@@ -70,7 +73,9 @@
     "current_note_context": "AIへ現在のノートを引き渡す文脈を記録できませんでした: {{detail}}",
     "care_detection": "お手入れ候補を検知できませんでした: {{detail}}",
     "care_list": "お手入れ一覧を取得できませんでした。0件とは限りません: {{detail}}",
-    "tag_counts": "タグ一覧を取得できませんでした。0件とは限りません: {{detail}}"
+    "tag_counts": "タグ一覧を取得できませんでした。0件とは限りません: {{detail}}",
+    "graph_nodes": "一部のノートをグラフに表示できませんでした: {{detail}}",
+    "graph_edges": "一部のつながりをグラフに表示できませんでした: {{detail}}"
   },
   "errors": {
     "noteNotFound": "そのノートはまだありません",

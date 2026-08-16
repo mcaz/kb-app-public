@@ -5,7 +5,7 @@
 use std::fs;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
 
 use crate::frontmatter::Note;
@@ -75,10 +75,43 @@ fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// 増分 sync。変更・新規・削除を検出して索引を追随させる。戻り値は更新ノート数。
+/// GUI/MCPが本体データと一緒に返す、増分syncの結果。
+#[derive(Debug, Default)]
+#[must_use = "degradedを捨てると索引失敗を正常に見せるため、必ず処理する"]
+pub struct SyncReport {
+    pub updated: usize,
+    pub degraded: Vec<crate::degradation::Degradation>,
+}
+
+/// 部分失敗を続行できない呼び出し元向け。失敗を黙殺せず従来の件数を返す。
 pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
-    let files = vault.list_note_files();
+    let report = sync_with_degradations(vault, conn)?;
+    if !report.degraded.is_empty() {
+        let detail = report
+            .degraded
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" / ");
+        bail!("索引へ取り込めないノートがある: {detail}");
+    }
+    Ok(report.updated)
+}
+
+/// 増分syncのfail-open入口。読めないノートは既存rowを残し、正常なノートだけを
+/// 同じtransactionで反映する。呼び出し元は`degraded`をデータと一緒に返すこと。
+pub fn sync_with_degradations(vault: &Vault, conn: &Connection) -> Result<SyncReport> {
+    let files = vault.list_note_files()?;
+    sync_files(vault, conn, files)
+}
+
+fn sync_files(
+    vault: &Vault,
+    conn: &Connection,
+    files: Vec<(String, std::path::PathBuf)>,
+) -> Result<SyncReport> {
     let mut updated = 0usize;
+    let mut degraded = Vec::new();
 
     let mut known: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     {
@@ -96,22 +129,52 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (id, path) in files {
         seen.insert(id.clone());
+        if let Err(error) = crate::note_id::NoteId::parse(&id) {
+            degraded.push(crate::degradation::Degradation::IndexParse {
+                note: id,
+                detail: error.to_string(),
+            });
+            continue;
+        }
         // ナノ秒精度 — 秒精度だと同一秒内の連続保存が再索引されない(実測で露呈)
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
+        let mtime = match fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .and_then(|modified| {
+                modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(std::io::Error::other)
+            }) {
+            Ok(modified) => modified.as_nanos() as i64,
+            Err(error) => {
+                degraded.push(crate::degradation::Degradation::IndexMetadata {
+                    note: id,
+                    detail: error.to_string(),
+                });
+                continue;
+            }
+        };
         if known.get(&id) == Some(&mtime) {
             continue;
         }
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                degraded.push(crate::degradation::Degradation::IndexRead {
+                    note: id,
+                    detail: error.to_string(),
+                });
+                continue;
+            }
         };
-        // 適合違反ファイルは索引せずスキップ(conformance 検査は別途 check で可視化予定)
-        let Ok(note) = Note::parse(&content) else {
-            continue;
+        let note = match Note::parse(&content) {
+            Ok(note) => note,
+            Err(error) => {
+                degraded.push(crate::degradation::Degradation::IndexParse {
+                    note: id,
+                    detail: error.to_string(),
+                });
+                continue;
+            }
         };
         upsert(&transaction, vault, &id, mtime, &note)?;
         updated += 1;
@@ -126,7 +189,7 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
         updated += 1;
     }
     transaction.commit()?;
-    Ok(updated)
+    Ok(SyncReport { updated, degraded })
 }
 
 /// sync の後段: 未埋め込みノートの追い付き(1回あたり少数に制限し、残は劣化情報で見せる)。
@@ -302,5 +365,74 @@ mod tests {
             .query_row("SELECT count(*) FROM notes", [], |row| row.get(0))
             .unwrap();
         assert_eq!(indexed, 0);
+    }
+
+    #[test]
+    fn malformed_note_keeps_the_stale_row_and_reports_the_degradation() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "壊れる前",
+                "残す本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        sync(&vault, &conn).unwrap();
+        let (id, path) = vault.list_note_files().unwrap().remove(0);
+        fs::write(&path, "frontmatterではない").unwrap();
+
+        let report = sync_with_degradations(&vault, &conn).unwrap();
+        assert_eq!(report.updated, 0);
+        assert!(report.degraded.iter().any(|item| matches!(
+            item,
+            crate::degradation::Degradation::IndexParse { note, .. } if note == &id
+        )));
+        let indexed_body: String = conn
+            .query_row("SELECT body FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(indexed_body, "残す本文\n");
+        assert!(sync(&vault, &conn).is_err(), "strict入口は黙って続行しない");
+    }
+
+    #[test]
+    fn metadata_and_read_failures_are_separately_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let missing = dir.path().join("missing.md");
+        let directory = dir.path().join("directory.md");
+        fs::create_dir(&directory).unwrap();
+
+        let report = sync_files(
+            &vault,
+            &conn,
+            vec![
+                ("notes/missing".into(), missing),
+                ("notes/directory".into(), directory),
+                ("notes/a.files/inside".into(), dir.path().join("unused")),
+            ],
+        )
+        .unwrap();
+        assert!(report.degraded.iter().any(|item| matches!(
+            item,
+            crate::degradation::Degradation::IndexMetadata { note, .. }
+                if note == "notes/missing"
+        )));
+        assert!(report.degraded.iter().any(|item| matches!(
+            item,
+            crate::degradation::Degradation::IndexRead { note, .. }
+                if note == "notes/directory"
+        )));
+        assert!(report.degraded.iter().any(|item| matches!(
+            item,
+            crate::degradation::Degradation::IndexParse { note, .. }
+                if note == "notes/a.files/inside"
+        )));
     }
 }

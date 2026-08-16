@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/atoms/ui/button";
+import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { GraphCanvas } from "@/components/organisms/GraphCanvas";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
 import { subgraph } from "@/lib/graph/subgraph";
@@ -25,6 +26,7 @@ export function GraphPage() {
 
   return (
     <SinglePaneLayout scroll={false}>
+      <DegradedBanner items={data?.degraded ?? []} />
       {focus && (
         <div className="border-line text-muted flex items-center justify-between gap-2.5 border-b px-3.5 py-2 text-[12.5px]">
           <span>{t("around", { title: centerTitle })}</span>

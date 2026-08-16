@@ -990,7 +990,7 @@ mod tests {
         // デバイス B: clone で復元 → 会話(pull)で A の変化を受け取る
         run(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
         let b = Vault::open(dir.path().join("b")).unwrap();
-        assert_eq!(b.list_note_files().len(), 1);
+        assert_eq!(b.list_note_files().unwrap().len(), 1);
         a.propose_for_test(
             "追加分",
             "A の2本目。",
@@ -1001,7 +1001,7 @@ mod tests {
         .unwrap();
         pull_now(&b).unwrap();
         assert_eq!(
-            b.list_note_files().len(),
+            b.list_note_files().unwrap().len(),
             2,
             "B が pull で A の追加分を受け取る"
         );
@@ -1193,7 +1193,7 @@ mod tests {
             crate::workspace::stored_workspace_id(&joined).unwrap(),
             crate::workspace::stored_workspace_id(&source).unwrap()
         );
-        assert_eq!(joined.list_note_files().len(), 1);
+        assert_eq!(joined.list_note_files().unwrap().len(), 1);
 
         let occupied = dir.path().join("occupied");
         fs::create_dir(&occupied).unwrap();

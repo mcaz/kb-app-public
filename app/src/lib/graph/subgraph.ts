@@ -31,5 +31,6 @@ export function subgraph(data: GraphData, centerId: string, hops = 2): GraphData
   return {
     nodes: data.nodes.filter((n) => keep.has(n.id)),
     edges: data.edges.filter(([a, b]) => keep.has(a) && keep.has(b)),
+    degraded: data.degraded,
   };
 }
