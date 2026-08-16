@@ -90,6 +90,9 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
         }
     }
 
+    // 2026-08-16の10k fixtureでは1件ごとのautocommitが再構築20秒の大半を占めた。
+    // 全件を同じ派生索引versionとして反映し、途中失敗も半端な索引を残さない。
+    let transaction = conn.unchecked_transaction()?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (id, path) in files {
         seen.insert(id.clone());
@@ -110,18 +113,19 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
         let Ok(note) = Note::parse(&content) else {
             continue;
         };
-        upsert(conn, vault, &id, mtime, &note)?;
+        upsert(&transaction, vault, &id, mtime, &note)?;
         updated += 1;
     }
 
     for gone in known.keys().filter(|k| !seen.contains(*k)) {
-        conn.execute("DELETE FROM notes WHERE id=?1", [gone])?;
-        conn.execute("DELETE FROM links WHERE src=?1", [gone])?;
-        conn.execute("DELETE FROM fts_main WHERE id=?1", [gone])?;
-        conn.execute("DELETE FROM fts_tri WHERE id=?1", [gone])?;
-        conn.execute("DELETE FROM note_vecs WHERE id=?1", [gone])?;
+        transaction.execute("DELETE FROM notes WHERE id=?1", [gone])?;
+        transaction.execute("DELETE FROM links WHERE src=?1", [gone])?;
+        transaction.execute("DELETE FROM fts_main WHERE id=?1", [gone])?;
+        transaction.execute("DELETE FROM fts_tri WHERE id=?1", [gone])?;
+        transaction.execute("DELETE FROM note_vecs WHERE id=?1", [gone])?;
         updated += 1;
     }
+    transaction.commit()?;
     Ok(updated)
 }
 
@@ -243,6 +247,7 @@ fn extract_links(src_id: &str, body: &str, _vault: &Vault) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter::Frontmatter;
 
     #[test]
     fn sync_and_incremental() {
@@ -264,5 +269,38 @@ mod tests {
             .query_row("SELECT count(*) FROM links", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// 2026-08-16の10k高速化で追加したtransactionを外す退行と、半端な索引を防ぐ。
+    #[test]
+    fn sync_rolls_back_every_note_when_one_upsert_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        for id in ["notes/a", "notes/b"] {
+            let mut front = Frontmatter::new_note(id);
+            front.tags = vec!["test".into()];
+            vault
+                .write_note_fixture(
+                    id,
+                    &Note {
+                        front,
+                        body: "本文".into(),
+                    },
+                )
+                .unwrap();
+        }
+        let conn = open_db(&vault).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_second_note BEFORE INSERT ON notes
+             WHEN NEW.id = 'notes/b'
+             BEGIN SELECT RAISE(FAIL, 'fixture failure'); END;",
+        )
+        .unwrap();
+
+        assert!(sync(&vault, &conn).is_err());
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(indexed, 0);
     }
 }

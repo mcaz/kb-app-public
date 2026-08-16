@@ -664,8 +664,16 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use crate::frontmatter::{Frontmatter, Generated, Note};
     use crate::index::{open_db, sync};
     use crate::vault::Vault;
+
+    const PERFORMANCE_NOTE_COUNT: usize = 10_000;
+    const PERFORMANCE_CATEGORY_COUNT: usize = 100;
+    const PERFORMANCE_VECTOR_DIM: usize = 1_024;
+    const PERFORMANCE_TARGET: usize = 9_876;
 
     fn setup() -> (tempfile::TempDir, Vault, rusqlite::Connection) {
         let dir = tempfile::tempdir().unwrap();
@@ -848,5 +856,176 @@ mod tests {
         assert_eq!(by_id["signals/a"].has_similar, Some(true));
         assert_eq!(by_id["signals/b"].has_similar, None);
         assert_eq!(by_id["signals/d"].has_similar, Some(false));
+    }
+
+    /// 10k規模の目標が文章だけだったため、2026-08-16から専用release CIで退行を止める。
+    #[test]
+    #[ignore = "release buildの専用CIで10k fixtureを測る"]
+    fn ten_thousand_note_performance_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        write_performance_fixture(&vault);
+        let conn = open_db(&vault).unwrap();
+
+        let (updated, rebuild) = timed(|| sync(&vault, &conn).unwrap());
+        assert_eq!(updated, PERFORMANCE_NOTE_COUNT);
+        seed_performance_vectors(&conn);
+
+        let (categories, category_list) =
+            timed(|| repeat_last(20, || super::note_categories(&conn).unwrap()));
+        assert_eq!(categories.len(), PERFORMANCE_CATEGORY_COUNT + 1);
+
+        let (page, note_list) = timed(|| {
+            repeat_last(5, || {
+                super::notes_in_category(&conn, "notes/topic-042", None, 50).unwrap()
+            })
+        });
+        assert_eq!(
+            page.total,
+            PERFORMANCE_NOTE_COUNT / PERFORMANCE_CATEGORY_COUNT
+        );
+        assert_eq!(page.notes.len(), 50);
+        assert!(page.next_cursor.is_some());
+
+        let target_id = performance_note_id(PERFORMANCE_TARGET);
+        let ((main, rescue), keyword_search) = timed(|| {
+            repeat_last(100, || {
+                (
+                    super::main_search(&conn, "検索番兵オーロラ", 20, false).unwrap(),
+                    super::rescue_search(&conn, "番兵オーロラ", 20).unwrap(),
+                )
+            })
+        });
+        assert!(main.iter().any(|hit| hit.id == target_id));
+        assert!(rescue.iter().any(|hit| hit.id == target_id));
+
+        let mut query = vec![0.0f32; PERFORMANCE_VECTOR_DIM];
+        query[PERFORMANCE_TARGET % PERFORMANCE_VECTOR_DIM] = 1.0;
+        let (neighbors, semantic_search) =
+            timed(|| repeat_last(10, || crate::embed::knn(&conn, &query, 20).unwrap()));
+        assert_eq!(neighbors.len(), 20);
+        assert!(neighbors.iter().any(|(id, _)| id == &target_id));
+
+        let (_, note_detail) = timed(|| {
+            repeat_last(5, || {
+                let note = vault.read_note(&target_id).unwrap();
+                let related = super::related_of(&conn, Some(&target_id)).unwrap();
+                let similar = super::similar_notes(&conn, &target_id, 6).unwrap();
+                assert!(note.body.contains("検索番兵オーロラ"));
+                assert!(!related.is_empty());
+                assert_eq!(similar.len(), 6);
+            })
+        });
+
+        let measurements = [
+            ("index_rebuild", rebuild, Duration::from_secs(30)),
+            (
+                "category_list_x20",
+                category_list,
+                Duration::from_millis(500),
+            ),
+            ("note_list_x5", note_list, Duration::from_secs(2)),
+            (
+                "keyword_search_x100",
+                keyword_search,
+                Duration::from_millis(500),
+            ),
+            (
+                "semantic_search_x10",
+                semantic_search,
+                Duration::from_secs(1),
+            ),
+            ("note_detail_x5", note_detail, Duration::from_secs(2)),
+        ];
+        for (name, elapsed, budget) in measurements {
+            eprintln!(
+                "performance_gate {name}: {} ms (budget {} ms)",
+                elapsed.as_millis(),
+                budget.as_millis()
+            );
+            assert!(
+                elapsed <= budget,
+                "{name} took {} ms; budget is {} ms",
+                elapsed.as_millis(),
+                budget.as_millis()
+            );
+        }
+    }
+
+    fn timed<T>(operation: impl FnOnce() -> T) -> (T, Duration) {
+        let started = Instant::now();
+        let value = operation();
+        (value, started.elapsed())
+    }
+
+    fn repeat_last<T>(times: usize, mut operation: impl FnMut() -> T) -> T {
+        let mut last = None;
+        for _ in 0..times {
+            last = Some(operation());
+        }
+        last.expect("性能fixtureは最低1回実行する")
+    }
+
+    fn performance_note_id(index: usize) -> String {
+        format!(
+            "notes/topic-{:03}/note-{index:05}",
+            index % PERFORMANCE_CATEGORY_COUNT
+        )
+    }
+
+    fn write_performance_fixture(vault: &Vault) {
+        for index in 0..PERFORMANCE_NOTE_COUNT {
+            let id = performance_note_id(index);
+            let previous_link = (index > 0)
+                .then(|| format!("\n\n[前のノート](/{}.md)", performance_note_id(index - 1)))
+                .unwrap_or_default();
+            let marker = if index == PERFORMANCE_TARGET {
+                "検索番兵オーロラ"
+            } else {
+                "標準知識"
+            };
+            let mut front = Frontmatter::new_note(&format!("性能fixture {index:05}"));
+            front.description = Some(format!("10k回帰測定 category {}", index % 100));
+            front.tags = vec!["performance".into(), format!("group-{}", index % 10)];
+            front.origin = Some("agent".into());
+            front.created = Some("2026-08-16T00:00:00Z".into());
+            front.generated = Some(Generated {
+                by: "test/performance-gate".into(),
+                at: "2026-08-16T00:00:00Z".into(),
+            });
+            let note = Note {
+                front,
+                body: format!(
+                    "{marker}。合成ナレッジ {index:05} の本文。性能回帰と検索品質を検査する。{previous_link}"
+                ),
+            };
+            vault.write_note_fixture(&id, &note).unwrap();
+        }
+    }
+
+    fn seed_performance_vectors(conn: &rusqlite::Connection) {
+        let blobs: Vec<Vec<u8>> = (0..PERFORMANCE_VECTOR_DIM)
+            .map(|axis| {
+                let mut vector = vec![0.0f32; PERFORMANCE_VECTOR_DIM];
+                vector[axis] = 1.0;
+                crate::embed::to_blob(&vector)
+            })
+            .collect();
+        let transaction = conn.unchecked_transaction().unwrap();
+        {
+            let mut insert = transaction
+                .prepare("INSERT INTO note_vecs(id,stamp,embedding) VALUES (?1,?2,?3)")
+                .unwrap();
+            for index in 0..PERFORMANCE_NOTE_COUNT {
+                insert
+                    .execute(rusqlite::params![
+                        performance_note_id(index),
+                        crate::embed::EMBED_STAMP,
+                        &blobs[index % PERFORMANCE_VECTOR_DIM]
+                    ])
+                    .unwrap();
+            }
+        }
+        transaction.commit().unwrap();
     }
 }
