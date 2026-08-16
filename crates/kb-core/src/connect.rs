@@ -583,39 +583,37 @@ pub fn push_now(vault: &Vault) -> Result<()> {
 
 /// 呼び出し側が `sync_lock` を保持しているときの push 本体。
 fn push_now_locked(vault: &Vault) -> Result<()> {
-    if let Err(error) = ensure_origin_upload_allowed(vault) {
-        let message = error.to_string();
-        record_sync(
-            vault,
-            Some(&message),
-            Some(failure_kind(&error).unwrap_or(BackupFailureKind::PrivacyCheck)),
-        );
-        return Err(error);
-    }
+    push_now_locked_with_gate(vault, ensure_origin_upload_allowed)
+}
+
+fn push_now_locked_with_gate(
+    vault: &Vault,
+    mut gate: impl FnMut(&Vault) -> Result<()>,
+) -> Result<()> {
+    check_upload_gate(vault, &mut gate)?;
     let _ = ensure_merge_config(vault);
     let out = git(vault, &["push", "-u", "origin", "HEAD"])?;
     if out.status.success() {
-        record_sync(vault, None, None);
+        record_push_success(vault);
         return Ok(());
     }
     let first_error = git_failure("push 失敗", &stderr_of(&out), BackupFailureKind::GitPush);
     if failure_kind(&first_error) != Some(BackupFailureKind::GitConflict) {
-        record_sync(
-            vault,
-            Some(&first_error.to_string()),
-            failure_kind(&first_error),
-        );
+        record_sync_error(vault, &first_error.to_string(), failure_kind(&first_error));
         return Err(first_error);
     }
     let pull = git(vault, &["pull", "--rebase", "--autostash"])?;
     if pull.status.success() {
+        // pull中にrepositoryのvisibilityや権限が変わり得る。retryも別uploadとして
+        // 直前に同じgateを通し、最初の検査結果を使い回さない。
+        check_upload_gate(vault, &mut gate)?;
         let retry = git(vault, &["push", "-u", "origin", "HEAD"])?;
         if retry.status.success() {
-            record_sync(vault, None, None);
+            record_push_success(vault);
             return Ok(());
         }
         let error = git_failure("push 失敗", &stderr_of(&retry), BackupFailureKind::GitPush);
-        record_sync(vault, Some(&error.to_string()), failure_kind(&error));
+        record_sync_error(vault, &error.to_string(), failure_kind(&error));
         return Err(error);
     }
     let error = git_failure(
@@ -623,8 +621,22 @@ fn push_now_locked(vault: &Vault) -> Result<()> {
         &stderr_of(&pull),
         BackupFailureKind::GitConflict,
     );
-    record_sync(vault, Some(&error.to_string()), failure_kind(&error));
+    record_sync_error(vault, &error.to_string(), failure_kind(&error));
     Err(error)
+}
+
+fn check_upload_gate(vault: &Vault, gate: &mut impl FnMut(&Vault) -> Result<()>) -> Result<()> {
+    match gate(vault) {
+        Ok(()) => {
+            record_upload_gate_success(vault);
+            Ok(())
+        }
+        Err(error) => {
+            let kind = failure_kind(&error).unwrap_or(BackupFailureKind::PrivacyCheck);
+            record_upload_gate_failure(vault, &error.to_string(), kind);
+            Err(error)
+        }
+    }
 }
 
 /// 同期操作(pull/push)のプロセス間ロック。GUI・MCP・CLI が同時に git を叩くと
@@ -671,20 +683,13 @@ pub(crate) fn deliver_full_locked(
     if !has_origin(vault) {
         return Ok(FullDelivery::RemoteNotConfigured);
     }
-    if let Err(error) = ensure_origin_upload_allowed(vault) {
-        let message = error.to_string();
-        record_sync(
-            vault,
-            Some(&message),
-            Some(failure_kind(&error).unwrap_or(BackupFailureKind::PrivacyCheck)),
-        );
-        return Err(error);
-    }
+    let mut gate = ensure_origin_upload_allowed;
+    check_upload_gate(vault, &mut gate)?;
     if let Err(error) = crate::lfs::push_object(vault, hash) {
         let message = error.to_string();
-        record_sync(
+        record_sync_error(
             vault,
-            Some(&message),
+            &message,
             Some(failure_kind(&error).unwrap_or(BackupFailureKind::LfsUpload)),
         );
         return Err(error);
@@ -695,7 +700,7 @@ pub(crate) fn deliver_full_locked(
 
 /// Git commit まで届かなかった同期対象の書き込みを、画面で見える劣化状態へ残す。
 pub fn record_sync_degradation(vault: &Vault, message: &str) {
-    record_sync(vault, Some(message), Some(BackupFailureKind::Commit));
+    record_sync_error(vault, message, Some(BackupFailureKind::Commit));
 }
 
 /// ノート操作の後に呼ぶ随時 push。remote 未設定なら何もしない。
@@ -712,12 +717,22 @@ fn sync_state_path(vault: &Vault) -> PathBuf {
     vault.root.join(".kb").join("sync.json")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+struct SyncFailure {
+    detail: String,
+    kind: BackupFailureKind,
+}
+
 #[derive(Debug, Default, Clone, Serialize, serde::Deserialize)]
 pub struct SyncState {
     pub last_pull_epoch: u64,
     pub last_error: Option<String>,
     #[serde(default)]
     pub last_error_kind: Option<BackupFailureKind>,
+    /// upload gateが失敗した事実。pullの成功では解除せず、認証済みAPIによる
+    /// private + push権限の再確認に成功したときだけ解除する。
+    #[serde(default)]
+    privacy_latch: Option<SyncFailure>,
 }
 
 pub fn sync_state(vault: &Vault) -> SyncState {
@@ -727,18 +742,73 @@ pub fn sync_state(vault: &Vault) -> SyncState {
         .unwrap_or_default()
 }
 
-fn record_sync(vault: &Vault, error: Option<&str>, kind: Option<BackupFailureKind>) {
-    let mut st = sync_state(vault);
-    st.last_error = error.map(String::from);
-    st.last_error_kind = kind;
-    if error.is_none() {
-        st.last_pull_epoch = epoch_now();
-    }
+fn write_sync_state(vault: &Vault, st: &SyncState) {
     let path = sync_state_path(vault);
     if let Some(dir) = path.parent() {
         let _ = fs::create_dir_all(dir);
     }
-    let _ = fs::write(path, serde_json::to_string(&st).unwrap_or_default());
+    let _ = fs::write(path, serde_json::to_string(st).unwrap_or_default());
+}
+
+fn show_failure(st: &mut SyncState, failure: &SyncFailure) {
+    st.last_error = Some(failure.detail.clone());
+    st.last_error_kind = Some(failure.kind);
+}
+
+fn record_sync_error(vault: &Vault, detail: &str, kind: Option<BackupFailureKind>) {
+    let mut st = sync_state(vault);
+    if let Some(latch) = st.privacy_latch.clone() {
+        // privacy latchは通常の同期失敗より重大なので、解除条件を満たすまで表示を優先する。
+        show_failure(&mut st, &latch);
+    } else {
+        st.last_error = Some(detail.to_string());
+        st.last_error_kind = kind;
+    }
+    write_sync_state(vault, &st);
+}
+
+fn record_upload_gate_failure(vault: &Vault, detail: &str, kind: BackupFailureKind) {
+    let mut st = sync_state(vault);
+    let failure = SyncFailure {
+        detail: detail.to_string(),
+        kind,
+    };
+    show_failure(&mut st, &failure);
+    st.privacy_latch = Some(failure);
+    write_sync_state(vault, &st);
+}
+
+fn record_upload_gate_success(vault: &Vault) {
+    let mut st = sync_state(vault);
+    if let Some(latch) = st.privacy_latch.take()
+        && st.last_error.as_deref() == Some(latch.detail.as_str())
+        && st.last_error_kind == Some(latch.kind)
+    {
+        st.last_error = None;
+        st.last_error_kind = None;
+    }
+    write_sync_state(vault, &st);
+}
+
+fn record_push_success(vault: &Vault) {
+    let mut st = sync_state(vault);
+    st.last_pull_epoch = epoch_now();
+    st.last_error = None;
+    st.last_error_kind = None;
+    st.privacy_latch = None;
+    write_sync_state(vault, &st);
+}
+
+fn record_pull_success(vault: &Vault) {
+    let mut st = sync_state(vault);
+    st.last_pull_epoch = epoch_now();
+    if let Some(latch) = st.privacy_latch.clone() {
+        show_failure(&mut st, &latch);
+    } else if matches!(st.last_error_kind, None | Some(BackupFailureKind::GitPull)) {
+        st.last_error = None;
+        st.last_error_kind = None;
+    }
+    write_sync_state(vault, &st);
 }
 
 fn epoch_now() -> u64 {
@@ -760,11 +830,11 @@ pub fn pull_if_stale(vault: &Vault) -> Option<crate::degradation::Degradation> {
             .last_error
             .map(|detail| crate::degradation::Degradation::RemoteSync { detail });
     }
-    pull_now(vault)
-        .err()
-        .map(|error| crate::degradation::Degradation::RemoteSync {
-            detail: error.to_string(),
-        })
+    let result = pull_now(vault);
+    sync_state(vault)
+        .last_error
+        .or_else(|| result.err().map(|error| error.to_string()))
+        .map(|detail| crate::degradation::Degradation::RemoteSync { detail })
 }
 
 /// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復
@@ -774,12 +844,12 @@ pub fn pull_now(vault: &Vault) -> Result<()> {
     let _ = ensure_merge_config(vault);
     let out = git(vault, &["pull", "--rebase", "--autostash"])?;
     if out.status.success() {
-        record_sync(vault, None, None);
+        record_pull_success(vault);
         let _ = vault.write_index_md();
         Ok(())
     } else {
         let error = git_failure("pull 失敗", &stderr_of(&out), BackupFailureKind::GitPull);
-        record_sync(vault, Some(&error.to_string()), failure_kind(&error));
+        record_sync_error(vault, &error.to_string(), failure_kind(&error));
         Err(error)
     }
 }
@@ -817,6 +887,28 @@ pub fn current_note(vault: &Vault) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn remote_head(remote: &Path, branch: &str) -> git2::Oid {
+        git2::Repository::open_bare(remote)
+            .unwrap()
+            .find_reference(&format!("refs/heads/{branch}"))
+            .unwrap()
+            .target()
+            .unwrap()
+    }
 
     #[test]
     fn lfs_attribute_is_added_only_when_git_lfs_exists() {
@@ -935,6 +1027,120 @@ mod tests {
         let st = backup_status(&vault).unwrap();
         assert!(st.remote.is_none());
         assert!(st.pending >= 2); // initialize + note
+    }
+
+    #[test]
+    fn privacy_gate_blocks_the_real_push_and_survives_a_successful_pull() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("backup.git");
+        run_git(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        set_backup_remote(&vault, bare.to_str().unwrap()).unwrap();
+        let branch = git2::Repository::open(&vault.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+        let remote_before = remote_head(&bare, &branch);
+
+        fs::write(vault.root.join("gate-probe.txt"), "must stay local").unwrap();
+        vault
+            .commit(&["gate-probe.txt"], "test: gate probe")
+            .unwrap();
+        let local_head = git2::Repository::open(&vault.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        assert_ne!(local_head, remote_before);
+
+        let mut gate_calls = 0;
+        {
+            let _lock = sync_lock(&vault).unwrap();
+            let error = push_now_locked_with_gate(&vault, |_| {
+                gate_calls += 1;
+                Err(failure(
+                    BackupFailureKind::PrivacyCheck,
+                    "repository became public",
+                ))
+            })
+            .unwrap_err();
+            assert_eq!(failure_kind(&error), Some(BackupFailureKind::PrivacyCheck));
+        }
+        assert_eq!(gate_calls, 1);
+        assert_eq!(remote_head(&bare, &branch), remote_before);
+        let latched = sync_state(&vault);
+        assert_eq!(
+            latched.last_error_kind,
+            Some(BackupFailureKind::PrivacyCheck)
+        );
+        assert!(latched.privacy_latch.is_some());
+
+        pull_now(&vault).unwrap();
+        let after_pull = sync_state(&vault);
+        assert_eq!(
+            after_pull.last_error.as_deref(),
+            Some("repository became public")
+        );
+        assert_eq!(after_pull.privacy_latch, latched.privacy_latch);
+        assert!(matches!(
+            pull_if_stale(&vault),
+            Some(crate::degradation::Degradation::RemoteSync { detail })
+                if detail == "repository became public"
+        ));
+
+        {
+            let _lock = sync_lock(&vault).unwrap();
+            push_now_locked_with_gate(&vault, |_| Ok(())).unwrap();
+        }
+        assert_eq!(remote_head(&bare, &branch), local_head);
+        let recovered = sync_state(&vault);
+        assert!(recovered.last_error.is_none());
+        assert!(recovered.last_error_kind.is_none());
+        assert!(recovered.privacy_latch.is_none());
+    }
+
+    #[test]
+    fn non_fast_forward_retry_runs_the_upload_gate_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("backup.git");
+        run_git(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
+        let a = Vault::create(dir.path().join("a")).unwrap();
+        set_backup_remote(&a, bare.to_str().unwrap()).unwrap();
+        let branch = git2::Repository::open(&a.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+        run_git(
+            &bare,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+        );
+        run_git(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
+        let b = Vault::open(dir.path().join("b")).unwrap();
+
+        fs::write(a.root.join("from-a.txt"), "a").unwrap();
+        a.commit(&["from-a.txt"], "test: from a").unwrap();
+        push_now(&a).unwrap();
+        fs::write(b.root.join("from-b.txt"), "b").unwrap();
+        b.commit(&["from-b.txt"], "test: from b").unwrap();
+
+        let mut gate_calls = 0;
+        {
+            let _lock = sync_lock(&b).unwrap();
+            push_now_locked_with_gate(&b, |_| {
+                gate_calls += 1;
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(gate_calls, 2, "retry pushの直前にもgateが必要");
+        assert_eq!(backup_status(&b).unwrap().pending, 0);
     }
 
     /// 複数デバイス同期の一周: A が書く → 随時 push → B がメッセージ時 pull で受け取る

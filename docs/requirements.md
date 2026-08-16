@@ -225,7 +225,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   「既存 Vault の private repository を使う」に分ける。後者は clone 後に Storage Contract と
   `.kb-workspace` を検査し、同じ ID の Vault だけを同期対象として接続する。別 ID を自動で
   merge・上書きしない。privacy と push 権限は接続時および各 upload 直前に認証済み GitHub API
-  で確認し、判定不能を含めて fail-closed とする。fresh clone は全 `full` LFS object を明示取得し、
+  で確認し、判定不能を含めて fail-closed とする。失敗は正常なpullで消えないlatchとして残し、
+  private + push権限の再確認に成功したときだけ解除する。rebase後のretry pushも再検査する。
+  fresh clone は全 `full` LFS object を明示取得し、
   hash 照合が終わるまで復元完了としない。検査・clone・object検証・登録の進捗を表示し、再試行では
   workspace単位の端末storeに残る検証済みobjectを再利用する。認証・権限・privacy・通信・remote欠損・
   quota・LFS欠損・hash不一致・競合等はtyped reasonとして区別する(詳細: ADR-0005)
