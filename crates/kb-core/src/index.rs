@@ -247,10 +247,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         vault
-            .new_human_note(
+            .propose(
                 "認証 メモ",
                 "認証フローの見直し。[設計](/notes/設計.md) 参照。",
-                "human:o",
+                None,
+                &["test".into()],
+                "test/client",
             )
             .unwrap();
         let conn = open_db(&vault).unwrap();

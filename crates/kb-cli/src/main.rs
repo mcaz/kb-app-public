@@ -6,7 +6,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use kb_core::OWNER_ACTOR;
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
 use kb_core::search::recent;
@@ -33,12 +32,6 @@ enum Command {
         #[command(subcommand)]
         command: VaultCommand,
     },
-    /// 人間のメモを作成(本文は --body か stdin)
-    New {
-        title: String,
-        #[arg(long)]
-        body: Option<String>,
-    },
     /// 検索(全文+リンク近傍)
     Search {
         query: Vec<String>,
@@ -55,7 +48,7 @@ enum Command {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
-    /// AI 由来の下書き起票(テスト用の口。通常は MCP 経由)
+    /// AI 管理ノートを起票(本文は --body か stdin。通常は MCP 経由)
     Propose {
         #[arg(long)]
         title: String,
@@ -71,10 +64,6 @@ enum Command {
         #[arg(long)]
         allow_new_tags: bool,
     },
-    /// 退役(status: deprecated)
-    Archive { note: String },
-    /// 削除(本体+添付。git 履歴には残る)
-    Delete { note: String },
     /// 既存 Markdown KB からの移植(互換レイヤ)。`<dir>` か `<dir>=<接頭辞>` を複数指定可。
     /// リンク解決はソース横断
     Import {
@@ -201,14 +190,6 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Command::New { title, body } => {
-            let vault = open_vault(cli.vault.as_deref())?;
-            let body = body_or_stdin(body)?;
-            let id = vault.new_human_note(&title, &body, OWNER_ACTOR)?;
-            let conn = open_db(&vault)?;
-            sync(&vault, &conn)?;
-            println!("{id}");
-        }
         Command::Search { query, limit, any } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let conn = open_db(&vault)?;
@@ -245,11 +226,6 @@ fn main() -> Result<()> {
             let id = vault.propose(&title, &body, description.as_deref(), &tags, &client)?;
             println!("{id}");
         }
-        Command::Archive { note } => {
-            let vault = open_vault(cli.vault.as_deref())?;
-            vault.archive(&note)?;
-            println!("archived: {note}");
-        }
         Command::Import { sources } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let parsed: Vec<kb_core::import::Source> = sources
@@ -285,13 +261,6 @@ fn main() -> Result<()> {
             }
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
-        }
-        Command::Delete { note } => {
-            let vault = open_vault(cli.vault.as_deref())?;
-            vault.delete_note(&note)?;
-            let conn = open_db(&vault)?;
-            sync(&vault, &conn)?;
-            println!("deleted: {note}");
         }
         Command::Care { command } => {
             let vault = open_vault(cli.vault.as_deref())?;
@@ -405,4 +374,24 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// ノートの書き込みは AI 経路だけ。CLI に人間所有の抜け道を戻さない。
+    #[test]
+    fn human_note_write_commands_are_not_exposed() {
+        let command = Cli::command();
+        for removed in ["new", "archive", "delete"] {
+            assert!(
+                command.find_subcommand(removed).is_none(),
+                "{removed} を CLI に公開してはいけない"
+            );
+        }
+        assert!(command.find_subcommand("propose").is_some());
+    }
 }

@@ -167,6 +167,7 @@ pub fn dismiss(conn: &Connection, key: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter::{Frontmatter, Note};
     use crate::index::{open_db, sync};
 
     /// 埋め込みを手挿入して検知経路をテスト(モデル不要にするため broken 経路中心)。
@@ -174,11 +175,16 @@ mod tests {
     fn broken_link_and_dismiss_flow() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
+        // 契約違反の既存データを raw fixture で再現し、検知側の自己修復を確かめる。
+        let mut front = Frontmatter::new_note("親");
+        front.origin = Some("agent".into());
         vault
-            .new_human_note(
-                "親",
-                "まだ無い [子ノート](/notes/子ノート.md) を参照。",
-                "human:o",
+            .write_note(
+                "notes/親",
+                &Note {
+                    front,
+                    body: "まだ無い [子ノート](/notes/子ノート.md) を参照。".into(),
+                },
             )
             .unwrap();
         let conn = open_db(&vault).unwrap();

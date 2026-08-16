@@ -656,21 +656,31 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         vault
-            .new_human_note(
+            .propose(
                 "認証設計メモ",
                 "認証フローの見直しを行った。監査ログも整備する。",
-                "human:o",
+                None,
+                &["test".into()],
+                "test/client",
             )
             .unwrap();
         vault
-            .new_human_note(
+            .propose(
                 "運用ノート",
                 "本番環境の運用手順とバックアップのライフサイクルを記録。",
-                "human:o",
+                None,
+                &["test".into()],
+                "test/client",
             )
             .unwrap();
         vault
-            .new_human_note("無関係", "昨日の打ち合わせ内容を整理する。", "human:o")
+            .propose(
+                "無関係",
+                "昨日の打ち合わせ内容を整理する。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
             .unwrap();
         let conn = open_db(&vault).unwrap();
         sync(&vault, &conn).unwrap();
