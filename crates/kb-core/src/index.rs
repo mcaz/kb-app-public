@@ -148,7 +148,7 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
     let f = &note.front;
     // 添付ファイル名も検索対象に(「あの PDF どこだっけ」を引けるように。FR-C8)
     let attach_names: String = vault
-        .list_attachments(id)
+        .list_attachments(id)?
         .iter()
         .map(|(n, _)| n.as_str())
         .collect::<Vec<_>>()

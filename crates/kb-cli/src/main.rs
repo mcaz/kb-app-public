@@ -298,7 +298,7 @@ fn main() -> Result<()> {
             let workspace_id = kb_core::workspace::workspace_id(&vault)?;
             let ledger = kb_core::ledger::Ledger::open(&vault, &workspace_id)?;
 
-            let pending = kb_core::migrate::survey(&vault, &ledger);
+            let pending = kb_core::migrate::survey(&vault, &ledger)?;
             if pending.is_empty() {
                 println!("移行するものはない(すべて台帳に載っている)");
                 return Ok(());

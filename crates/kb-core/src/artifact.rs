@@ -515,6 +515,8 @@ impl Manifest {
 
     /// ノートにひもづける。版が合わなければ通さない。
     pub fn attach(&mut self, expected_version: u64, note_id: &str) -> Result<()> {
+        crate::note_id::NoteId::parse(note_id)
+            .map_err(|_| ArtifactError::Malformed { field: "note_id" })?;
         self.check_version(expected_version)?;
         if !self.notes.iter().any(|n| n == note_id) {
             self.notes.push(note_id.to_string());
@@ -526,6 +528,8 @@ impl Manifest {
     /// ノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。
     /// どのノートからも外れたファイルは、整理の下見で拾えるように残る。
     pub fn detach(&mut self, expected_version: u64, note_id: &str) -> Result<()> {
+        crate::note_id::NoteId::parse(note_id)
+            .map_err(|_| ArtifactError::Malformed { field: "note_id" })?;
         self.check_version(expected_version)?;
         self.notes.retain(|n| n != note_id);
         self.version += 1;
@@ -909,6 +913,21 @@ mod tests {
             })
         );
         assert!(m.notes.is_empty());
+    }
+
+    #[test]
+    fn relations_reject_invalid_note_ids() {
+        let mut m = manifest();
+        assert_eq!(
+            m.attach(1, "../outside"),
+            Err(ArtifactError::Malformed { field: "note_id" })
+        );
+        assert!(m.notes.is_empty());
+        assert_eq!(
+            m.detach(1, r"notes\outside"),
+            Err(ArtifactError::Malformed { field: "note_id" })
+        );
+        assert_eq!(m.version, 1);
     }
 
     #[test]

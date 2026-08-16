@@ -268,7 +268,7 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 })?,
             };
             let note = vault.read_note(&id)?;
-            let attachments = vault.list_attachments(&id);
+            let attachments = vault.list_attachments(&id)?;
             let attach_line = if attachments.is_empty() {
                 String::new()
             } else {
@@ -448,5 +448,27 @@ mod tests {
         }]);
         assert!(text.contains("[similar_notes]"), "{text}");
         assert!(text.contains("db locked"), "{text}");
+    }
+
+    #[test]
+    fn mcp_get_update_and_remove_cannot_escape_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.md");
+        std::fs::write(&secret, "TOP SECRET").unwrap();
+
+        for (tool, args) in [
+            ("get", serde_json::json!({"note": "../outside/secret"})),
+            (
+                "update",
+                serde_json::json!({"note": "../outside/secret", "body": "侵入"}),
+            ),
+            ("remove", serde_json::json!({"note": "../outside/secret"})),
+        ] {
+            assert!(call_tool(&vault, "test/client", tool, &args).is_err());
+            assert_eq!(std::fs::read_to_string(&secret).unwrap(), "TOP SECRET");
+        }
     }
 }

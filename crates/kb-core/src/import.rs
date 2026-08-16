@@ -95,7 +95,7 @@ pub fn import(vault: &Vault, sources: &[Source], allow_new_tags: bool) -> Result
     // 第2パス: 変換して書き込み
     let mut written: Vec<String> = Vec::new();
     for (_si, dest, path) in &files {
-        if vault.note_path(dest).exists() {
+        if vault.note_path(dest)?.exists() {
             report.skipped.push(format!("{dest}(既存)"));
             continue;
         }

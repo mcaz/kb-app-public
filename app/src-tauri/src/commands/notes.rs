@@ -41,6 +41,8 @@ fn note_view_from(
     id: &str,
     mut degraded: Vec<kb_core::degradation::Degradation>,
 ) -> AppResult<NoteView> {
+    let id = kb_core::note_id::NoteId::parse(id).map_err(AppError::invalid_input)?;
+    let id = id.as_str();
     let note = vault
         .read_note(id)
         .map_err(|_| AppError::note_not_found(id))?;
@@ -140,6 +142,24 @@ mod tests {
                 .any(|item| matches!(item, kb_core::degradation::Degradation::SimilarNotes { .. }))
         );
     }
+
+    #[test]
+    fn invalid_note_id_is_typed_as_invalid_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+
+        let error = match note_view_from(&vault, &conn, "../outside", Vec::new()) {
+            Ok(_) => panic!("Vault外のIDが受理された"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            AppError::CoreFailed {
+                kind: kb_core::error::CoreErrorKind::InvalidInput
+            }
+        ));
+    }
 }
 
 /// サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。
@@ -167,7 +187,10 @@ pub fn note_list(
         let managed_counts = ledger.current_counts_by_note();
         for note in &mut page.notes {
             let managed = managed_counts.get(&note.id).copied().unwrap_or(0);
-            let legacy = vault.list_attachments(&note.id).len();
+            let legacy = vault
+                .list_attachments(&note.id)
+                .map_err(AppError::storage)?
+                .len();
             note.file_count = managed + legacy;
         }
         Ok(page)

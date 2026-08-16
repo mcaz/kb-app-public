@@ -87,9 +87,9 @@ pub fn availability(vault: &Vault, stores: &Stores, m: &Manifest) -> Availabilit
             other => stores.has_local(other, &m.hash),
         },
         // 移行前の旧添付は、保管庫の中の実ファイルがそのまま実体
-        Locator::LegacyGit { note_id, file_name } => {
-            vault.attach_dir(note_id).join(file_name).is_file()
-        }
+        Locator::LegacyGit { note_id, file_name } => vault
+            .legacy_attachment_path(note_id, file_name)
+            .is_ok_and(|path| path.is_file()),
         // 元の場所を指すだけ。**リポジトリ ID から手元のパスを引く仕組みが無い**ので
         // 在否を確かめられない。確かめられないことを Local と言わない側に倒す
         // (リポジトリの所在を持つ台帳は ADR-0003 の残課題)
@@ -518,7 +518,7 @@ mod tests {
 
         // 旧添付は保管庫の中の実ファイルが実体。置き場を見ても見つからない
         let note_id = "notes/旧";
-        let files = vault.attach_dir(note_id);
+        let files = vault.attach_dir(note_id).unwrap();
         fs::create_dir_all(&files).unwrap();
         fs::write(files.join("図.png"), b"legacy bytes").unwrap();
         let legacy = Locator::LegacyGit {

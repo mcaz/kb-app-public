@@ -103,6 +103,9 @@ fn artifact_id(raw: &str) -> AppResult<ArtifactId> {
 #[tauri::command]
 #[specta::specta]
 pub fn note_files(state: State<'_, AppState>, id: String) -> AppResult<NoteFiles> {
+    let id = kb_core::note_id::NoteId::parse(&id)
+        .map_err(AppError::invalid_input)?
+        .to_string();
     state.with_artifacts(|vault, stores, ledger, _| {
         let mut files: Vec<FileRow> = ledger
             .list_for_note(&id)
@@ -113,6 +116,7 @@ pub fn note_files(state: State<'_, AppState>, id: String) -> AppResult<NoteFiles
 
         let legacy = vault
             .list_attachments(&id)
+            .map_err(AppError::storage)?
             .into_iter()
             .map(|(name, size)| LegacyFile { name, size })
             .collect();
@@ -194,6 +198,9 @@ fn take(
     origin: &str,
     supersedes: Option<ArtifactId>,
 ) -> AppResult<Added> {
+    let note_id = kb_core::note_id::NoteId::parse(&note_id)
+        .map_err(AppError::invalid_input)?
+        .to_string();
     state.with_artifacts(|vault, stores, ledger, workspace_id| {
         let req = intake::Request {
             note_id: Some(note_id.clone()),
@@ -255,11 +262,9 @@ pub fn legacy_open(
     name: String,
 ) -> AppResult<()> {
     let path = state.with_vault(|vault| {
-        // 名前は成分だけ使う(パス潜り対策 — 旧実装と同じ扱い)
-        let base = Path::new(&name)
-            .file_name()
-            .ok_or_else(|| AppError::invalid_input(anyhow::anyhow!("ファイル名が不正")))?;
-        let path = vault.attach_dir(&note_id).join(base);
+        let path = vault
+            .legacy_attachment_path(&note_id, &name)
+            .map_err(AppError::invalid_input)?;
         if !path.is_file() {
             return Err(AppError::FileNotHere);
         }
@@ -306,6 +311,9 @@ pub fn file_detach(
     expected_version: u64,
 ) -> AppResult<()> {
     let id = artifact_id(&id)?;
+    let note_id = kb_core::note_id::NoteId::parse(&note_id)
+        .map_err(AppError::invalid_input)?
+        .to_string();
     state.with_artifacts(|vault, _, ledger, _| {
         let mut manifest = ledger
             .get(&id)

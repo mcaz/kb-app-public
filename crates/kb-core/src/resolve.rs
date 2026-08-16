@@ -59,7 +59,7 @@ impl Resolved {
                 other => stores.read(other, &self.manifest.hash),
             },
             Locator::LegacyGit { note_id, file_name } => {
-                let path = vault.attach_dir(note_id).join(file_name);
+                let path = vault.legacy_attachment_path(note_id, file_name)?;
                 Ok(File::open(path).ok())
             }
             // 指すだけで実体を持たない。手元のパスを引く仕組みが無い(残課題)
