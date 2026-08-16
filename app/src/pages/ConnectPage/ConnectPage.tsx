@@ -7,7 +7,7 @@ import { Button } from "@/components/atoms/ui/button";
 import { ConnectCard } from "@/components/molecules/ConnectCard";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
 import { useEmbedProgress } from "@/hooks/useEmbedProgress";
-import { useErrorText } from "@/hooks/useErrorText";
+import { useBackupErrorText, useErrorText } from "@/hooks/useErrorText";
 import {
   useBackupNow,
   useBackupCreateRepository,
@@ -22,6 +22,7 @@ export function ConnectPage() {
   const { t } = useTranslation(["connect", "common"]);
   const { data: state, isPending } = useConnectState();
   const errorText = useErrorText();
+  const backupErrorText = useBackupErrorText();
   const embedProgress = useEmbedProgress();
   const connectDesktop = useConnectDesktop();
   const embedEnable = useEmbedEnable();
@@ -129,7 +130,9 @@ export function ConnectPage() {
               )}
               {state.sync_error && (
                 <div className="text-danger mb-3 text-[12.5px]">
-                  {t("backup.error", { error: state.sync_error })}
+                  {t("backup.error", {
+                    error: backupErrorText(state.sync_error_kind, state.sync_error),
+                  })}
                 </div>
               )}
             </>

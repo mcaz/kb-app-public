@@ -10,8 +10,10 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::Deserialize;
+
+use crate::backup::{BackupFailureKind, failure};
 
 const API_BASE: &str = "https://api.github.com";
 const API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -58,17 +60,26 @@ pub fn parse_repository_url(url: &str) -> Result<RepositoryName> {
     } else if let Some(path) = trimmed.strip_prefix("https://github.com/") {
         path
     } else {
-        bail!("GitHub repository の URL ではない")
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "GitHub repository の URL ではない",
+        ));
     };
     let path = path.strip_suffix(".git").unwrap_or(path);
     let mut parts = path.split('/');
     let owner = parts.next().unwrap_or_default();
     let repo = parts.next().unwrap_or_default();
     if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
-        bail!("GitHub repository URL は owner/repository の形で指定する");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "GitHub repository URL は owner/repository の形で指定する",
+        ));
     }
     if !valid_name(owner) || !valid_name(repo) {
-        bail!("GitHub repository URL に不正な owner/repository 名がある");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "GitHub repository URL に不正な owner/repository 名がある",
+        ));
     }
     Ok(RepositoryName {
         owner: owner.to_string(),
@@ -93,24 +104,56 @@ fn credential_token() -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .context("GitHub 認証情報の確認を開始できない")?;
+        .map_err(|error| {
+            failure(
+                BackupFailureKind::Authentication,
+                format!("GitHub 認証情報の確認を開始できない: {error}"),
+            )
+        })?;
     child
         .stdin
         .as_mut()
-        .context("GitHub 認証情報へ問い合わせられない")?
-        .write_all(b"protocol=https\nhost=github.com\n\n")?;
-    let output = child
-        .wait_with_output()
-        .context("GitHub 認証情報を確認できない")?;
+        .ok_or_else(|| {
+            failure(
+                BackupFailureKind::Authentication,
+                "GitHub 認証情報へ問い合わせられない",
+            )
+        })?
+        .write_all(b"protocol=https\nhost=github.com\n\n")
+        .map_err(|error| {
+            failure(
+                BackupFailureKind::Authentication,
+                format!("GitHub 認証情報へ問い合わせられない: {error}"),
+            )
+        })?;
+    let output = child.wait_with_output().map_err(|error| {
+        failure(
+            BackupFailureKind::Authentication,
+            format!("GitHub 認証情報を確認できない: {error}"),
+        )
+    })?;
     if !output.status.success() {
-        bail!("GitHub にサインインしていないため private repository を確認できない");
+        return Err(failure(
+            BackupFailureKind::Authentication,
+            "GitHub にサインインしていないため private repository を確認できない",
+        ));
     }
-    let text = String::from_utf8(output.stdout).context("GitHub 認証情報の形式が不正")?;
+    let text = String::from_utf8(output.stdout).map_err(|error| {
+        failure(
+            BackupFailureKind::Authentication,
+            format!("GitHub 認証情報の形式が不正: {error}"),
+        )
+    })?;
     text.lines()
         .find_map(|line| line.strip_prefix("password="))
         .filter(|token| !token.trim().is_empty())
         .map(str::to_string)
-        .context("GitHub にサインインしていないため private repository を確認できない")
+        .ok_or_else(|| {
+            failure(
+                BackupFailureKind::Authentication,
+                "GitHub にサインインしていないため private repository を確認できない",
+            )
+        })
 }
 
 /// upload の直前に呼ぶ fail-closed gate。
@@ -123,7 +166,10 @@ pub fn verify_private_repository(url: &str) -> Result<VerifiedPrivateRepository>
 pub fn create_private_repository(name: &str) -> Result<VerifiedPrivateRepository> {
     let name = name.trim();
     if name.is_empty() || !valid_name(name) || matches!(name, "." | "..") {
-        bail!("repository 名は英数字・ハイフン・アンダースコア・ピリオドで指定する");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "repository 名は英数字・ハイフン・アンダースコア・ピリオドで指定する",
+        ));
     }
     let token = credential_token()?;
     create_private_repository_at(API_BASE, name, &token)
@@ -151,22 +197,40 @@ fn create_private_repository_at(
         .header("User-Agent", "kb-app")
         .send(body.as_slice())
         .map_err(|error| match error {
-            ureq::Error::StatusCode(401 | 403) => {
-                anyhow::anyhow!("private repository を作る GitHub 権限がない")
-            }
-            ureq::Error::StatusCode(422) => {
-                anyhow::anyhow!("同名の repository があるか、名前を使用できない")
-            }
-            other => anyhow::anyhow!("private repository の作成に失敗: {other}"),
+            ureq::Error::StatusCode(401) => failure(
+                BackupFailureKind::Authentication,
+                "GitHub の認証が失効しているため private repository を作れない",
+            ),
+            ureq::Error::StatusCode(403) => failure(
+                BackupFailureKind::Permission,
+                "private repository を作る GitHub 権限がない",
+            ),
+            ureq::Error::StatusCode(422) => failure(
+                BackupFailureKind::InvalidRepository,
+                "同名の repository があるか、名前を使用できない",
+            ),
+            other => failure(
+                BackupFailureKind::Network,
+                format!("private repository の作成に失敗: {other}"),
+            ),
         })?;
-    let text = response
-        .body_mut()
-        .read_to_string()
-        .context("GitHub repository 作成応答を読めない")?;
-    let created: RepositoryResponse =
-        serde_json::from_str(&text).context("GitHub repository 作成応答の形式を確認できない")?;
+    let text = response.body_mut().read_to_string().map_err(|error| {
+        failure(
+            BackupFailureKind::PrivacyCheck,
+            format!("GitHub repository 作成応答を読めない: {error}"),
+        )
+    })?;
+    let created: RepositoryResponse = serde_json::from_str(&text).map_err(|error| {
+        failure(
+            BackupFailureKind::PrivacyCheck,
+            format!("GitHub repository 作成応答の形式を確認できない: {error}"),
+        )
+    })?;
     if !created.private || created.visibility.as_deref() != Some("private") {
-        bail!("作成された repository が private と確認できないため接続しない");
+        return Err(failure(
+            BackupFailureKind::PrivacyCheck,
+            "作成された repository が private と確認できないため接続しない",
+        ));
     }
     // 作成応答だけを証明にせず、upload gate と同じ GET をもう一度通す。
     verify_private_repository_at(api_base, &created.clone_url, token)
@@ -194,17 +258,35 @@ fn verify_private_repository_at(
         .header("User-Agent", "kb-app")
         .call()
         .map_err(|error| match error {
-            ureq::Error::StatusCode(401 | 403 | 404) => anyhow::anyhow!(
-                "GitHub repository を認証済みAPIで確認できない(権限・URL・認証を確認)"
+            ureq::Error::StatusCode(401) => failure(
+                BackupFailureKind::Authentication,
+                "GitHub の認証が失効しているため repository を確認できない",
             ),
-            other => anyhow::anyhow!("GitHub repository の安全確認に失敗: {other}"),
+            ureq::Error::StatusCode(403) => failure(
+                BackupFailureKind::Permission,
+                "GitHub repository を確認する権限がない",
+            ),
+            ureq::Error::StatusCode(404) => failure(
+                BackupFailureKind::RemoteMissing,
+                "GitHub repository が見つからないか、アクセスできない",
+            ),
+            other => failure(
+                BackupFailureKind::Network,
+                format!("GitHub repository の安全確認に失敗: {other}"),
+            ),
         })?;
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .context("GitHub repository 応答を読めない")?;
-    let repository: RepositoryResponse =
-        serde_json::from_str(&body).context("GitHub repository 応答の形式を確認できない")?;
+    let body = response.body_mut().read_to_string().map_err(|error| {
+        failure(
+            BackupFailureKind::PrivacyCheck,
+            format!("GitHub repository 応答を読めない: {error}"),
+        )
+    })?;
+    let repository: RepositoryResponse = serde_json::from_str(&body).map_err(|error| {
+        failure(
+            BackupFailureKind::PrivacyCheck,
+            format!("GitHub repository 応答の形式を確認できない: {error}"),
+        )
+    })?;
     evaluate(repository, &name)
 }
 
@@ -216,16 +298,25 @@ fn evaluate(
         .full_name
         .eq_ignore_ascii_case(&requested.full_name())
     {
-        bail!("GitHub API が別の repository を返したため接続しない");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "GitHub API が別の repository を返したため接続しない",
+        ));
     }
     if !repository.private || repository.visibility.as_deref() != Some("private") {
-        bail!("接続先は private repository ではないためデータを送信しない");
+        return Err(failure(
+            BackupFailureKind::PrivacyCheck,
+            "接続先は private repository ではないためデータを送信しない",
+        ));
     }
     if !repository
         .permissions
         .is_some_and(|permissions| permissions.push)
     {
-        bail!("接続先への書き込み権限を確認できないためデータを送信しない");
+        return Err(failure(
+            BackupFailureKind::Permission,
+            "接続先への書き込み権限を確認できないためデータを送信しない",
+        ));
     }
     Ok(VerifiedPrivateRepository {
         id: repository.id,

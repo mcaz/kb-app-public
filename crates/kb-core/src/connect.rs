@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use crate::backup::{BackupFailureKind, failure, failure_kind, git_failure};
 use crate::frontmatter::today;
 use crate::vault::Vault;
 
@@ -259,6 +260,38 @@ enum RemoteContents {
     Vault { workspace_id: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum RestorePhase {
+    Checking,
+    Cloning,
+    RestoringFiles,
+    Finalizing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct RestoreProgress {
+    pub phase: RestorePhase,
+    pub completed: usize,
+    pub total: usize,
+    pub fetched: usize,
+    pub reused: usize,
+}
+
+impl RestoreProgress {
+    fn at(phase: RestorePhase) -> Self {
+        Self {
+            phase,
+            completed: 0,
+            total: 0,
+            fetched: 0,
+            reused: 0,
+        }
+    }
+}
+
 fn is_local_test_remote(url: &str) -> bool {
     cfg!(test) && (url.starts_with("file://") || Path::new(url).is_absolute())
 }
@@ -300,33 +333,63 @@ fn inspect_remote(url: &str) -> Result<RemoteContents> {
         .output()
         .context("既存 Vault の検査用 clone を開始できない")?;
     if !out.status.success() {
-        bail!("既存 Vault を確認できない: {}", stderr_of(&out));
+        return Err(git_failure(
+            "既存 Vault を確認できない",
+            &stderr_of(&out),
+            BackupFailureKind::GitPull,
+        ));
     }
     let repo = git2::Repository::open(&clone_root)?;
     if repo.head().is_err() {
         return Ok(RemoteContents::Empty);
     }
     let candidate = Vault::open(&clone_root)?;
-    crate::storage_contract::verify(&candidate)
-        .context("接続先は kb-app の Storage Contract を満たさない")?;
+    if let Err(error) = crate::storage_contract::verify(&candidate) {
+        return Err(failure(
+            BackupFailureKind::InvalidVault,
+            format!("接続先は kb-app の Storage Contract を満たさない: {error}"),
+        ));
+    }
     Ok(RemoteContents::Vault {
-        workspace_id: crate::workspace::stored_workspace_id(&candidate)?,
+        workspace_id: crate::workspace::stored_workspace_id(&candidate).map_err(|error| {
+            failure(
+                BackupFailureKind::InvalidVault,
+                format!("接続先の workspace ID を確認できない: {error}"),
+            )
+        })?,
     })
 }
 
 /// 新しい端末で既存 Vault に参加する。検査と Full 復元が全部終わるまで `destination` は作らない。
 /// 既存 path への overlay / overwrite は行わない。
 pub fn clone_existing_vault(url: &str, destination: &Path) -> Result<crate::lfs::RestoreReport> {
+    clone_existing_vault_with_progress(url, destination, |_| {})
+}
+
+/// [`clone_existing_vault`] の進捗通知付き経路。失敗時に一時cloneは消すが、hash照合済みの
+/// LFS objectはworkspace ID単位の端末storeへ残るため、同じURLの再実行で再利用する。
+pub fn clone_existing_vault_with_progress(
+    url: &str,
+    destination: &Path,
+    mut progress: impl FnMut(RestoreProgress),
+) -> Result<crate::lfs::RestoreReport> {
+    progress(RestoreProgress::at(RestorePhase::Checking));
     let url = url.trim();
     let is_github = url.starts_with("git@github.com:") || url.starts_with("https://github.com/");
     if !is_github && !is_local_test_remote(url) {
-        bail!("既存 Vault は GitHub repository の URL で指定する");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "既存 Vault は GitHub repository の URL で指定する",
+        ));
     }
     if destination.exists() {
-        bail!(
-            "復元先が既に存在するため上書きしない: {}",
-            destination.display()
-        );
+        return Err(failure(
+            BackupFailureKind::DestinationExists,
+            format!(
+                "復元先が既に存在するため上書きしない: {}",
+                destination.display()
+            ),
+        ));
     }
     if is_github {
         crate::github::verify_private_repository(url)?;
@@ -338,6 +401,7 @@ pub fn clone_existing_vault(url: &str, destination: &Path) -> Result<crate::lfs:
         .tempdir_in(parent)
         .context("既存 Vault の一時復元先を作れない")?;
     let clone_root = temp.path().join("vault");
+    progress(RestoreProgress::at(RestorePhase::Cloning));
     let out = std::process::Command::new("git")
         .arg("clone")
         .arg("--no-tags")
@@ -351,16 +415,42 @@ pub fn clone_existing_vault(url: &str, destination: &Path) -> Result<crate::lfs:
         .output()
         .context("既存 Vault の clone を開始できない")?;
     if !out.status.success() {
-        bail!("既存 Vault を clone できない: {}", stderr_of(&out));
+        return Err(git_failure(
+            "既存 Vault を clone できない",
+            &stderr_of(&out),
+            BackupFailureKind::GitPull,
+        ));
     }
     let repo = git2::Repository::open(&clone_root)?;
     if repo.head().is_err() {
-        bail!("選んだ repository は空で、復元できる Vault が無い");
+        return Err(failure(
+            BackupFailureKind::InvalidVault,
+            "選んだ repository は空で、復元できる Vault が無い",
+        ));
     }
     let restored = Vault::open(&clone_root)?;
-    crate::storage_contract::verify(&restored)
-        .context("接続先は kb-app の Storage Contract を満たさない")?;
-    let report = crate::lfs::restore_all(&restored)?;
+    if let Err(error) = crate::storage_contract::verify(&restored) {
+        return Err(failure(
+            BackupFailureKind::InvalidVault,
+            format!("接続先は kb-app の Storage Contract を満たさない: {error}"),
+        ));
+    }
+    let report = crate::lfs::restore_all_with_progress(&restored, |state| {
+        progress(RestoreProgress {
+            phase: RestorePhase::RestoringFiles,
+            completed: state.completed,
+            total: state.total,
+            fetched: state.fetched,
+            reused: state.reused,
+        });
+    })?;
+    progress(RestoreProgress {
+        phase: RestorePhase::Finalizing,
+        completed: report.total,
+        total: report.total,
+        fetched: report.fetched,
+        reused: report.reused,
+    });
     drop(restored);
     fs::rename(&clone_root, destination).with_context(|| {
         format!(
@@ -376,7 +466,11 @@ pub fn clone_existing_vault(url: &str, destination: &Path) -> Result<crate::lfs:
 fn configure_existing_upstream(vault: &Vault) -> Result<()> {
     let fetch = git(vault, &["fetch", "origin"])?;
     if !fetch.status.success() {
-        bail!("既存 Vault の履歴を取得できない: {}", stderr_of(&fetch));
+        return Err(git_failure(
+            "既存 Vault の履歴を取得できない",
+            &stderr_of(&fetch),
+            BackupFailureKind::GitPull,
+        ));
     }
     let _ = git(vault, &["remote", "set-head", "origin", "--auto"]);
     let repo = git2::Repository::open(&vault.root)?;
@@ -397,7 +491,11 @@ fn configure_existing_upstream(vault: &Vault) -> Result<()> {
     };
     let out = git(vault, &["branch", "--set-upstream-to", &upstream, &local])?;
     if !out.status.success() {
-        bail!("既存 Vault の追跡設定に失敗: {}", stderr_of(&out));
+        return Err(git_failure(
+            "既存 Vault の追跡設定に失敗",
+            &stderr_of(&out),
+            BackupFailureKind::GitPull,
+        ));
     }
     Ok(())
 }
@@ -412,21 +510,32 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
     let is_github = url.starts_with("git@github.com:") || url.starts_with("https://github.com/");
     let is_local = is_local_test_remote(url);
     if !is_github && !is_local {
-        bail!("バックアップ先は GitHub repository の URL を指定する");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "バックアップ先は GitHub repository の URL を指定する",
+        ));
     }
     if is_github {
         crate::github::verify_private_repository(url)?;
     }
     let remote = inspect_remote(url)?;
-    let local_workspace_id = crate::workspace::stored_workspace_id(vault)?;
+    let local_workspace_id = crate::workspace::stored_workspace_id(vault).map_err(|error| {
+        failure(
+            BackupFailureKind::InvalidVault,
+            format!("現在の Vault の workspace ID を確認できない: {error}"),
+        )
+    })?;
     if let RemoteContents::Vault {
         workspace_id: remote_workspace_id,
     } = &remote
         && remote_workspace_id != &local_workspace_id
     {
-        bail!(
-            "別の Vault なので接続しない(local workspace {local_workspace_id}, remote workspace {remote_workspace_id})"
-        );
+        return Err(failure(
+            BackupFailureKind::WorkspaceMismatch,
+            format!(
+                "別の Vault なので接続しない(local workspace {local_workspace_id}, remote workspace {remote_workspace_id})"
+            ),
+        ));
     }
     ensure_merge_config(vault)?;
     let repo = git2::Repository::open(&vault.root)?;
@@ -458,7 +567,11 @@ pub fn push_now(vault: &Vault) -> Result<()> {
 fn push_now_locked(vault: &Vault) -> Result<()> {
     if let Err(error) = ensure_origin_upload_allowed(vault) {
         let message = error.to_string();
-        record_sync(vault, Some(&message), Some(SyncFailureKind::PrivacyCheck));
+        record_sync(
+            vault,
+            Some(&message),
+            Some(failure_kind(&error).unwrap_or(BackupFailureKind::PrivacyCheck)),
+        );
         return Err(error);
     }
     let _ = ensure_merge_config(vault);
@@ -467,6 +580,15 @@ fn push_now_locked(vault: &Vault) -> Result<()> {
         record_sync(vault, None, None);
         return Ok(());
     }
+    let first_error = git_failure("push 失敗", &stderr_of(&out), BackupFailureKind::GitPush);
+    if failure_kind(&first_error) != Some(BackupFailureKind::GitConflict) {
+        record_sync(
+            vault,
+            Some(&first_error.to_string()),
+            failure_kind(&first_error),
+        );
+        return Err(first_error);
+    }
     let pull = git(vault, &["pull", "--rebase", "--autostash"])?;
     if pull.status.success() {
         let retry = git(vault, &["push", "-u", "origin", "HEAD"])?;
@@ -474,13 +596,17 @@ fn push_now_locked(vault: &Vault) -> Result<()> {
             record_sync(vault, None, None);
             return Ok(());
         }
-        let e = format!("push 失敗: {}", stderr_of(&retry));
-        record_sync(vault, Some(&e), Some(SyncFailureKind::GitPush));
-        bail!(e);
+        let error = git_failure("push 失敗", &stderr_of(&retry), BackupFailureKind::GitPush);
+        record_sync(vault, Some(&error.to_string()), failure_kind(&error));
+        return Err(error);
     }
-    let e = format!("push 失敗(pull --rebase も失敗): {}", stderr_of(&pull));
-    record_sync(vault, Some(&e), Some(SyncFailureKind::GitConflict));
-    bail!(e);
+    let error = git_failure(
+        "push 失敗(pull --rebase も失敗)",
+        &stderr_of(&pull),
+        BackupFailureKind::GitConflict,
+    );
+    record_sync(vault, Some(&error.to_string()), failure_kind(&error));
+    Err(error)
 }
 
 /// 同期操作(pull/push)のプロセス間ロック。GUI・MCP・CLI が同時に git を叩くと
@@ -529,12 +655,20 @@ pub(crate) fn deliver_full_locked(
     }
     if let Err(error) = ensure_origin_upload_allowed(vault) {
         let message = error.to_string();
-        record_sync(vault, Some(&message), Some(SyncFailureKind::PrivacyCheck));
+        record_sync(
+            vault,
+            Some(&message),
+            Some(failure_kind(&error).unwrap_or(BackupFailureKind::PrivacyCheck)),
+        );
         return Err(error);
     }
     if let Err(error) = crate::lfs::push_object(vault, hash) {
         let message = error.to_string();
-        record_sync(vault, Some(&message), Some(SyncFailureKind::LfsUpload));
+        record_sync(
+            vault,
+            Some(&message),
+            Some(failure_kind(&error).unwrap_or(BackupFailureKind::LfsUpload)),
+        );
         return Err(error);
     }
     push_now_locked(vault)?;
@@ -543,7 +677,7 @@ pub(crate) fn deliver_full_locked(
 
 /// Git commit まで届かなかった同期対象の書き込みを、画面で見える劣化状態へ残す。
 pub fn record_sync_degradation(vault: &Vault, message: &str) {
-    record_sync(vault, Some(message), Some(SyncFailureKind::Commit));
+    record_sync(vault, Some(message), Some(BackupFailureKind::Commit));
 }
 
 /// ノート操作の後に呼ぶ随時 push。remote 未設定なら何もしない。
@@ -565,19 +699,7 @@ pub struct SyncState {
     pub last_pull_epoch: u64,
     pub last_error: Option<String>,
     #[serde(default)]
-    pub last_error_kind: Option<SyncFailureKind>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "specta", derive(specta::Type))]
-pub enum SyncFailureKind {
-    PrivacyCheck,
-    Commit,
-    LfsUpload,
-    GitPush,
-    GitPull,
-    GitConflict,
+    pub last_error_kind: Option<BackupFailureKind>,
 }
 
 pub fn sync_state(vault: &Vault) -> SyncState {
@@ -587,7 +709,7 @@ pub fn sync_state(vault: &Vault) -> SyncState {
         .unwrap_or_default()
 }
 
-fn record_sync(vault: &Vault, error: Option<&str>, kind: Option<SyncFailureKind>) {
+fn record_sync(vault: &Vault, error: Option<&str>, kind: Option<BackupFailureKind>) {
     let mut st = sync_state(vault);
     st.last_error = error.map(String::from);
     st.last_error_kind = kind;
@@ -634,9 +756,9 @@ pub fn pull_now(vault: &Vault) -> Result<()> {
         let _ = vault.write_index_md();
         Ok(())
     } else {
-        let e = format!("pull 失敗: {}", stderr_of(&out));
-        record_sync(vault, Some(&e), Some(SyncFailureKind::GitPull));
-        bail!(e)
+        let error = git_failure("pull 失敗", &stderr_of(&out), BackupFailureKind::GitPull);
+        record_sync(vault, Some(&error.to_string()), failure_kind(&error));
+        Err(error)
     }
 }
 
@@ -644,7 +766,10 @@ pub fn pull_now(vault: &Vault) -> Result<()> {
 pub fn backup_push(vault: &Vault) -> Result<String> {
     let status = backup_status(vault)?;
     if status.remote.is_none() {
-        bail!("バックアップ先が未設定(繋ぐ画面で GitHub リポジトリの URL を設定)");
+        return Err(failure(
+            BackupFailureKind::InvalidRepository,
+            "バックアップ先が未設定(繋ぐ画面で GitHub リポジトリの URL を設定)",
+        ));
     }
     pull_now(vault)?;
     push_now(vault)?;
@@ -892,6 +1017,10 @@ mod tests {
         let other = Vault::create(dir.path().join("other")).unwrap();
         let error = set_backup_remote(&other, bare.to_str().unwrap()).unwrap_err();
         assert!(error.to_string().contains("別の Vault"));
+        assert_eq!(
+            failure_kind(&error),
+            Some(BackupFailureKind::WorkspaceMismatch)
+        );
         assert!(
             git2::Repository::open(&other.root)
                 .unwrap()
@@ -985,8 +1114,25 @@ mod tests {
         );
 
         let destination = dir.path().join("joined");
-        let report = clone_existing_vault(bare.to_str().unwrap(), &destination).unwrap();
+        let mut progress = Vec::new();
+        let report =
+            clone_existing_vault_with_progress(bare.to_str().unwrap(), &destination, |state| {
+                progress.push(state)
+            })
+            .unwrap();
         assert_eq!(report.total, 0);
+        assert_eq!(progress.first().unwrap().phase, RestorePhase::Checking);
+        assert!(
+            progress
+                .iter()
+                .any(|state| state.phase == RestorePhase::Cloning)
+        );
+        assert!(
+            progress
+                .iter()
+                .any(|state| state.phase == RestorePhase::RestoringFiles)
+        );
+        assert_eq!(progress.last().unwrap().phase, RestorePhase::Finalizing);
         let joined = Vault::open(&destination).unwrap();
         assert_eq!(
             crate::workspace::stored_workspace_id(&joined).unwrap(),
@@ -998,6 +1144,10 @@ mod tests {
         fs::create_dir(&occupied).unwrap();
         let error = clone_existing_vault(bare.to_str().unwrap(), &occupied).unwrap_err();
         assert!(error.to_string().contains("上書きしない"));
+        assert_eq!(
+            failure_kind(&error),
+            Some(BackupFailureKind::DestinationExists)
+        );
     }
 
     #[test]

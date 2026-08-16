@@ -8,6 +8,7 @@ import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
 import { OnboardingLayout } from "@/components/templates/OnboardingLayout";
 import { useErrorText } from "@/hooks/useErrorText";
+import { useVaultRestoreProgress } from "@/hooks/useVaultRestoreProgress";
 import { useOnboard, useOnboardExisting } from "@/lib/queries";
 
 /** 最初の vault を作る(FR-A1)。 */
@@ -16,9 +17,25 @@ export function OnboardingPage() {
   const errorText = useErrorText();
   const onboard = useOnboard();
   const existing = useOnboardExisting();
+  const restoreProgress = useVaultRestoreProgress();
   const [showExisting, setShowExisting] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
   const busy = onboard.isPending || existing.isPending;
+  const restoreStatus =
+    existing.isPending && restoreProgress
+      ? (() => {
+          switch (restoreProgress.phase) {
+            case "checking":
+              return t("progress.checking");
+            case "cloning":
+              return t("progress.cloning");
+            case "restoring_files":
+              return t("progress.files", restoreProgress);
+            case "finalizing":
+              return t("progress.finalizing");
+          }
+        })()
+      : null;
 
   return (
     <OnboardingLayout
@@ -53,8 +70,16 @@ export function OnboardingPage() {
               disabled={busy || remoteUrl.trim().length === 0}
               onClick={() => existing.mutate(remoteUrl.trim())}
             >
-              {existing.isPending ? t("restoring") : t("restore")}
+              {existing.isPending ? t("restoring") : existing.isError ? t("resume") : t("restore")}
             </Button>
+            {restoreStatus && (
+              <p className="text-muted mt-2 mb-0 text-[11px]" aria-live="polite">
+                {restoreStatus}
+              </p>
+            )}
+            {existing.isError && (
+              <p className="text-muted mt-2 mb-0 text-[11px]">{t("resumeHelp")}</p>
+            )}
             <p className="text-muted mt-2 mb-0 text-[11px]">{t("existingHelp")}</p>
           </div>
         )}

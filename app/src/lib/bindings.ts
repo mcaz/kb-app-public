@@ -88,6 +88,7 @@ export const commands = {
 /** Events */
 export const events = {
 	embedProgress: makeEvent<EmbedProgress>("embed-progress"),
+	vaultRestoreProgress: makeEvent<VaultRestoreProgress>("vault-restore-progress"),
 };
 
 /* Types */
@@ -130,8 +131,8 @@ export type AppError =
 { code: "claude_desktop_not_found" } | 
 /**  Claude Desktop を起動できなかった。 */
 { code: "claude_desktop_launch_failed" } | 
-/**  バックアップ(git)の失敗。 */
-{ code: "backup_failed"; message: string } | 
+/**  バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。 */
+{ code: "backup_failed"; kind: BackupFailureKind | null; message: string } | 
 /**  かしこい検索の準備に失敗。 */
 { code: "embed_failed"; message: string } | 
 /**  分類できないもの。message はコアが返した文言(いまは日本語)。 */
@@ -145,6 +146,8 @@ export type Availability =
 "missing" | 
 /**  方針により、この端末では開かない。**取得の再試行も提案しない** */
 "unavailable_by_policy";
+
+export type BackupFailureKind = "authentication" | "permission" | "privacy_check" | "network" | "invalid_repository" | "remote_missing" | "quota" | "lfs_unavailable" | "remote_object_missing" | "integrity_mismatch" | "invalid_vault" | "workspace_mismatch" | "destination_exists" | "commit" | "lfs_upload" | "git_push" | "git_pull" | "git_conflict";
 
 export type BackupStatus = {
 	/**  origin の URL(未設定なら None = 未接続) */
@@ -165,7 +168,7 @@ export type ConnectState = {
 	desktop: DesktopStatus,
 	backup: BackupStatus,
 	sync_error: string | null,
-	sync_error_kind: SyncFailureKind | null,
+	sync_error_kind: BackupFailureKind | null,
 	smart_search: SmartSearchState,
 };
 
@@ -371,6 +374,8 @@ export type NoteView = {
 	vault_root: string,
 };
 
+export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";
+
 export type SearchOutcome = SearchOutcome_Serialize | SearchOutcome_Deserialize;
 
 export type SearchOutcome_Deserialize = {
@@ -428,8 +433,6 @@ export type Stats = {
 	embedded: number,
 };
 
-export type SyncFailureKind = "privacy_check" | "commit" | "lfs_upload" | "git_push" | "git_pull" | "git_conflict";
-
 /**  転送軸。どこまで端末の外へ出すか。並び順がそのまま「広さ」になる。 */
 export type SyncPolicy = 
 /**  この端末だけ。台帳も外へ出さない */
@@ -451,6 +454,15 @@ export type TagInfo = {
 export type TagOverview = {
 	tags: TagInfo[],
 	glossary_note: string | null,
+};
+
+/**  既存Vaultの検査・clone・Full Artifact復元の進捗。 */
+export type VaultRestoreProgress = {
+	phase: RestorePhase,
+	completed: number,
+	total: number,
+	fetched: number,
+	reused: number,
 };
 
 /* Tauri Specta runtime */

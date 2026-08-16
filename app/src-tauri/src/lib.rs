@@ -51,7 +51,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connect::embed_enable,
             connect::launch_ai,
         ])
-        .events(collect_events![connect::EmbedProgress])
+        .events(collect_events![
+            connect::EmbedProgress,
+            setup::VaultRestoreProgress
+        ])
 }
 
 /// 型と invoke ラッパの書き出し。`cargo test` からも呼び、CI では生成物に差分が

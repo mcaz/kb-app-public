@@ -31,7 +31,7 @@ pub struct ConnectState {
     desktop: kb_core::connect::DesktopStatus,
     backup: kb_core::connect::BackupStatus,
     sync_error: Option<String>,
-    sync_error_kind: Option<kb_core::connect::SyncFailureKind>,
+    sync_error_kind: Option<kb_core::backup::BackupFailureKind>,
     smart_search: SmartSearchState,
 }
 
@@ -54,9 +54,7 @@ pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
         let sync = kb_core::connect::sync_state(vault);
         Ok(ConnectState {
             desktop,
-            backup: kb_core::connect::backup_status(vault).map_err(|e| AppError::BackupFailed {
-                message: e.to_string(),
-            })?,
+            backup: kb_core::connect::backup_status(vault).map_err(AppError::backup)?,
             sync_error: sync.last_error,
             sync_error_kind: sync.last_error_kind,
             smart_search: SmartSearchState {
@@ -116,36 +114,23 @@ pub fn embed_enable(app: AppHandle, state: State<'_, AppState>) -> AppResult<()>
 #[specta::specta]
 pub fn backup_set_remote(state: State<'_, AppState>, url: String) -> AppResult<()> {
     state.with_vault(|vault| {
-        kb_core::connect::set_backup_remote(vault, &url).map_err(|e| AppError::BackupFailed {
-            message: e.to_string(),
-        })
+        kb_core::connect::set_backup_remote(vault, &url).map_err(AppError::backup)
     })
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn backup_create_repository(state: State<'_, AppState>, name: String) -> AppResult<()> {
-    let repository =
-        kb_core::github::create_private_repository(&name).map_err(|e| AppError::BackupFailed {
-            message: e.to_string(),
-        })?;
+    let repository = kb_core::github::create_private_repository(&name).map_err(AppError::backup)?;
     state.with_vault(|vault| {
-        kb_core::connect::set_backup_remote(vault, &repository.clone_url).map_err(|e| {
-            AppError::BackupFailed {
-                message: e.to_string(),
-            }
-        })
+        kb_core::connect::set_backup_remote(vault, &repository.clone_url).map_err(AppError::backup)
     })
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn backup_now(state: State<'_, AppState>) -> AppResult<String> {
-    state.with_vault(|vault| {
-        kb_core::connect::backup_push(vault).map_err(|e| AppError::BackupFailed {
-            message: e.to_string(),
-        })
-    })
+    state.with_vault(|vault| kb_core::connect::backup_push(vault).map_err(AppError::backup))
 }
 
 /// Claude Desktop の設定にこの実行ファイルを MCP サーバーとして登録する。

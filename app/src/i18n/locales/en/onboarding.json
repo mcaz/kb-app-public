@@ -7,5 +7,13 @@
   "existingUrl": "Existing private GitHub repository",
   "existingHelp": "We verify its contents and workspace ID, restore every file, and never overwrite an existing folder.",
   "restore": "Verify and restore",
-  "restoring": "Restoring…"
+  "restoring": "Restoring…",
+  "resume": "Retry and resume",
+  "resumeHelp": "Verified files stay on this device, so retrying retrieves only what is still missing.",
+  "progress": {
+    "checking": "Checking the destination and knowledge base…",
+    "cloning": "Retrieving notes and history…",
+    "files": "Verifying files… {{completed}}/{{total}} (new {{fetched}}, reused {{reused}})",
+    "finalizing": "Registering the verified knowledge base…"
+  }
 }

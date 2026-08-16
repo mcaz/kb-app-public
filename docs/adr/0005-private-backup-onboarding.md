@@ -29,6 +29,14 @@ Git で追跡される `.kb-workspace` の永続 ID が既にある。
    GitHub API で行う。public / internal / 401 / 404 / network error / ambiguous はすべて fail-closed。
 5. fresh clone では LFS の暗黙 smudge に依存せず、tracked manifest の `full` object を列挙して
    全件 fetch し、`content_hash` を照合する。これを終えるまで「復元済み」と表示しない。
+6. 復元は検査・clone・Full object検証・登録の進捗をTauriイベントで表示する。取得済みobjectは
+   `.kb-workspace` 単位の端末LFS storeに残し、再試行時にhashが一致するものだけを再利用する。
+   中断等で不完全なobjectが残った場合は、そのobjectだけを破棄して再取得する。一時cloneのpathを
+   再開状態の正本にはしない。
+7. GitHub APIとGit/Git LFSの失敗は、認証・権限・privacy・通信・repository欠損・quota・
+   LFS未導入・remote object欠損・hash不一致・Storage Contract違反・workspace不一致・競合等の
+   typed reasonへ境界で分類する。画面と同期sidecarは同じreasonを使い、providerのstderrだけを
+   利用者向け文言にしない。
 
 ## 結果
 
@@ -37,3 +45,5 @@ Git で追跡される `.kb-workspace` の永続 ID が既にある。
   なったデータをアプリが取り消せるわけではないため、重大な劣化として案内する。
 - GitHub 認証が未実装・失効中の環境ではバックアップが止まる。ローカルの書き込みは契約4どおり
   成功させるが、「同期済み」「復元可能」とは扱わない。
+- 復元の再試行は検証済みobjectを再利用するため、大容量Vaultでも最初から全件を取り直さない。
+  一方、Git履歴のcloneとStorage Contract検査は毎回やり直し、古い一時cloneを信用しない。
