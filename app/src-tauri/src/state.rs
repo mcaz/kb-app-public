@@ -6,6 +6,7 @@
 //!
 //! 生成は遅延。オンボーディング前は vault が存在しないため、起動時には作れない。
 
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -15,8 +16,27 @@ use kb_core::registry::Registry;
 use kb_core::rusqlite::Connection;
 use kb_core::store::Stores;
 use kb_core::vault::Vault;
+use tauri::Manager;
 
 use crate::error::{AppError, AppResult};
+
+/// asset protocolの静的scopeは空にし、現在のVaultだけを実行時に許可する。
+/// Tauri側がcanonical pathでscopeを判定するため、symlinkや`..`で外へ出られない。
+pub fn allow_vault_assets(app: &tauri::AppHandle, root: &Path) -> AppResult<()> {
+    let root = root.canonicalize().map_err(AppError::vault)?;
+    let scope = app.asset_protocol_scope();
+    scope
+        .allow_directory(&root, true)
+        .map_err(AppError::unexpected)?;
+    // Git内部と派生DBはMarkdown画像として読む必要がない。
+    scope
+        .forbid_directory(root.join(".git"), true)
+        .map_err(AppError::unexpected)?;
+    scope
+        .forbid_directory(root.join(".kb"), true)
+        .map_err(AppError::unexpected)?;
+    Ok(())
+}
 
 /// 索引 sync の最小間隔。変更が無ければ sync 自体は数十msだが、ノートを
 /// 連続で開くたびに走らせる意味はないので間引く。画面の更新は TanStack Query が
