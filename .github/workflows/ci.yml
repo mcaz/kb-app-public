@@ -58,3 +58,19 @@ jobs:
       # bindings.ts は Rust が正本。コアを変えて生成し忘れたらここで落ちる(ADR-0002)
       - name: 生成した TS 型に差分が無いこと
         run: git diff --exit-code -- app/src/lib/bindings.ts
+
+  performance:
+    name: 性能(10k fixture・検索回帰gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # debug buildの絶対時間はrunner差より最適化有無の影響が大きいため、
+      # NFR-3の回帰判定だけはrelease buildへ固定する。
+      - name: 10k synthetic fixtureの性能予算を守る
+        run: >-
+          cargo test --release -p kb-core
+          search::tests::ten_thousand_note_performance_gate --
+          --ignored --exact --nocapture --test-threads=1
