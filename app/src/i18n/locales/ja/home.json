@@ -12,8 +12,5 @@
   },
   "recent": {
     "head": "最近のノート"
-  },
-  "warning": {
-    "syncError": "同期エラー: {{error}}"
   }
 }

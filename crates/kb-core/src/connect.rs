@@ -750,16 +750,20 @@ fn epoch_now() -> u64 {
 /// メッセージのやり取り・画面更新の際の pull(複数デバイス同期)。
 /// 時間スロットリング付き — 全呼び出しで同期待ちしない(旧 KB のレイテンシ教訓)。
 /// 戻り値: 劣化情報(None = 正常またはスキップ)。
-pub fn pull_if_stale(vault: &Vault) -> Option<String> {
+pub fn pull_if_stale(vault: &Vault) -> Option<crate::degradation::Degradation> {
     if !has_origin(vault) {
         return None;
     }
     if epoch_now().saturating_sub(sync_state(vault).last_pull_epoch) < PULL_THROTTLE_SECS {
         return sync_state(vault)
             .last_error
-            .map(|e| format!("同期エラー(前回): {e}"));
+            .map(|detail| crate::degradation::Degradation::RemoteSync { detail });
     }
-    pull_now(vault).err().map(|e| e.to_string())
+    pull_now(vault)
+        .err()
+        .map(|error| crate::degradation::Degradation::RemoteSync {
+            detail: error.to_string(),
+        })
 }
 
 /// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復

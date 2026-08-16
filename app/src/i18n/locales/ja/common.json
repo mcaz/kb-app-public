@@ -57,6 +57,21 @@
     "languageEn": "English",
     "note": "この設定はこの端末にだけ保存されます(ノートには入りません)。"
   },
+  "degradation": {
+    "remote_sync": "同期に失敗しました: {{detail}}",
+    "index_sync": "索引を更新できませんでした。古い結果を表示している可能性があります: {{detail}}",
+    "embedding_index_pending": "かしこい検索の索引が追い付き中です(残り {{remaining}} 件)",
+    "embedding_index": "かしこい検索の索引を更新できませんでした: {{detail}}",
+    "main_search": "主検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
+    "semantic_search": "かしこい検索を利用できません。全文検索の結果を表示しています: {{detail}}",
+    "rescue_search": "部分一致検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
+    "related_notes": "つながりを取得できませんでした。0件とは限りません: {{detail}}",
+    "similar_notes": "近いノートを取得できませんでした。0件とは限りません: {{detail}}",
+    "current_note_context": "AIへ現在のノートを引き渡す文脈を記録できませんでした: {{detail}}",
+    "care_detection": "お手入れ候補を検知できませんでした: {{detail}}",
+    "care_list": "お手入れ一覧を取得できませんでした。0件とは限りません: {{detail}}",
+    "tag_counts": "タグ一覧を取得できませんでした。0件とは限りません: {{detail}}"
+  },
   "errors": {
     "noteNotFound": "そのノートはまだありません",
     "fileTooLarge": "{{limit}}MB を超えるファイルは同期できません",

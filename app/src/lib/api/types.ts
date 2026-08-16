@@ -1,5 +1,6 @@
 import type {
   ConnectState,
+  Degradation,
   Favorite_Serialize,
   GraphData,
   GitHubAuthState,
@@ -27,6 +28,7 @@ export type Favorite = Favorite_Serialize;
 
 export type {
   ConnectState,
+  Degradation,
   GraphData,
   GitHubAuthState,
   NoteCategory,

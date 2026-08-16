@@ -7,6 +7,7 @@ import { StatusPill } from "@/components/atoms/StatusPill";
 import { TagChip } from "@/components/atoms/TagChip";
 import { Button } from "@/components/atoms/ui/button";
 import { CareBar } from "@/components/molecules/CareBar";
+import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { FilePanel } from "@/components/organisms/FilePanel";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
 import { useErrorText } from "@/hooks/useErrorText";
@@ -75,6 +76,8 @@ export function NotePane({ noteId, onOpenRelated, onOpenNote }: NotePaneProps) {
           }}
         />
       ))}
+
+      <DegradedBanner items={note.degraded} variant="card" />
 
       <div className="my-0.5 mb-3 flex-none">
         <Button

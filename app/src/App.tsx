@@ -49,7 +49,7 @@ export function App() {
   return (
     <TooltipProvider delayDuration={200}>
       <AppShell
-        banner={<DegradedBanner messages={home?.degraded ?? []} />}
+        banner={<DegradedBanner items={home?.degraded ?? []} />}
         sidebar={
           <Sidebar
             vaultName={setup?.vault_name ?? "kb"}

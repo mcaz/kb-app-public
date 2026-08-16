@@ -37,7 +37,7 @@ struct VaultCtx {
     conn: Connection,
     last_sync: Option<Instant>,
     /// 最後に実際へ sync したときの劣化情報(間引いた回でも画面に出し続ける)。
-    degraded: Option<String>,
+    degraded: Vec<kb_core::degradation::Degradation>,
 }
 
 #[derive(Default)]
@@ -86,7 +86,7 @@ impl AppState {
     pub fn with_index<T>(
         &self,
         policy: Sync,
-        f: impl FnOnce(&Vault, &Connection, Option<String>) -> AppResult<T>,
+        f: impl FnOnce(&Vault, &Connection, Vec<kb_core::degradation::Degradation>) -> AppResult<T>,
     ) -> AppResult<T> {
         let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
         let ctx = ensure(&mut guard)?;
@@ -94,8 +94,10 @@ impl AppState {
         let stale = ctx.last_sync.is_none_or(|at| at.elapsed() >= SYNC_INTERVAL);
         if policy == Sync::Force || stale {
             ctx.degraded = match sync(&ctx.vault, &ctx.conn) {
-                Ok(_) => kb_core::index::embed_step(&ctx.conn),
-                Err(e) => Some(format!("索引の更新に失敗: {e}")),
+                Ok(_) => kb_core::index::embed_step(&ctx.conn).into_iter().collect(),
+                Err(error) => vec![kb_core::degradation::Degradation::IndexSync {
+                    detail: error.to_string(),
+                }],
             };
             ctx.last_sync = Some(Instant::now());
         }
@@ -123,7 +125,7 @@ fn ensure(guard: &mut Option<VaultCtx>) -> AppResult<&mut VaultCtx> {
             vault,
             conn,
             last_sync: None,
-            degraded: None,
+            degraded: Vec::new(),
         });
     }
     Ok(guard.as_mut().expect("直前に生成している"))

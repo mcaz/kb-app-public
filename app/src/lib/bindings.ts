@@ -180,6 +180,9 @@ export type ConnectState = {
 	smart_search: SmartSearchState,
 };
 
+/**  データ本体を返し続けられる部分失敗。 */
+export type Degradation = { code: "remote_sync"; detail: string } | { code: "index_sync"; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string };
+
 export type DeliveryStatus = 
 /**  `local_only` なので送信対象ではない。 */
 "local_only" | 
@@ -329,7 +332,7 @@ export type HomeState_Deserialize = {
 	notes: Hit_Deserialize[],
 	care: CareProposal[],
 	tags: ([string, number])[],
-	degraded: string[],
+	degraded: Degradation[],
 };
 
 export type HomeState_Serialize = {
@@ -337,7 +340,7 @@ export type HomeState_Serialize = {
 	notes: Hit_Serialize[],
 	care: CareProposal[],
 	tags: ([string, number])[],
-	degraded: string[],
+	degraded: Degradation[],
 };
 
 /**  移行前の添付(`<id>.files/`)。読み取り専用の旧経路(決定4)。 */
@@ -394,6 +397,7 @@ export type NoteView = {
 	generated_at: string | null,
 	related: ([string, string | null])[],
 	similar: ([string, string | null, number | null])[],
+	degraded: Degradation[],
 	vault_root: string,
 };
 
@@ -406,7 +410,7 @@ export type SearchOutcome_Deserialize = {
 	/**  上位ヒットから1ホップのリンク先・被リンク(id, title) */
 	related: ([string, string | null])[],
 	/**  劣化情報(空 = 全経路正常)。UI/クライアントに必ず見せる */
-	degraded: string[],
+	degraded: Degradation[],
 };
 
 export type SearchOutcome_Serialize = {
@@ -414,7 +418,7 @@ export type SearchOutcome_Serialize = {
 	/**  上位ヒットから1ホップのリンク先・被リンク(id, title) */
 	related: ([string, string | null])[],
 	/**  劣化情報(空 = 全経路正常)。UI/クライアントに必ず見せる */
-	degraded: string[],
+	degraded: Degradation[],
 };
 
 /**
@@ -477,6 +481,7 @@ export type TagInfo = {
 export type TagOverview = {
 	tags: TagInfo[],
 	glossary_note: string | null,
+	degraded: Degradation[],
 };
 
 /**  既存Vaultの検査・clone・Full Artifact復元の進捗。 */

@@ -16,6 +16,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
+import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { formatDateTime } from "@/lib/format";
@@ -165,14 +166,9 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
                   </div>
                 )}
 
-                {searching && search.data?.degraded.length ? (
-                  <div
-                    className="border-prop bg-prop-soft text-prop mx-3 mt-2 rounded-md border px-2.5 py-1.5 text-xs"
-                    role="status"
-                  >
-                    {t("notes:search.degraded")}
-                  </div>
-                ) : null}
+                {searching && (
+                  <DegradedBanner items={search.data?.degraded ?? []} variant="inline" />
+                )}
 
                 <div className="text-muted flex items-center gap-1.5 px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-wide">
                   {searching ? <Search className="size-3.5" /> : <Clock3 className="size-3.5" />}

@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
+import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { RelatedList } from "@/components/molecules/RelatedList";
 import { useNote } from "@/lib/queries";
 
@@ -49,6 +50,7 @@ export function RelatedDialog({
 
         {note && (
           <>
+            <DegradedBanner items={note.degraded} variant="card" />
             <Button
               className="w-full justify-start"
               onClick={() => {
