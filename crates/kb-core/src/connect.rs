@@ -110,7 +110,7 @@ pub fn backup_status(vault: &Vault) -> Result<BackupStatus> {
 /// GitHub の remote 操作には OAuth token を process 環境だけで渡す。
 /// git は非対話モード強制(資格情報プロンプトで GUI/MCP をハングさせない)。
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    let mut command = std::process::Command::new("git");
+    let mut command = crate::external_tools::git_command();
     command
         .args(args)
         .current_dir(&vault.root)
@@ -212,11 +212,7 @@ fn merged_attributes(current: &str, lfs: bool) -> String {
 }
 
 fn lfs_available() -> bool {
-    std::process::Command::new("git")
-        .args(["lfs", "version"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::external_tools::git_lfs_available()
 }
 
 /// LFS の下ごしらえ(PoC `poc/lfs-transport` の実測を反映)。
@@ -326,7 +322,7 @@ fn ensure_origin_upload_allowed(vault: &Vault) -> Result<()> {
 fn inspect_remote(url: &str) -> Result<RemoteContents> {
     let temp = tempfile::tempdir().context("既存 Vault の検査場所を作れない")?;
     let clone_root = temp.path().join("vault");
-    let mut command = std::process::Command::new("git");
+    let mut command = crate::external_tools::git_command();
     command
         .args([
             "clone",
@@ -415,7 +411,7 @@ pub fn clone_existing_vault_with_progress(
         .context("既存 Vault の一時復元先を作れない")?;
     let clone_root = temp.path().join("vault");
     progress(RestoreProgress::at(RestorePhase::Cloning));
-    let mut command = std::process::Command::new("git");
+    let mut command = crate::external_tools::git_command();
     command
         .arg("clone")
         .arg("--no-tags")

@@ -33,11 +33,16 @@ jobs:
   rust:
     name: コア(fmt・clippy・テスト・型生成の追従)
     runs-on: ubuntu-latest
+    env:
+      KB_GIT_LFS_BIN: ${{ github.workspace }}/app/src-tauri/binaries/git-lfs
     steps:
       - uses: actions/checkout@v5
         with:
           # 契約変更をコミット単位で検査するため、PRのbaseまで取得する。
           fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -62,6 +67,9 @@ jobs:
         run: |
           git config --global user.email "ci@kb-app.invalid"
           git config --global user.name "kb-app CI"
+      # Tauri build.rs は clippy 時にも externalBin の存在を検査する。
+      - name: checksum検証済みsidecarをRust検査にも用意
+        run: node scripts/prepare-git-lfs.mjs --target x86_64-unknown-linux-gnu
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -84,3 +92,39 @@ jobs:
           cargo test --release -p kb-core
           search::tests::ten_thousand_note_performance_gate --
           --ignored --exact --nocapture --test-threads=1
+
+  distribution:
+    name: 配布(git-lfs同梱・環境非依存受入)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 配布buildの依存を入れる
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
+            libappindicator3-dev librsvg2-dev libxdo-dev patchelf
+      - run: npm --prefix app ci
+      - name: 公式archiveをchecksum検証してsidecarを準備
+        run: node scripts/prepare-git-lfs.mjs --target x86_64-unknown-linux-gnu
+      - name: システムgit-lfs無しで実処理を受入
+        env:
+          KB_GIT_LFS_BIN: ${{ github.workspace }}/app/src-tauri/binaries/git-lfs
+        run: >-
+          cargo test -p kb-core
+          lfs::tests::bundled_git_lfs_works_without_an_ambient_installation --
+          --ignored --exact --nocapture --test-threads=1
+      - name: debを生成
+        env:
+          KB_GITHUB_CLIENT_ID: Ov23li1xyWYmAMscYlj8
+        run: npm --prefix app run tauri build -- --bundles deb
+      - name: deb内の実行ファイル・version・licenseを検査
+        run: node scripts/verify-git-lfs-bundle.mjs

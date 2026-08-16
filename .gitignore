@@ -3,6 +3,7 @@ poc/*/target
 poc/embed-onnx/models/
 node_modules/
 app/dist/
+app/src-tauri/binaries/git-lfs*
 .kb-dev/checks.json
 .kb-dev/handoff.json
 

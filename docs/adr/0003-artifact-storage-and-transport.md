@@ -50,6 +50,12 @@ blob を運ぶ機構を MVP に含める(**本人判断**: 複数端末を日常
 
 - 接続先も認証も既存の GitHub 経路のまま。ユーザーに増える手順を作らない
 - `git-lfs` はアプリに同梱する。非エンジニア配布のため、別途インストールを求めない
+- 同梱元は公式 release の version と target 別 SHA-256 を
+  `scripts/git-lfs-assets.json` に固定する。build hook が検証済みbinaryだけを Tauri
+  sidecar に渡し、実行時はアプリ本体の隣を PATH より優先する
+- 配布 CI はシステムの `git-lfs` を PATH から外して実際の pointer 化を通し、生成した
+  package 内の sidecar version と license も検査する。開発機に偶然入っている状態を
+  「同梱済み」とみなさない
 - LFS の local storage は既定の `.git/lfs`(Vault 配下)を使わず、`lfs.storage` で
   **repo 外 sidecar** へ移す
 - Vault Git に入るのは数百バイトの pointer だけ。**raw binary は置かない**

@@ -98,7 +98,7 @@
     "backupInvalidRepository": "Check the GitHub repository you entered",
     "backupRemoteMissing": "The repository was not found or is not accessible to the current account",
     "backupQuota": "The Git LFS storage or bandwidth quota has been reached",
-    "backupLfsUnavailable": "Git LFS is unavailable. Check that Git LFS is installed",
+    "backupLfsUnavailable": "The bundled Git LFS is unavailable. Reinstall the app",
     "backupRemoteObjectMissing": "A required file is missing from the backup. Sync it again from the original device",
     "backupIntegrityMismatch": "A retrieved file did not match. Retry, then check the source backup if it continues",
     "backupInvalidVault": "The selected repository is not a restorable kb-app knowledge base",
