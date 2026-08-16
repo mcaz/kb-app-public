@@ -13,6 +13,7 @@ import tseslint from "typescript-eslint";
  *   - 副作用(データ取得・変更・グローバル状態)を持てるのは organisms 以上だけ
  *   - 下の層は上の層を知らない
  *   - コンポーネントのディレクトリ内部へは直接 import しない(公開面は index.ts のみ)
+ *   - Tauri の invoke は lib/api だけが使える
  *
  * 注意: no-restricted-imports は後勝ちで上書きされるため、層ごとに
  * 「その層で禁じるもの全部」を1つの配列に組み立てて渡すこと。
@@ -25,6 +26,15 @@ const DEEP_IMPORT = {
   message:
     "コンポーネントの内部ファイルは私物。ディレクトリの index.ts から import する(ADR-0002)。",
 };
+
+/** Tauri command の入口を lib/api へ一本化する。通常APIの convertFileSrc 等は許す。 */
+const DIRECT_INVOKE = [
+  {
+    name: "@tauri-apps/api/core",
+    importNames: ["invoke"],
+    message: "Tauri command は src/lib/api のラッパを経由する(ADR-0002)。",
+  },
+];
 
 /** 副作用(取得・変更・グローバル状態)。organisms 以上でのみ許す。 */
 const SIDE_EFFECTS = [
@@ -57,11 +67,20 @@ const upper = (...layers) =>
     message: `下の層から ${l} は参照できない(ADR-0002)。`,
   }));
 
-/** 層ごとの設定。DEEP_IMPORT は必ず含める(後勝ち対策)。 */
+/** no-restricted-imports は後勝ちなので、共通境界と層固有境界を毎回まとめる。 */
+const restrictedImports = (patterns, allowInvoke = false) => [
+  "error",
+  {
+    paths: allowInvoke ? [] : DIRECT_INVOKE,
+    patterns: [DEEP_IMPORT, ...patterns],
+  },
+];
+
+/** 層ごとの設定。共通境界は必ず含める(後勝ち対策)。 */
 const layer = (dir, patterns) => ({
   files: [`src/components/${dir}/**/*.{ts,tsx}`],
   rules: {
-    "no-restricted-imports": ["error", { patterns: [DEEP_IMPORT, ...patterns] }],
+    "no-restricted-imports": restrictedImports(patterns),
   },
 });
 
@@ -89,9 +108,14 @@ export default tseslint.config(
       // 旧実装で多用していた「投げっぱなしの Promise」を封じる
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/consistent-type-imports": ["error", { fixStyle: "inline-type-imports" }],
-      // 既定は私物ファイルの直接 import 禁止のみ(層ごとに下で上書きする)
-      "no-restricted-imports": ["error", { patterns: [DEEP_IMPORT] }],
+      "no-restricted-imports": restrictedImports([]),
     },
+  },
+
+  // Tauri command を包み、Result・デモ切替・エラー変換を引き受ける唯一の窓口。
+  {
+    files: ["src/lib/api/**/*.{ts,tsx}"],
+    rules: { "no-restricted-imports": restrictedImports([], true) },
   },
 
   // --- 層の境界(ADR-0002) ---
@@ -115,9 +139,9 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-non-null-assertion": "off" },
   },
 
-  // 設定ファイル自体は型情報を使わない
+  // 設定ファイルとNodeで動かすlint回帰テストはTypeScript projectの外にいる
   {
-    files: ["*.config.{js,ts}", "eslint.config.js"],
+    files: ["*.config.{js,ts}", "eslint.config.js", "tests/**/*.mjs"],
     ...tseslint.configs.disableTypeChecked,
   },
 
