@@ -150,6 +150,27 @@ impl Ledger {
             .collect()
     }
 
+    /// 各ノートにひもづく現行ファイルの件数を、一度の台帳走査で返す。
+    /// 一覧画面から `list_for_note` を件数分呼んで台帳を読み直さないための集計口。
+    pub fn current_counts_by_note(&self) -> std::collections::HashMap<String, usize> {
+        let all = self.list();
+        let superseded: std::collections::HashSet<ArtifactId> =
+            all.iter().filter_map(|m| m.supersedes.clone()).collect();
+        let mut counts = std::collections::HashMap::new();
+        for manifest in all
+            .into_iter()
+            .filter(|manifest| !superseded.contains(&manifest.id))
+        {
+            let mut seen = std::collections::HashSet::new();
+            for note_id in manifest.notes {
+                if seen.insert(note_id.clone()) {
+                    *counts.entry(note_id).or_default() += 1;
+                }
+            }
+        }
+        counts
+    }
+
     /// 参照を書く。置き場は指す先の区分に従う(台帳と同じ理由)。
     pub fn put_ref(&self, vault: &Vault, sync: SyncPolicy, r: &ArtifactRef) -> Result<()> {
         let dest = self.ref_path(sync, &r.name);
@@ -467,6 +488,10 @@ mod tests {
         // 前の版は消えていない(履歴は supersedes で辿れる)
         assert!(ledger.get(&old.id).unwrap().is_some());
         assert_eq!(ledger.list().len(), 2);
+        assert_eq!(
+            ledger.current_counts_by_note().get("notes/decision"),
+            Some(&1)
+        );
     }
 
     #[test]

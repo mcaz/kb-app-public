@@ -135,6 +135,9 @@ const toSummary = (note: NoteView): NoteSummary => ({
   tags: note.tags,
   created: note.created_at,
   updated: note.generated_at,
+  linked_count: note.related.length,
+  has_similar: note.similar.length > 0,
+  file_count: (files[note.id]?.length ?? 0) + (note.id === "notes/引っ越し手続きメモ" ? 1 : 0),
 });
 
 const noteCategory = (id: string) => {

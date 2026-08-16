@@ -9,6 +9,7 @@ export const queryKeys = {
   note: (id: string) => ["note", id] as const,
   noteFiles: (id: string) => ["noteFiles", id] as const,
   noteCategories: ["noteCategories"] as const,
+  noteLists: ["noteList"] as const,
   noteList: (category: string) => ["noteList", category] as const,
   search: (query: string) => ["search", query] as const,
 };

@@ -62,6 +62,9 @@ export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryN
                 tags={note.tags}
                 createdAt={note.created}
                 updatedAt={note.updated}
+                linkedCount={note.linked_count}
+                hasSimilar={note.has_similar}
+                fileCount={note.file_count}
                 selected={selected}
                 onOpen={() => onOpenNote(note.id)}
               />

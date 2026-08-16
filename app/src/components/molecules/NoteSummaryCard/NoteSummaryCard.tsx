@@ -1,5 +1,7 @@
+import { Link2, Paperclip, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { Icon } from "@/components/atoms/Icon";
 import { formatDateTime } from "@/lib/format";
 
 export interface NoteSummaryCardProps {
@@ -8,6 +10,9 @@ export interface NoteSummaryCardProps {
   tags?: string[];
   createdAt: string | null;
   updatedAt: string | null;
+  linkedCount?: number;
+  hasSimilar?: boolean | null;
+  fileCount?: number;
   selected?: boolean;
   onOpen: () => void;
 }
@@ -19,11 +24,26 @@ export function NoteSummaryCard({
   tags = [],
   createdAt,
   updatedAt,
+  linkedCount,
+  hasSimilar,
+  fileCount,
   selected = false,
   onOpen,
 }: NoteSummaryCardProps) {
   const { t, i18n } = useTranslation("common");
   const at = (value: string | null) => formatDateTime(value, i18n.language, t("date.unknown"));
+  const showSignals =
+    linkedCount !== undefined || hasSimilar !== undefined || fileCount !== undefined;
+  const signalClass = (active: boolean) =>
+    `inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] ${
+      active ? "border-grow/40 bg-grow-soft text-ink" : "border-line bg-chip text-muted"
+    }`;
+  const similarState =
+    hasSimilar === null
+      ? t("noteSignals.unknown")
+      : hasSimilar
+        ? t("noteSignals.available")
+        : t("noteSignals.empty");
 
   return (
     <button
@@ -43,6 +63,29 @@ export function NoteSummaryCard({
       {description && (
         <span className="text-muted mt-1.5 block text-[13px] leading-relaxed break-words whitespace-pre-wrap">
           {description}
+        </span>
+      )}
+
+      {showSignals && (
+        <span className="mt-2.5 flex flex-wrap gap-1.5">
+          {linkedCount !== undefined && (
+            <span className={signalClass(linkedCount > 0)}>
+              <Icon as={Link2} size="sm" />
+              {t("noteSignals.linked", { count: linkedCount })}
+            </span>
+          )}
+          {hasSimilar !== undefined && (
+            <span className={signalClass(hasSimilar === true)}>
+              <Icon as={Sparkles} size="sm" />
+              {t("noteSignals.similar", { state: similarState })}
+            </span>
+          )}
+          {fileCount !== undefined && (
+            <span className={signalClass(fileCount > 0)}>
+              <Icon as={Paperclip} size="sm" />
+              {t("noteSignals.attachments", { count: fileCount })}
+            </span>
+          )}
         </span>
       )}
 

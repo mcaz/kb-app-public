@@ -21,7 +21,11 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
   const qc = useQueryClient();
 
   useEffect(() => {
-    const refresh = (id: string) => qc.invalidateQueries({ queryKey: queryKeys.noteFiles(id) });
+    const refresh = (id: string) =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.noteFiles(id) }),
+        qc.invalidateQueries({ queryKey: queryKeys.noteLists }),
+      ]);
 
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -69,7 +73,10 @@ export function useNoteFileIntake(noteId: string | null, active: boolean) {
         }
       }
       if (added === 0) return;
-      await qc.invalidateQueries({ queryKey: queryKeys.noteFiles(id) });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.noteFiles(id) }),
+        qc.invalidateQueries({ queryKey: queryKeys.noteLists }),
+      ]);
       toast(t("file.addedCount", { count: added }));
     };
 

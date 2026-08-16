@@ -28,6 +28,14 @@
     "unknown": "Unknown",
     "none": "—"
   },
+  "noteSignals": {
+    "linked": "Links {{count}}",
+    "similar": "Similar {{state}}",
+    "attachments": "Attachments {{count}}",
+    "available": "Yes",
+    "empty": "None",
+    "unknown": "Not ready"
+  },
   "toast": {
     "deleted": "Deleted",
     "renamed": "Renamed"

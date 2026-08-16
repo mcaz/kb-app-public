@@ -82,8 +82,17 @@ pub fn note_list(
     after: Option<String>,
     limit: usize,
 ) -> AppResult<NoteListPage> {
-    state.with_index(Sync::Throttled, |_, conn, _| {
+    let mut page = state.with_index(Sync::Throttled, |_, conn, _| {
         notes_in_category(conn, &category, after.as_deref(), limit).map_err(AppError::from)
+    })?;
+    state.with_artifacts(|vault, _, ledger, _| {
+        let managed_counts = ledger.current_counts_by_note();
+        for note in &mut page.notes {
+            let managed = managed_counts.get(&note.id).copied().unwrap_or(0);
+            let legacy = vault.list_attachments(&note.id).len();
+            note.file_count = managed + legacy;
+        }
+        Ok(page)
     })
 }
 
