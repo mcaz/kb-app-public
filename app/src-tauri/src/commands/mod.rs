@@ -8,4 +8,5 @@ pub mod favorites;
 pub mod files;
 pub mod home;
 pub mod notes;
+pub mod settings;
 pub mod setup;

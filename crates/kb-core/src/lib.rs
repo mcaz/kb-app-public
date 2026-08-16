@@ -28,6 +28,7 @@ pub mod note_id;
 pub mod registry;
 pub mod resolve;
 pub mod search;
+pub mod settings;
 pub mod storage_contract;
 pub mod store;
 pub mod tags;

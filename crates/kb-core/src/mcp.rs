@@ -58,7 +58,16 @@ pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
         let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
         // 通知(id なし)は応答しない
         let Some(id) = id else { continue };
-        let response = match handle(vault, client_hint, method, msg.get("params")) {
+        // GUIとは別プロセスなので、各要求で端末設定を読み直す。既に動いている
+        // MCPもOFF後の次の要求からVaultへ触れなくなる。設定破損時はfail-closed。
+        let enabled = match crate::settings::load() {
+            Ok(settings) => settings.ai_kb_enabled,
+            Err(error) => {
+                eprintln!("kb mcp: settings unavailable: {}", error.detail());
+                false
+            }
+        };
+        let response = match handle(vault, client_hint, enabled, method, msg.get("params")) {
             Ok(Some(result)) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
             Ok(None) => json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32601, "message": format!("unknown method: {method}")}}),
@@ -74,6 +83,7 @@ pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
 fn handle(
     vault: &Vault,
     client: &str,
+    enabled: bool,
     method: &str,
     params: Option<&Value>,
 ) -> Result<Option<Value>> {
@@ -83,19 +93,33 @@ fn handle(
                 .and_then(|p| p.get("protocolVersion"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(PROTOCOL_FALLBACK);
-            Ok(Some(json!({
+            let mut initialized = json!({
                 "protocolVersion": requested,
-                "capabilities": {"tools": {}, "prompts": {}},
+                "capabilities": if enabled { json!({"tools": {}, "prompts": {}}) } else { json!({}) },
                 "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": INSTRUCTIONS,
-            })))
+            });
+            if enabled {
+                initialized["instructions"] = json!(INSTRUCTIONS);
+            }
+            Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
-        "tools/list" => Ok(Some(json!({"tools": tool_definitions()}))),
+        "tools/list" => Ok(Some(if enabled {
+            json!({"tools": tool_definitions()})
+        } else {
+            json!({"tools": []})
+        })),
         // MCP prompts — 定型操作の入口(常駐コンテキストを増やさず、正しい挙動を
         // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
-        "prompts/list" => Ok(Some(json!({"prompts": prompt_definitions()}))),
+        "prompts/list" => Ok(Some(if enabled {
+            json!({"prompts": prompt_definitions()})
+        } else {
+            json!({"prompts": []})
+        })),
         "prompts/get" => {
+            if !enabled {
+                anyhow::bail!("kb_disabled");
+            }
             let name = params
                 .and_then(|p| p.get("name"))
                 .and_then(|v| v.as_str())
@@ -107,6 +131,12 @@ fn handle(
             })))
         }
         "tools/call" => {
+            if !enabled {
+                return Ok(Some(json!({
+                    "content": [{"type": "text", "text": "KBは設定で無効です [kb_disabled]"}],
+                    "isError": true,
+                })));
+            }
             let name = params
                 .and_then(|p| p.get("name"))
                 .and_then(|v| v.as_str())
@@ -443,6 +473,70 @@ fn with_degradations(mut text: String, degraded: &[crate::degradation::Degradati
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_initialize_and_lists_expose_no_kb_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let initialized = handle(
+            &vault,
+            "test/client",
+            false,
+            "initialize",
+            Some(&serde_json::json!({"protocolVersion": "test"})),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(initialized["capabilities"], serde_json::json!({}));
+        assert!(initialized.get("instructions").is_none());
+
+        let tools = handle(&vault, "test/client", false, "tools/list", None)
+            .unwrap()
+            .unwrap();
+        let prompts = handle(&vault, "test/client", false, "prompts/list", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(tools, serde_json::json!({"tools": []}));
+        assert_eq!(prompts, serde_json::json!({"prompts": []}));
+    }
+
+    #[test]
+    fn disabled_tool_call_stops_before_index_or_vault_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let index = vault.index_db_path();
+        assert!(!index.exists());
+
+        let response = handle(
+            &vault,
+            "test/client",
+            false,
+            "tools/call",
+            Some(&serde_json::json!({
+                "name": "search",
+                "arguments": {"query": "anything"}
+            })),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(response["isError"], true);
+        assert!(response.to_string().contains("kb_disabled"));
+        assert!(!index.exists());
+    }
+
+    #[test]
+    fn enabled_initialize_keeps_the_existing_tools_and_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let initialized = handle(&vault, "test/client", true, "initialize", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            initialized["capabilities"],
+            serde_json::json!({"tools": {}, "prompts": {}})
+        );
+        assert_eq!(initialized["instructions"], INSTRUCTIONS);
+    }
 
     #[test]
     fn mcp_degradation_keeps_the_stable_code() {

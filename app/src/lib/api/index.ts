@@ -16,6 +16,7 @@ import type {
   NoteListPage,
   NoteView,
   SearchOutcome,
+  Settings,
   SetupState,
   TagOverview,
 } from "./types";
@@ -47,6 +48,12 @@ async function demo() {
 export const api = {
   setupState: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.setupState()) : (await demo()).setupState(),
+  settingsGet: async (): Promise<Settings> =>
+    IN_TAURI ? unwrap(commands.settingsGet()) : (await demo()).settingsGet(),
+  settingsSetAiKbEnabled: async (enabled: boolean): Promise<Settings> =>
+    IN_TAURI
+      ? unwrap(commands.settingsSetAiKbEnabled(enabled))
+      : (await demo()).settingsSetAiKbEnabled(enabled),
   onboard: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboard()) : (await demo()).onboard(),
   onboardExisting: async (url: string): Promise<SetupState> =>
