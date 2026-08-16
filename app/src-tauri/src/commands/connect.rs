@@ -207,8 +207,10 @@ pub fn launch_ai(state: State<'_, AppState>, note: Option<String>) -> AppResult<
 }
 
 /// Claude Desktop を前面に出す(OS ごとの起動方法)。
-// cfg で分岐しているため各ブロック末尾の return が必要(どれか1つだけが残る)
-#[allow(clippy::needless_return)]
+#[allow(
+    clippy::needless_return,
+    reason = "cfg で残る OS 別ブロック末尾には明示 return が必要"
+)]
 fn launch_claude_desktop() -> AppResult<()> {
     #[cfg(target_os = "macos")]
     {
