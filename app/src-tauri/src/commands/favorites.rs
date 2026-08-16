@@ -17,11 +17,11 @@ pub fn favorite_add(
     state: State<'_, AppState>,
     fav: kb_core::favorites::Favorite,
 ) -> AppResult<()> {
-    kb_core::favorites::add(&state.vault_name()?, fav).map_err(AppError::from)
+    kb_core::favorites::add(&state.vault_name()?, fav).map_err(AppError::storage)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn favorite_remove(state: State<'_, AppState>, name: String) -> AppResult<()> {
-    kb_core::favorites::remove(&state.vault_name()?, &name).map_err(AppError::from)
+    kb_core::favorites::remove(&state.vault_name()?, &name).map_err(AppError::storage)
 }

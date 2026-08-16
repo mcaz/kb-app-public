@@ -68,7 +68,7 @@ pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
         .unwrap_or(kb_core::connect::DesktopStatus::NotFound);
 
     state.with_index(Sync::Throttled, |vault, conn, _| {
-        let s = stats(conn).map_err(AppError::from)?;
+        let s = stats(conn).map_err(AppError::index)?;
         let sync = kb_core::connect::sync_state(vault);
         Ok(ConnectState {
             desktop,
@@ -132,18 +132,13 @@ pub fn github_open_device_page(app: AppHandle) -> AppResult<()> {
 #[tauri::command]
 #[specta::specta]
 pub fn embed_enable(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
-    kb_core::embed::install_model().map_err(|e| AppError::EmbedFailed {
-        message: e.to_string(),
-    })?;
+    kb_core::embed::install_model().map_err(AppError::embed)?;
 
     loop {
         // 1回あたり10本ずつ。ロックを握りっぱなしにせず、他のコマンドを通す
         let (processed, progress) = state.with_index(Sync::Throttled, |_, conn, _| {
-            let processed =
-                kb_core::embed::embed_pending(conn, 10).map_err(|e| AppError::EmbedFailed {
-                    message: e.to_string(),
-                })?;
-            let s = stats(conn).map_err(AppError::from)?;
+            let processed = kb_core::embed::embed_pending(conn, 10).map_err(AppError::embed)?;
+            let s = stats(conn).map_err(AppError::index)?;
             Ok((
                 processed,
                 EmbedProgress {
@@ -193,7 +188,7 @@ pub fn connect_desktop(state: State<'_, AppState>) -> AppResult<()> {
     let cfg =
         kb_core::connect::claude_desktop_config_path().ok_or(AppError::ClaudeDesktopNotFound)?;
     let exe = std::env::current_exe()?;
-    kb_core::connect::connect_desktop_at(&cfg, &exe, &name).map_err(AppError::from)?;
+    kb_core::connect::connect_desktop_at(&cfg, &exe, &name).map_err(AppError::configuration)?;
     // 使っていないが、レジストリの整合を明示するために読み出しておく
     debug_assert!(Registry::load().is_ok());
     Ok(())
@@ -205,7 +200,7 @@ pub fn connect_desktop(state: State<'_, AppState>) -> AppResult<()> {
 pub fn launch_ai(state: State<'_, AppState>, note: Option<String>) -> AppResult<()> {
     if let Some(id) = note {
         state.with_vault(|vault| {
-            kb_core::connect::set_current_note(vault, &id).map_err(AppError::from)
+            kb_core::connect::set_current_note(vault, &id).map_err(AppError::storage)
         })?;
     }
     launch_claude_desktop()

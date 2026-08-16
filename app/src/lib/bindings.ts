@@ -113,7 +113,7 @@ export type Added = {
 
 export type AppError = 
 /**  vault を開けない(未オンボーディング・レジストリの不整合)。 */
-{ code: "vault_unavailable"; message: string } | 
+{ code: "vault_unavailable" } | 
 /**  指定 ID のノートが無い(消された・まだ書かれていない)。 */
 { code: "note_not_found"; id: string } | 
 /**  「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。 */
@@ -140,10 +140,12 @@ export type AppError =
 /**  Claude Desktop を起動できなかった。 */
 { code: "claude_desktop_launch_failed" } | 
 /**  バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。 */
-{ code: "backup_failed"; kind: BackupFailureKind | null; message: string } | 
+{ code: "backup_failed"; kind: BackupFailureKind | null } | 
 /**  かしこい検索の準備に失敗。 */
-{ code: "embed_failed"; message: string } | 
-/**  分類できないもの。message はコアが返した文言(いまは日本語)。 */
+{ code: "embed_failed" } | 
+/**  コアの失敗。診断詳細は画面へ運ばず、kindだけを翻訳する。 */
+{ code: "core_failed"; kind: CoreErrorKind } | 
+/**  Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。 */
 { code: "unexpected"; message: string };
 
 /**  この端末で実体を開けるか。**台帳には載せない**(上の doc 参照)。 */
@@ -179,6 +181,9 @@ export type ConnectState = {
 	sync_error_kind: BackupFailureKind | null,
 	smart_search: SmartSearchState,
 };
+
+/**  画面が次の行動を訳し分けるための安定した分類。 */
+export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
 
 /**  データ本体を返し続けられる部分失敗。 */
 export type Degradation = { code: "remote_sync"; detail: string } | { code: "index_sync"; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string };

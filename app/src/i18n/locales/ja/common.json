@@ -84,7 +84,8 @@
     "clipboardImageTooLarge": "貼り付けた画像が大きすぎます。ファイルとして保存してから取り込んでください",
     "claudeDesktopNotFound": "Claude Desktop が見つかりません",
     "claudeDesktopLaunchFailed": "Claude Desktop を起動できませんでした(インストールを確認してください)",
-    "backupFailed": "バックアップに失敗しました: {{message}}",
+    "backupFailed": "バックアップに失敗しました",
+    "backupFailedDetail": "バックアップに失敗しました: {{message}}",
     "backupAuthentication": "GitHub へのサインインが必要です。サインインし直してから再試行してください",
     "backupPermission": "この repository への書き込み権限を確認できません",
     "backupPrivacyCheck": "接続先を private repository と確認できないため、送信を停止しました",
@@ -103,7 +104,12 @@
     "backupGitPush": "この端末の変更をバックアップ先へ送れませんでした",
     "backupGitPull": "バックアップ先の最新状態を取得できませんでした",
     "backupGitConflict": "別の端末の変更と競合しました。自動では上書きしません",
-    "embedFailed": "かしこい検索の準備に失敗しました: {{message}}",
-    "vaultUnavailable": "ノートの保管場所を開けませんでした: {{message}}"
+    "embedFailed": "かしこい検索の準備に失敗しました",
+    "vaultUnavailable": "ノートの保管場所を開けませんでした",
+    "coreInvalidInput": "入力または保存データの形式が正しくありません",
+    "coreStorage": "端末上のデータを読み書きできませんでした",
+    "coreIndex": "検索用の索引を読み書きできませんでした",
+    "coreConfiguration": "設定を読み書きできませんでした",
+    "unexpected": "予期しないエラーが発生しました"
   }
 }

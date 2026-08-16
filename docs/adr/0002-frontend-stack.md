@@ -110,10 +110,10 @@ components/<layer>/<ComponentName>/
 - 日付は `Intl.DateTimeFormat`、タイトル整列は現在ロケールの `localeCompare`
 - 言語は OS/ブラウザのロケールから検出し、`prefs` ストアに永続する
 
-**エラー文言**: Tauri 層は `AppError` で種類を型にしたので、画面は `code` で
-訳し分けられる(決定10)。ただし kb-core は anyhow のままなので、**Tauri 層が
-文脈を知らないエラーは `unexpected` に落ち、コアの日本語文言をそのまま運ぶ**。
-英語環境で日本語が混じる余地はここだけ残っている(残課題)。
+**エラー文言**: Tauri 層は `AppError`、コア境界は `CoreError` で種類を型にし、
+画面は `code` / `kind` で訳し分ける(決定10)。診断detailはserializeせず、
+`unexpected.message` もログ専用にする。`AppError` に `From<anyhow::Error>` を
+実装しないことで、未分類のコアエラー追加はコンパイルで止まる。
 
 ### 8. テーマ(ライト / ダーク / システム)は data 属性で切り替える
 
@@ -161,10 +161,9 @@ src-tauri/src/
   `AppState` に集約し、生成は遅延(未オンボーディングでも起動できるように)
 - **索引 sync は用途で分ける**。一覧・検索・ホームは `Sync::Force`(鮮度が要る)、
   それ以外は3秒のスロットリング。取りこぼしても TanStack Query の再取得で追いつく
-- **エラーは型にする**(`AppError`)。specta が TS へ判別可能な union を出すので、
-  画面は `code` で訳し分けられる。**ただしコアは anyhow のままなので、分類できるのは
-  Tauri 層が文脈を知っている場合だけ**。それ以外は `unexpected` に落ち、コアの
-  日本語文言を運ぶ(残課題は「ほぼ塞がった」であって「塞がった」ではない)
+- **エラーは型にする**。kb-coreの診断は `CoreError` がkindとsourceを分離し、Tauriは
+  `AppError` の判別可能なunionへ変換する。画面へsourceを渡さないため、言語に依存する
+  内部文言はログにだけ残る
 - **長い処理は同期コマンド + イベント**。Tauri は同期コマンドを別スレッドで動かすが、
   async コマンドは async ランタイム上で動く。`embed_enable` は数分ブロックするため
   async にするとランタイムを止める → 同期に直し、進捗を `EmbedProgress` で流す
@@ -206,9 +205,6 @@ GitHub Issues は使っていないため、ここに置く。
   画面ごとの `lazy()` 分割か `build.rolldownOptions.output.codeSplitting` で分けられる。
   重いのは d3-force・marked・Radix 一式。**着手の合図は「起動が遅い」と感じたとき**で、
   それまでは分割しない(計測せずに分けても複雑になるだけ)
-- **kb-core を型付きエラーにする**。Tauri 層は `AppError` で分類できるようになったが、
-  コアが anyhow のままなので、文脈を持たないエラーは `unexpected` に落ちて
-  日本語文言をそのまま運ぶ。英語環境で残る最後の穴はここ
 - **設定画面の中身**。いまは「見た目(テーマ・言語)」だけの最小形。
   vault の切り替えなど、置く候補が出たときに広げる
 

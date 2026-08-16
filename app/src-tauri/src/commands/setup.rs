@@ -41,7 +41,7 @@ impl From<kb_core::connect::RestoreProgress> for VaultRestoreProgress {
 #[tauri::command]
 #[specta::specta]
 pub fn setup_state() -> AppResult<SetupState> {
-    let reg = Registry::load().map_err(AppError::from)?;
+    let reg = Registry::load().map_err(AppError::configuration)?;
     match reg.resolve(None) {
         Ok(path) => Ok(SetupState {
             needs_onboarding: false,
@@ -65,16 +65,14 @@ pub fn setup_state() -> AppResult<SetupState> {
 #[specta::specta]
 pub fn onboard(state: State<'_, AppState>) -> AppResult<SetupState> {
     let path = dirs::home_dir()
-        .ok_or_else(|| AppError::VaultUnavailable {
-            message: "home が特定できない".into(),
-        })?
+        .ok_or(AppError::VaultUnavailable)?
         .join("kb")
         .join("my-notes");
-    let vault = Vault::create(&path).map_err(AppError::from)?;
-    let mut reg = Registry::load().map_err(AppError::from)?;
+    let vault = Vault::create(&path).map_err(AppError::vault)?;
+    let mut reg = Registry::load().map_err(AppError::configuration)?;
     reg.add("my-notes", vault.root.clone())
-        .map_err(AppError::from)?;
-    reg.save().map_err(AppError::from)?;
+        .map_err(AppError::configuration)?;
+    reg.save().map_err(AppError::configuration)?;
     // 作ったばかりの vault を次のコマンドから使えるようにする
     state.reset();
     setup_state()
@@ -91,11 +89,9 @@ pub fn onboard_existing(
 ) -> AppResult<SetupState> {
     let repository = kb_core::github::parse_repository_url(&url).map_err(AppError::backup)?;
     let root = dirs::home_dir()
-        .ok_or_else(|| AppError::VaultUnavailable {
-            message: "home が特定できない".into(),
-        })?
+        .ok_or(AppError::VaultUnavailable)?
         .join("kb");
-    let mut registry = Registry::load().map_err(AppError::from)?;
+    let mut registry = Registry::load().map_err(AppError::configuration)?;
     let (name, path) = (1usize..)
         .map(|number| {
             let name = if number == 1 {
@@ -116,8 +112,8 @@ pub fn onboard_existing(
         let _ = VaultRestoreProgress::from(progress).emit(&app);
     })
     .map_err(AppError::backup)?;
-    registry.add(&name, path).map_err(AppError::from)?;
-    registry.save().map_err(AppError::from)?;
+    registry.add(&name, path).map_err(AppError::configuration)?;
+    registry.save().map_err(AppError::configuration)?;
     state.reset();
     setup_state()
 }

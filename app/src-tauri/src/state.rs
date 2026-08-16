@@ -48,15 +48,13 @@ pub struct AppState {
 impl AppState {
     /// 既定 vault の名前(お気に入り等、vault ごとの UI 設定のキー)。
     pub fn vault_name(&self) -> AppResult<String> {
-        let reg = Registry::load().map_err(AppError::from)?;
-        let path = reg.resolve(None).map_err(AppError::from)?;
+        let reg = Registry::load().map_err(AppError::configuration)?;
+        let path = reg.resolve(None).map_err(AppError::vault)?;
         reg.vaults
             .iter()
             .find(|v| v.path == path)
             .map(|v| v.name.clone())
-            .ok_or_else(|| AppError::VaultUnavailable {
-                message: "vault 名が特定できない".into(),
-            })
+            .ok_or(AppError::VaultUnavailable)
     }
 
     /// vault だけを使う(索引に触らない操作)。
@@ -76,9 +74,10 @@ impl AppState {
     ) -> AppResult<T> {
         let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
         let ctx = ensure(&mut guard)?;
-        let workspace_id = kb_core::workspace::workspace_id(&ctx.vault).map_err(AppError::from)?;
-        let stores = Stores::open(&workspace_id).map_err(AppError::from)?;
-        let ledger = Ledger::open(&ctx.vault, &workspace_id).map_err(AppError::from)?;
+        let workspace_id =
+            kb_core::workspace::workspace_id(&ctx.vault).map_err(AppError::storage)?;
+        let stores = Stores::open(&workspace_id).map_err(AppError::storage)?;
+        let ledger = Ledger::open(&ctx.vault, &workspace_id).map_err(AppError::storage)?;
         f(&ctx.vault, &stores, &ledger, &workspace_id)
     }
 
@@ -115,12 +114,10 @@ impl AppState {
 
 fn ensure(guard: &mut Option<VaultCtx>) -> AppResult<&mut VaultCtx> {
     if guard.is_none() {
-        let reg = Registry::load().map_err(AppError::from)?;
-        let path = reg.resolve(None).map_err(|e| AppError::VaultUnavailable {
-            message: e.to_string(),
-        })?;
-        let vault = Vault::open(path).map_err(AppError::from)?;
-        let conn = open_db(&vault).map_err(AppError::from)?;
+        let reg = Registry::load().map_err(AppError::configuration)?;
+        let path = reg.resolve(None).map_err(AppError::vault)?;
+        let vault = Vault::open(path).map_err(AppError::vault)?;
+        let conn = open_db(&vault).map_err(AppError::index)?;
         *guard = Some(VaultCtx {
             vault,
             conn,

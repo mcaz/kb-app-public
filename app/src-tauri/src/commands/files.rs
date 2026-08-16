@@ -209,7 +209,8 @@ fn take(
             by: kb_core::OWNER_ACTOR.to_string(),
             at: kb_core::frontmatter::now_iso(),
         };
-        let taken = intake::take(vault, stores, ledger, workspace_id, src, req)?;
+        let taken = intake::take(vault, stores, ledger, workspace_id, src, req)
+            .map_err(AppError::storage)?;
         Ok(Added {
             file: row(vault, stores, &taken.manifest),
             warn_over_bytes: taken.warn_over,
@@ -232,14 +233,12 @@ pub fn file_open(app: tauri::AppHandle, state: State<'_, AppState>, id: String) 
     let id = artifact_id(&id)?;
     let path = state.with_artifacts(|vault, stores, ledger, _| {
         let resolved = resolve::resolve(vault, stores, ledger, &resolve::Link::Fixed(id.clone()))
-            .map_err(AppError::from)?
-            .ok_or_else(|| AppError::Unexpected {
-                message: format!("ファイルの台帳が無い: {id}"),
-            })?;
+            .map_err(AppError::storage)?
+            .ok_or_else(|| AppError::invalid_input(anyhow::anyhow!("台帳に無い: {id}")))?;
         // 手元に無い / 方針で閉じている場合、ここが None を返す
         let mut file = resolved
             .open(vault, stores)
-            .map_err(AppError::from)?
+            .map_err(AppError::storage)?
             .ok_or(AppError::FileNotHere)?;
         export(&resolved.manifest, &mut file)
     })?;
@@ -259,7 +258,7 @@ pub fn legacy_open(
         // 名前は成分だけ使う(パス潜り対策 — 旧実装と同じ扱い)
         let base = Path::new(&name)
             .file_name()
-            .ok_or_else(|| AppError::unexpected("ファイル名が不正"))?;
+            .ok_or_else(|| AppError::invalid_input(anyhow::anyhow!("ファイル名が不正")))?;
         let path = vault.attach_dir(&note_id).join(base);
         if !path.is_file() {
             return Err(AppError::FileNotHere);
@@ -308,20 +307,17 @@ pub fn file_detach(
 ) -> AppResult<()> {
     let id = artifact_id(&id)?;
     state.with_artifacts(|vault, _, ledger, _| {
-        let mut manifest =
-            ledger
-                .get(&id)
-                .map_err(AppError::from)?
-                .ok_or_else(|| AppError::Unexpected {
-                    message: format!("ファイルの台帳が無い: {id}"),
-                })?;
+        let mut manifest = ledger
+            .get(&id)
+            .map_err(AppError::storage)?
+            .ok_or_else(|| AppError::invalid_input(anyhow::anyhow!("台帳に無い: {id}")))?;
         manifest.detach(expected_version, &note_id)?;
         manifest.record(
             &kb_core::frontmatter::now_iso(),
             "detached",
             &format!("{note_id} から外した"),
         );
-        ledger.put(vault, &manifest).map_err(AppError::from)
+        ledger.put(vault, &manifest).map_err(AppError::storage)
     })
 }
 
@@ -331,14 +327,11 @@ pub fn file_detach(
 pub fn file_fetch(state: State<'_, AppState>, id: String) -> AppResult<Availability> {
     let id = artifact_id(&id)?;
     state.with_artifacts(|vault, stores, ledger, _| {
-        let manifest =
-            ledger
-                .get(&id)
-                .map_err(AppError::from)?
-                .ok_or_else(|| AppError::Unexpected {
-                    message: format!("ファイルの台帳が無い: {id}"),
-                })?;
-        kb_core::lfs::fetch(vault, &manifest.hash).map_err(AppError::from)?;
+        let manifest = ledger
+            .get(&id)
+            .map_err(AppError::storage)?
+            .ok_or_else(|| AppError::invalid_input(anyhow::anyhow!("台帳に無い: {id}")))?;
+        kb_core::lfs::fetch(vault, &manifest.hash).map_err(AppError::backup)?;
         Ok(availability(vault, stores, &manifest))
     })
 }

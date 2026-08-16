@@ -34,7 +34,7 @@ fn home_state_from(
     conn: &kb_core::rusqlite::Connection,
     mut degraded: Vec<kb_core::degradation::Degradation>,
 ) -> AppResult<HomeState> {
-    let notes = recent(conn, 500).map_err(AppError::from)?;
+    let notes = recent(conn, 500).map_err(AppError::index)?;
     // お手入れは補助情報なので本体を止めないが、失敗を空一覧と偽らない。
     if let Err(error) = kb_core::care::detect(conn, vault) {
         degraded.push(kb_core::degradation::Degradation::CareDetection {
@@ -54,7 +54,7 @@ fn home_state_from(
         },
     );
     Ok(HomeState {
-        stats: stats(conn).map_err(AppError::from)?,
+        stats: stats(conn).map_err(AppError::index)?,
         notes,
         care,
         tags,
@@ -88,7 +88,7 @@ pub struct TagOverview {
 #[specta::specta]
 pub fn tag_overview(state: State<'_, AppState>) -> AppResult<TagOverview> {
     state.with_index(Sync::Throttled, |_, conn, degraded| {
-        let (tags, glossary_note) = kb_core::search::tag_overview(conn).map_err(AppError::from)?;
+        let (tags, glossary_note) = kb_core::search::tag_overview(conn).map_err(AppError::index)?;
         Ok(TagOverview {
             tags,
             glossary_note,
@@ -165,6 +165,6 @@ mod tests {
 #[specta::specta]
 pub fn care_dismiss(state: State<'_, AppState>, key: String) -> AppResult<()> {
     state.with_index(Sync::Throttled, |_, conn, _| {
-        kb_core::care::dismiss(conn, &key).map_err(AppError::from)
+        kb_core::care::dismiss(conn, &key).map_err(AppError::index)
     })
 }

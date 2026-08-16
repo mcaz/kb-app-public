@@ -43,7 +43,7 @@ fn note_view_from(
 ) -> AppResult<NoteView> {
     let note = vault
         .read_note(id)
-        .map_err(|_| AppError::NoteNotFound { id: id.to_string() })?;
+        .map_err(|_| AppError::note_not_found(id))?;
     // 本文は表示できるので、現在ノート文脈や派生索引の失敗だけを型付きで添える。
     if let Err(error) = kb_core::connect::set_current_note(vault, id) {
         degraded.push(kb_core::degradation::Degradation::CurrentNoteContext {
@@ -147,7 +147,7 @@ mod tests {
 #[specta::specta]
 pub fn note_categories(state: State<'_, AppState>) -> AppResult<Vec<NoteCategory>> {
     state.with_index(Sync::Throttled, |_, conn, _| {
-        categories(conn).map_err(AppError::from)
+        categories(conn).map_err(AppError::index)
     })
 }
 
@@ -161,7 +161,7 @@ pub fn note_list(
     limit: usize,
 ) -> AppResult<NoteListPage> {
     let mut page = state.with_index(Sync::Throttled, |_, conn, _| {
-        notes_in_category(conn, &category, after.as_deref(), limit).map_err(AppError::from)
+        notes_in_category(conn, &category, after.as_deref(), limit).map_err(AppError::index)
     })?;
     state.with_artifacts(|vault, _, ledger, _| {
         let managed_counts = ledger.current_counts_by_note();
@@ -200,7 +200,7 @@ pub fn graph_data(state: State<'_, AppState>) -> AppResult<GraphData> {
                     "SELECT id, coalesce(title, id), origin, status \
                      FROM notes WHERE status != 'deprecated'",
                 )
-                .map_err(AppError::unexpected)?;
+                .map_err(AppError::index)?;
             let rows = stmt
                 .query_map([], |r| {
                     Ok(GraphNode {
@@ -211,19 +211,19 @@ pub fn graph_data(state: State<'_, AppState>) -> AppResult<GraphData> {
                         degree: 0,
                     })
                 })
-                .map_err(AppError::unexpected)?;
+                .map_err(AppError::index)?;
             rows.collect::<Result<Vec<_>, _>>()
-                .map_err(AppError::unexpected)?
+                .map_err(AppError::index)?
         };
 
         let ids: std::collections::HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
         let edges: Vec<(String, String)> = {
             let mut stmt = conn
                 .prepare("SELECT src, dst FROM links")
-                .map_err(AppError::unexpected)?;
+                .map_err(AppError::index)?;
             let rows = stmt
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                .map_err(AppError::unexpected)?;
+                .map_err(AppError::index)?;
             rows.filter_map(|r| r.ok())
                 .filter(|(s, d)| ids.contains(s) && ids.contains(d))
                 .collect()

@@ -46,6 +46,7 @@
 | `app/src/lib/bindings.ts` は生成物(手書き禁止) | CI の `git diff --exit-code` |
 | 対訳の欠落・余剰・空文字 | `src/i18n/locales/locales.test.ts` |
 | 契約1〜4(タグ・OKF・所有・劣化表示) | `kb-core` の検証コード |
+| coreの診断文をGUIへ直送しない | `CoreError` → `AppError`。`From<anyhow::Error>` を持たず未分類はコンパイル失敗 |
 
 手元の通し方は [AGENTS.md](../AGENTS.md) の Verification に一本化してある。
 
@@ -57,8 +58,8 @@
 - **UI 文言をソースに直書きしない。** 文言は `src/i18n/locales/{ja,en}/<画面>.json`。
   日本語が正本で、英語未訳は日本語にフォールバックする(ADR-0002 決定7)。
   JSX に日本語の文字列リテラルが出たら、それは locale へ出し忘れている。
-- **エラー文言は `code` で訳し分ける。** 画面が文字列をそのまま表示するのは
-  `unexpected` に落ちたときだけ(§5)。
+- **エラー文言は `code` / `kind` で訳し分ける。** `unexpected.message` もログ専用で、
+  画面は locale の一般文言を表示する(§5)。
 
 ## 3. コメント
 
@@ -94,10 +95,11 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
 
 ## 5. Rust
 
-- **エラーは層で使い分ける。** `kb-core` は `anyhow`(`bail!` に日本語の文言)。
-  Tauri 層は `AppError` で種類を型にする。**画面が訳し分ける必要が出たエラーは、
-  そのつど `AppError` の判別子を増やす** — 増やさない限り `Unexpected` に落ち、
-  英語環境にコアの日本語が漏れる(ADR-0002 の既知の穴。恒久策は §9)。
+- **エラーは層で使い分ける。** `kb-core` 内部では原因のchainに `anyhow` を使ってよいが、
+  GUIへ渡す境界では必ず `CoreError` のkindへ分類する。Tauri 層はそれを `AppError` へ
+  対応付け、診断detailをserializeしない。`AppError` は `From<anyhow::Error>` を持たないため、
+  新しいコア呼び出しを未分類のまま追加するとコンパイルで止まる。画面が新しい案内を
+  必要とするときは `CoreErrorKind` とlocaleを同じ変更で増やす。
 - **テストは同じファイルの `#[cfg(test)] mod tests`。** 別ディレクトリに出さない。
   実データを触るテストは `tempfile::tempdir()` + `Vault::create` の `setup()` を各モジュールに置く。
 - **事故を直したら再現テストを足し、そのテストに日付入りの doc コメントを書く。**
@@ -174,5 +176,4 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
 | JSX に日本語リテラルを書かない(§2) | eslint `no-restricted-syntax` で `JSXText` の非 ASCII を落とす | 正規表現などの誤検出を除外する設計が要る |
 | `.tsx` に生の hex を書かない(§6) | 同上、または stylelint | canvas 経路の例外指定とセット |
 | clippy の追加 lint | `Cargo.toml` の `[workspace.lints]` | いまは既定 + `-D warnings` のみ |
-| `kb-core` を型付きエラーにする(§5) | コア側にエラー型を導入し `AppError` へ対応付ける | ADR-0002 の残課題。**英語環境に日本語が漏れる最後の穴** |
 | 契約変更を文書とコアで同時に行う(§8) | 現状は機械化の当てが無い | レビューで見る |

@@ -11,6 +11,7 @@ pub mod care;
 pub mod connect;
 pub mod degradation;
 pub mod embed;
+pub mod error;
 pub mod favorites;
 pub mod frontmatter;
 pub mod github;
@@ -45,17 +46,17 @@ pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// テストビルドでは**実ユーザーの領域へ到達できない**(下の `#[cfg(test)]`)。
 /// 「テストでは触らない」を文章ではなく経路で守る。
-pub fn app_data_dir() -> anyhow::Result<std::path::PathBuf> {
+pub fn app_data_dir() -> error::Result<std::path::PathBuf> {
     #[cfg(test)]
     {
         Ok(test_data_root())
     }
     #[cfg(not(test))]
     {
-        use anyhow::Context;
-        Ok(dirs::data_dir()
-            .context("データ領域が特定できない")?
-            .join("kb-app"))
+        let root = dirs::data_dir().ok_or_else(|| {
+            error::CoreError::configuration(anyhow::anyhow!("データ領域が特定できない"))
+        })?;
+        Ok(root.join("kb-app"))
     }
 }
 
