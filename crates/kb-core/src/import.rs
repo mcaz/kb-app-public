@@ -205,13 +205,9 @@ fn convert(
                 d
             }
         }),
-        origin: Some(
-            if source.as_deref().is_some_and(|s| s.starts_with("manual:")) {
-                "human".into()
-            } else {
-                "agent".into()
-            },
-        ),
+        // 旧ノートの作成者は generated.by / legacy に残すが、現行 KB へ取り込んだ
+        // 知識の管理主体は AI に統一する(人間所有ノートを新しく作る抜け道にしない)。
+        origin: Some("agent".into()),
         extra: BTreeMap::new(),
     };
     // 旧メタを無損失で保持(id/scope/vault/status/share/index など)
@@ -293,6 +289,17 @@ mod tests {
         // round-trip で OKF 準拠ファイルになる
         let out = note.to_file_string().unwrap();
         Note::parse(&out).unwrap();
+    }
+
+    #[test]
+    fn manual_legacy_note_becomes_agent_owned() {
+        let src = "---\ntitle: 手書き由来\ntype: note\nsource: manual:owner\n---\n\n本文。\n";
+        let note = convert(src, &HashMap::new(), &mut Vec::new()).unwrap();
+        assert_eq!(note.front.origin.as_deref(), Some("agent"));
+        assert_eq!(
+            note.front.generated.as_ref().map(|g| g.by.as_str()),
+            Some("human:owner")
+        );
     }
 
     #[test]

@@ -271,7 +271,13 @@ mod tests {
 - ops: 日々の運用 — これは語彙表の外なので拾わない
 ";
         vault
-            .new_human_note("タグ運用 — 合意の置き場", body, "human:o")
+            .propose(
+                "タグ運用 — 合意の置き場",
+                body,
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
             .unwrap();
         sync(&vault, &conn).unwrap();
 

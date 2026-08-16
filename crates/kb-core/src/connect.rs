@@ -923,7 +923,9 @@ mod tests {
     fn backup_status_without_remote() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        vault.new_human_note("メモ", "本文", "human:o").unwrap();
+        vault
+            .propose("メモ", "本文", None, &["test".into()], "test/client")
+            .unwrap();
         let st = backup_status(&vault).unwrap();
         assert!(st.remote.is_none());
         assert!(st.pending >= 2); // initialize + note
@@ -951,8 +953,14 @@ mod tests {
         // デバイス A: vault 作成 → バックアップ先設定(初回 push)→ ノート追加(随時 push)
         let a = Vault::create(dir.path().join("a")).unwrap();
         set_backup_remote(&a, bare.to_str().unwrap()).unwrap();
-        a.new_human_note("同期テスト", "デバイス A で書いた。", "human:o")
-            .unwrap();
+        a.propose(
+            "同期テスト",
+            "デバイス A で書いた。",
+            None,
+            &["test".into()],
+            "test/client",
+        )
+        .unwrap();
         assert_eq!(
             backup_status(&a).unwrap().pending,
             0,
@@ -977,8 +985,14 @@ mod tests {
         run(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
         let b = Vault::open(dir.path().join("b")).unwrap();
         assert_eq!(b.list_note_files().len(), 1);
-        a.new_human_note("追加分", "A の2本目。", "human:o")
-            .unwrap();
+        a.propose(
+            "追加分",
+            "A の2本目。",
+            None,
+            &["test".into()],
+            "test/client",
+        )
+        .unwrap();
         pull_now(&b).unwrap();
         assert_eq!(
             b.list_note_files().len(),
@@ -987,10 +1001,22 @@ mod tests {
         );
 
         // B 側で書いても push が通る(非 fast-forward 時の rebase 再試行経路)
-        a.new_human_note("三本目", "A の3本目(B の pull 後)。", "human:o")
-            .unwrap();
-        b.new_human_note("B のメモ", "デバイス B で書いた。", "human:o")
-            .unwrap();
+        a.propose(
+            "三本目",
+            "A の3本目(B の pull 後)。",
+            None,
+            &["test".into()],
+            "test/client",
+        )
+        .unwrap();
+        b.propose(
+            "B のメモ",
+            "デバイス B で書いた。",
+            None,
+            &["test".into()],
+            "test/client",
+        )
+        .unwrap();
         assert_eq!(
             backup_status(&b).unwrap().pending,
             0,
@@ -1115,7 +1141,13 @@ mod tests {
         run(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
         let source = Vault::create(dir.path().join("source")).unwrap();
         source
-            .new_human_note("別端末", "既存 Vault から来た。", "human:test")
+            .propose(
+                "別端末",
+                "既存 Vault から来た。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
             .unwrap();
         set_backup_remote(&source, bare.to_str().unwrap()).unwrap();
         let branch = git2::Repository::open(&source.root)

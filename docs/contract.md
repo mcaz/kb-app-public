@@ -10,7 +10,7 @@
 |---|---|---|
 | 1 | **すべてのノートはタグを1〜4個持つ**(タグはこのアプリの一次の整理手段) | propose: tags 必須(1〜4個)/ update: タグの全消し・5個以上は拒否 / タグの形は英小文字・数字・ハイフン(20文字以内)/ **語彙外の新語は拒否**(近い既存語を添えて返す。`allow_new_tags` を明示したときだけ通す) |
 | 2 | **ノートの形式(OKF frontmatter)はアプリが管理**する。直接の形式いじりはしない | parse 検証・書き込みはコア API 経由のみ |
-| 3 | **ノートは AI の領分**(update / remove は AI、削除指示は人間) | 所有ガード(コアで強制) |
+| 3 | **ノートは AI の領分**(update / remove は AI、削除指示は人間)。旧 `origin: human` ノートは互換読み取り専用 | 通常の書き込み口は propose / update / remove のみ。新規・移植ノートは `origin: agent`。CLI に人間用の new / edit / archive / delete を公開せず、コアの raw write は移植内部に閉じる |
 | 4 | **同期・索引は派生**。壊れたら画面に出す(沈黙しない) | fail-open+劣化表示 |
 | 5 | **ファイルの実体と持ち出し範囲はコアが守る**(2026-08-12 追加) | 新規取り込みは `managed` のみ(`Linked` は旧 record の互換読み取り専用) / path 経路は picker・drop・paste・CLI が同一のコア API に合流 / MCP へは content 経路だけを公開し path を受け取らない / `client_repo` 由来は `local_only` 固定で instructions・prompt から緩和不能 / **緩和の能力を MCP に公開しない**(能力の不在)/ content と作成時 provenance は不変(更新は新しい版)/ **新しい版は前の版の区分を引き継ぎ、渡された指定を見ない**(2026-08-13 追加)/ availability は同期せず端末ごとに導出 |
 | 6 | **正本は特定の保存形式ではなく再現可能性契約(Storage Contract)で定義する**(2026-08-16 追加) | repository の論理状態を決定的な JSON snapshot へ export / SHA-256 digest で同一性を比較 / `storage verify` は読み取り専用で破損を黙殺しない / fresh clone から同じ digest と派生索引を再構築する受入テスト。現行の Markdown・OKF・Git は交換可能な adapter |
