@@ -976,9 +976,11 @@ mod tests {
     fn write_performance_fixture(vault: &Vault) {
         for index in 0..PERFORMANCE_NOTE_COUNT {
             let id = performance_note_id(index);
-            let previous_link = (index > 0)
-                .then(|| format!("\n\n[前のノート](/{}.md)", performance_note_id(index - 1)))
-                .unwrap_or_default();
+            let previous_link = if index > 0 {
+                format!("\n\n[前のノート](/{}.md)", performance_note_id(index - 1))
+            } else {
+                String::new()
+            };
             let marker = if index == PERFORMANCE_TARGET {
                 "検索番兵オーロラ"
             } else {
