@@ -56,7 +56,7 @@ pub struct Migrated {
 }
 
 /// 棚卸し。**何も書かない。**
-pub fn survey(vault: &Vault, ledger: &Ledger) -> Vec<Pending> {
+pub fn survey(vault: &Vault, ledger: &Ledger) -> Result<Vec<Pending>> {
     let done: HashSet<(String, String)> = ledger
         .list()
         .iter()
@@ -68,7 +68,7 @@ pub fn survey(vault: &Vault, ledger: &Ledger) -> Vec<Pending> {
 
     let mut out = Vec::new();
     for (note_id, _) in vault.list_note_files() {
-        for (file_name, size) in vault.list_attachments(&note_id) {
+        for (file_name, size) in vault.list_attachments(&note_id)? {
             if done.contains(&(note_id.clone(), file_name.clone())) {
                 continue;
             }
@@ -81,7 +81,7 @@ pub fn survey(vault: &Vault, ledger: &Ledger) -> Vec<Pending> {
         }
     }
     out.sort_by(|a, b| (&a.note_id, &a.file_name).cmp(&(&b.note_id, &b.file_name)));
-    out
+    Ok(out)
 }
 
 /// 台帳・参照・対応表を重ねる。**冪等** — 既に載っているものは飛ばす。
@@ -92,8 +92,8 @@ pub fn migrate(
     at: &str,
 ) -> Result<Vec<Migrated>> {
     let mut out = Vec::new();
-    for pending in survey(vault, ledger) {
-        let path = vault.attach_dir(&pending.note_id).join(&pending.file_name);
+    for pending in survey(vault, ledger)? {
+        let path = vault.legacy_attachment_path(&pending.note_id, &pending.file_name)?;
         let (hash, size) = hash_file(&path)?;
 
         let mut manifest = Manifest::new(
@@ -229,7 +229,7 @@ mod tests {
         let id = vault
             .propose_for_test(title, "本文。", None, &["test".into()], "test/client")
             .unwrap();
-        let dir = vault.attach_dir(&id);
+        let dir = vault.attach_dir(&id).unwrap();
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(file_name), bytes).unwrap();
         id
@@ -242,7 +242,7 @@ mod tests {
         let e = env();
         let id = legacy(&e.vault, "設計メモ", "図.png", b"png bytes");
 
-        let found = survey(&e.vault, &e.ledger);
+        let found = survey(&e.vault, &e.ledger).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].note_id, id);
         assert_eq!(found[0].file_name, "図.png");
@@ -258,7 +258,7 @@ mod tests {
     fn migrating_does_not_move_the_bytes() {
         let e = env();
         let id = legacy(&e.vault, "設計メモ", "図.png", b"png bytes");
-        let path = e.vault.attach_dir(&id).join("図.png");
+        let path = e.vault.legacy_attachment_path(&id, "図.png").unwrap();
 
         let done = migrate(&e.vault, &e.ledger, "ws-a", AT).unwrap();
         assert_eq!(done.len(), 1);
@@ -313,7 +313,7 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert!(second.is_empty(), "2回目は何もしない");
         assert_eq!(e.ledger.list().len(), 1);
-        assert!(survey(&e.vault, &e.ledger).is_empty());
+        assert!(survey(&e.vault, &e.ledger).unwrap().is_empty());
     }
 
     /// 区分は `private + full`。持ち出し範囲は広がらない(既に Git の中にある)。

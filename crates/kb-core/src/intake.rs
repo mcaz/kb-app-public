@@ -19,6 +19,7 @@ use crate::artifact::{
     ArtifactId, ArtifactRef, Created, Locator, Manifest, Policy, RefName, Role, SyncPolicy,
 };
 use crate::ledger::Ledger;
+use crate::note_id::NoteId;
 use crate::store::Stores;
 use crate::vault::Vault;
 
@@ -100,6 +101,12 @@ pub fn take(
     src: &Path,
     req: Request,
 ) -> Result<Taken> {
+    // 台帳にノートIDを残す全入口をここへ収束させる。ファイル実体へ触れる前に
+    // 拒否することで、GUI/CLIなど呼び出し元ごとの検証漏れを作らない。
+    if let Some(note_id) = &req.note_id {
+        NoteId::parse(note_id)?;
+    }
+
     // check→write の参照名競合と、manifest commit→LFS upload の間へ別 process の
     // push が割り込む race を同じ transaction lock で防ぐ。
     let _lock = crate::connect::sync_lock(vault)?;
@@ -406,6 +413,31 @@ mod tests {
         if crate::connect::ensure_vault_config(&e.vault).is_ok() {
             assert!(crate::lfs::has(&e.vault, &out.manifest.hash));
         }
+    }
+
+    #[test]
+    fn invalid_note_id_is_rejected_before_file_or_ledger_writes() {
+        let e = env();
+        let src = e.root.join("secret.txt");
+        fs::write(&src, b"secret").unwrap();
+        let head_before = git2::Repository::open(&e.vault.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target();
+        let mut request = req();
+        request.note_id = Some("../outside".into());
+
+        assert!(take_at(&e, &src, request).is_err());
+        assert!(e.ledger.list().is_empty());
+        assert_eq!(
+            git2::Repository::open(&e.vault.root)
+                .unwrap()
+                .head()
+                .unwrap()
+                .target(),
+            head_before
+        );
     }
 
     #[test]

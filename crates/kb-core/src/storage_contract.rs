@@ -239,7 +239,7 @@ fn validate_tracked_payload(vault: &Vault, manifest: &Manifest) -> Result<()> {
     let path = match &manifest.locator {
         Locator::Managed { hash } => vault.root.join(ledger::DIR).join("lfs").join(hash.as_str()),
         Locator::LegacyGit { note_id, file_name } => {
-            vault.root.join(format!("{note_id}.files")).join(file_name)
+            vault.legacy_attachment_path(note_id, file_name)?
         }
         Locator::Linked { .. } => {
             bail!(

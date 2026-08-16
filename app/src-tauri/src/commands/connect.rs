@@ -199,6 +199,9 @@ pub fn connect_desktop(state: State<'_, AppState>) -> AppResult<()> {
 #[specta::specta]
 pub fn launch_ai(state: State<'_, AppState>, note: Option<String>) -> AppResult<()> {
     if let Some(id) = note {
+        let id = kb_core::note_id::NoteId::parse(&id)
+            .map_err(AppError::invalid_input)?
+            .to_string();
         state.with_vault(|vault| {
             kb_core::connect::set_current_note(vault, &id).map_err(AppError::storage)
         })?;

@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::backup::{BackupFailureKind, failure, failure_kind, git_failure};
 use crate::frontmatter::today;
+use crate::note_id::NoteId;
 use crate::vault::Vault;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -799,17 +800,18 @@ pub fn backup_push(vault: &Vault) -> Result<String> {
 
 /// FR-A5 最小: 「いま見ているノート」をコアの状態として記録(将来 MCP 側から参照)。
 pub fn set_current_note(vault: &Vault, id: &str) -> Result<()> {
+    let id = NoteId::parse(id)?;
     let dir = vault.root.join(".kb");
     fs::create_dir_all(&dir)?;
-    fs::write(dir.join("current-note"), id)?;
+    fs::write(dir.join("current-note"), id.as_str())?;
     Ok(())
 }
 
 pub fn current_note(vault: &Vault) -> Option<String> {
     fs::read_to_string(vault.root.join(".kb").join("current-note"))
         .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .and_then(|raw| NoteId::parse(raw.trim()).ok())
+        .map(|id| id.to_string())
 }
 
 #[cfg(test)]
@@ -1210,5 +1212,10 @@ mod tests {
         assert!(current_note(&vault).is_none());
         set_current_note(&vault, "notes/foo").unwrap();
         assert_eq!(current_note(&vault).as_deref(), Some("notes/foo"));
+
+        assert!(set_current_note(&vault, "../outside").is_err());
+        assert_eq!(current_note(&vault).as_deref(), Some("notes/foo"));
+        fs::write(vault.root.join(".kb/current-note"), "../outside").unwrap();
+        assert!(current_note(&vault).is_none());
     }
 }

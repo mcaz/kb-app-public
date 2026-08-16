@@ -3,12 +3,14 @@
 //! 規約(frontmatter・index.md・log.md)はアプリが生成し人間に暗記させない(原則7)。
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use git2::{Repository, Signature};
 
 use crate::frontmatter::{Frontmatter, Generated, Note, now_iso, today};
+use crate::note_id::NoteId;
 
 pub const NOTES_DIR: &str = "notes";
 const RESERVED: &[&str] = &["index.md", "log.md"];
@@ -71,16 +73,89 @@ impl Vault {
         self.root.join(".kb").join("index.db")
     }
 
-    /// ノート ID(パス、.md 抜き)→ 絶対パス。
-    pub fn note_path(&self, id: &str) -> PathBuf {
-        self.root.join(format!("{id}.md"))
+    /// 検証済みノートIDから、Vault内の字句上のパスを作る。
+    /// 読み書きは下のchecked_*も通し、symlink経由を拒否する。
+    pub(crate) fn note_path(&self, raw: &str) -> Result<PathBuf> {
+        let id = NoteId::parse(raw)?;
+        Ok(self.root.join(id.markdown_relative_path()))
     }
 
-    pub fn read_note(&self, id: &str) -> Result<Note> {
-        if id.trim().is_empty() {
-            bail!("ノート ID が空");
+    fn reject_symlink_components(&self, relative: &Path) -> Result<()> {
+        let mut current = self.root.clone();
+        for component in relative.components() {
+            let std::path::Component::Normal(part) = component else {
+                bail!("Vault相対パスに通常成分以外がある");
+            };
+            current.push(part);
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    bail!("Vault内パスにsymlinkがある: {}", current.display());
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => break,
+                Err(error) => return Err(error).context("Vault内パスの検査に失敗"),
+            }
         }
-        let path = self.note_path(id);
+        Ok(())
+    }
+
+    fn checked_existing_path(&self, relative: &Path) -> Result<PathBuf> {
+        self.reject_symlink_components(relative)?;
+        let root = self
+            .root
+            .canonicalize()
+            .context("Vault rootを解決できない")?;
+        let path = self.root.join(relative);
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("Vault内パスを解決できない: {}", path.display()))?;
+        if !canonical.starts_with(&root) {
+            bail!("Vault外のパスは扱えない: {}", path.display());
+        }
+        Ok(path)
+    }
+
+    fn checked_optional_path(&self, relative: &Path) -> Result<Option<PathBuf>> {
+        self.reject_symlink_components(relative)?;
+        let path = self.root.join(relative);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => self.checked_existing_path(relative).map(Some),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => {
+                Err(error).with_context(|| format!("パスを検査できない: {}", path.display()))
+            }
+        }
+    }
+
+    fn checked_write_path(&self, relative: &Path) -> Result<PathBuf> {
+        self.reject_symlink_components(relative)?;
+        let path = self.root.join(relative);
+        let parent = path.parent().context("書き込み先に親がない")?;
+        fs::create_dir_all(parent)?;
+
+        // create_dir_allの前後で調べる。既存ancestorがsymlinkなら前段で、
+        // 作成先がVault外へ解決された場合はcanonical containmentで拒否する。
+        let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+        self.reject_symlink_components(parent_relative)?;
+        let root = self
+            .root
+            .canonicalize()
+            .context("Vault rootを解決できない")?;
+        let canonical_parent = parent
+            .canonicalize()
+            .with_context(|| format!("書き込み先の親を解決できない: {}", parent.display()))?;
+        if !canonical_parent.starts_with(&root) {
+            bail!("Vault外へは書き込めない: {}", path.display());
+        }
+        if fs::symlink_metadata(&path).is_ok() {
+            self.checked_existing_path(relative)?;
+        }
+        Ok(path)
+    }
+
+    pub fn read_note(&self, raw: &str) -> Result<Note> {
+        let id = NoteId::parse(raw)?;
+        let path = self.checked_existing_path(&id.markdown_relative_path())?;
         let content = fs::read_to_string(&path)
             .with_context(|| format!("ノートが読めない: {}", path.display()))?;
         Note::parse(&content).with_context(|| format!("parse 失敗: {id}"))
@@ -91,7 +166,7 @@ impl Vault {
         let slug = slugify(title);
         let mut id = format!("{NOTES_DIR}/{slug}");
         let mut n = 1;
-        while self.note_path(&id).exists() {
+        while self.note_path(&id)?.exists() {
             n += 1;
             id = format!("{NOTES_DIR}/{slug}-{n}");
         }
@@ -99,18 +174,9 @@ impl Vault {
         Ok(id)
     }
 
-    fn write_note(&self, id: &str, note: &Note) -> Result<()> {
-        let file = Path::new(id)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or_default();
-        if RESERVED.contains(&format!("{file}.md").as_str()) {
-            bail!("{file}.md は予約ファイル名(OKF §3.1)");
-        }
-        let path = self.note_path(id);
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir)?;
-        }
+    fn write_note(&self, raw: &str, note: &Note) -> Result<()> {
+        let id = NoteId::parse(raw)?;
+        let path = self.checked_write_path(&id.markdown_relative_path())?;
         fs::write(&path, note.to_file_string()?)?;
         Ok(())
     }
@@ -270,18 +336,26 @@ impl Vault {
     }
 
     fn delete_note_inner(&self, id: &str, message: &str) -> Result<()> {
+        let id = NoteId::parse(id)?;
+        let note_relative = id.markdown_relative_path();
+        let attachments_relative = id.attachments_relative_path();
+        let note_path = self.checked_existing_path(&note_relative)?;
+        let attachments = self.checked_optional_path(&attachments_relative)?;
         let title = self
-            .read_note(id)
+            .read_note(id.as_str())
             .ok()
             .and_then(|n| n.front.title)
             .unwrap_or_else(|| id.to_string());
         let repo = Repository::open(&self.root)?;
         let mut index = repo.index()?;
-        index.remove_path(Path::new(&format!("{id}.md")))?;
-        let _ = index.remove_dir(Path::new(&format!("{id}.files")), 0);
+        index.remove_path(&note_relative)?;
+        let _ = index.remove_dir(&attachments_relative, 0);
         index.write()?;
-        fs::remove_file(self.note_path(id))?;
-        let _ = fs::remove_dir_all(self.attach_dir(id));
+        fs::remove_file(note_path)?;
+        if let Some(attachments) = attachments {
+            // 旧実装と同じく、ノート本体の削除は旧添付の後始末失敗で巻き戻せない。
+            let _ = fs::remove_dir_all(attachments);
+        }
         self.write_index_md()?;
         self.append_log(&format!("**Deletion**: 「{title}」({id})を削除。"))?;
         self.commit(&["index.md", "log.md"], message)?;
@@ -295,14 +369,29 @@ impl Vault {
     /// 中にあるので、ここへ足すと binary が履歴に積み上がる。新規の書き込みは
     /// [`crate::intake`] へ合流させ、追加も削除もこの経路には残していない
     /// (削除は不変性を壊すので Artifact に流用できない)。
-    pub fn attach_dir(&self, id: &str) -> PathBuf {
-        self.root.join(format!("{id}.files"))
+    #[cfg(test)]
+    pub(crate) fn attach_dir(&self, raw: &str) -> Result<PathBuf> {
+        let id = NoteId::parse(raw)?;
+        Ok(self.root.join(id.attachments_relative_path()))
+    }
+
+    /// 旧添付を読む唯一の実ファイル解決口。IDとファイル名の両方を検査し、
+    /// symlinkを含むVault外到達を拒否する。
+    pub fn legacy_attachment_path(&self, raw: &str, file_name: &str) -> Result<PathBuf> {
+        let id = NoteId::parse(raw)?;
+        let relative = id.legacy_attachment_relative_path(file_name)?;
+        Ok(self
+            .checked_optional_path(&relative)?
+            .unwrap_or_else(|| self.root.join(relative)))
     }
 
     /// 旧添付の一覧 (名前, バイト数)。移行するまで画面と索引が読む。
-    pub fn list_attachments(&self, id: &str) -> Vec<(String, u64)> {
+    pub fn list_attachments(&self, raw: &str) -> Result<Vec<(String, u64)>> {
+        let id = NoteId::parse(raw)?;
         let mut out = Vec::new();
-        if let Ok(entries) = fs::read_dir(self.attach_dir(id)) {
+        let relative = id.attachments_relative_path();
+        if let Some(dir) = self.checked_optional_path(&relative)? {
+            let entries = fs::read_dir(dir)?;
             for e in entries.flatten() {
                 if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
                     let size = e.metadata().map(|m| m.len()).unwrap_or(0);
@@ -311,7 +400,7 @@ impl Vault {
             }
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// 全ノートの (id, 絶対パス)。予約ファイル・.kb・.git・添付(*.files)は除外。
@@ -403,7 +492,10 @@ impl Vault {
     }
 
     fn commit_note_op(&self, id: &str, message: &str) -> Result<()> {
-        self.commit(&[&format!("{id}.md"), "index.md", "log.md"], message)?;
+        let id = NoteId::parse(id)?;
+        let note_path = id.markdown_relative_path();
+        let note_path = note_path.to_str().context("ノートIDがUTF-8ではない")?;
+        self.commit(&[note_path, "index.md", "log.md"], message)?;
         // 随時 push(FR-A6 改定)。remote 未設定なら no-op、失敗しても操作は成功のまま
         crate::connect::auto_push(self);
         Ok(())
@@ -499,14 +591,158 @@ mod tests {
                 "test/client",
             )
             .unwrap();
-        let files = vault.attach_dir(&id);
+        let files = vault.attach_dir(&id).unwrap();
         std::fs::create_dir_all(&files).unwrap();
         std::fs::write(files.join("図.png"), b"png-bytes").unwrap();
-        assert_eq!(vault.list_attachments(&id), vec![("図.png".into(), 9u64)]);
+        assert_eq!(
+            vault.list_attachments(&id).unwrap(),
+            vec![("図.png".into(), 9u64)]
+        );
 
         // 添付ディレクトリはノート走査に映らない(OKF 互換の保全)
         std::fs::write(files.join("紛れ.md"), "---\ntype: Note\n---\nx").unwrap();
         assert_eq!(vault.list_note_files().len(), 1);
+    }
+
+    fn agent_note(title: &str, body: &str) -> Note {
+        let mut front = Frontmatter::new_note(title);
+        front.origin = Some("agent".into());
+        front.created = Some(now_iso());
+        Note {
+            front,
+            body: body.into(),
+        }
+    }
+
+    /// get/update/remove は同じNoteId境界を通り、Vaultの外を読まず変更しない。
+    #[test]
+    fn note_operations_cannot_escape_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.md");
+        let original = agent_note("外部", "変更されない本文")
+            .to_file_string()
+            .unwrap();
+        std::fs::write(&secret, &original).unwrap();
+
+        let absolute = outside.join("secret").to_string_lossy().to_string();
+        for id in ["../outside/secret", "notes/../../outside/secret", &absolute] {
+            assert!(vault.read_note(id).is_err(), "読めてはいけない: {id}");
+            assert!(
+                vault
+                    .agent_update_note(
+                        &conn,
+                        NoteUpdate {
+                            id,
+                            title: None,
+                            body: Some("侵入"),
+                            description: None,
+                            tags: None,
+                            allow_new_tags: false,
+                            client: "test/client",
+                        },
+                    )
+                    .is_err(),
+                "更新できてはいけない: {id}"
+            );
+            assert!(
+                vault.agent_delete_note(id, "test/client").is_err(),
+                "削除できてはいけない: {id}"
+            );
+            assert_eq!(std::fs::read_to_string(&secret).unwrap(), original);
+        }
+    }
+
+    /// 字句上はVault内でも、symlinkで外へ出るノートは全操作で拒否する。
+    #[cfg(unix)]
+    #[test]
+    fn note_operations_reject_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let outside = dir.path().join("secret.md");
+        let original = agent_note("外部", "変更されない本文")
+            .to_file_string()
+            .unwrap();
+        std::fs::write(&outside, &original).unwrap();
+        symlink(&outside, vault.root.join("notes/linked.md")).unwrap();
+
+        assert!(vault.read_note("notes/linked").is_err());
+        assert!(
+            vault
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        id: "notes/linked",
+                        title: None,
+                        body: Some("侵入"),
+                        description: None,
+                        tags: None,
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .is_err()
+        );
+        assert!(
+            vault
+                .agent_delete_note("notes/linked", "test/client")
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), original);
+    }
+
+    #[test]
+    fn nested_unicode_note_ids_remain_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let note = agent_note("同期設計", "本文");
+        vault.write_note_fixture("設計/同期/端末間", &note).unwrap();
+        assert_eq!(vault.read_note("設計/同期/端末間").unwrap().body, "本文\n");
+    }
+
+    #[test]
+    fn legacy_attachment_paths_share_the_same_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        assert!(
+            vault
+                .legacy_attachment_path("../outside", "secret.txt")
+                .is_err()
+        );
+        assert!(
+            vault
+                .legacy_attachment_path("notes/a", "../secret.txt")
+                .is_err()
+        );
+        assert!(
+            vault
+                .legacy_attachment_path("notes/a", r"..\secret.txt")
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_attachment_paths_reject_symlink_directories_even_when_file_is_missing() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, vault.root.join("notes/a.files")).unwrap();
+
+        assert!(
+            vault
+                .legacy_attachment_path("notes/a", "missing.txt")
+                .is_err()
+        );
     }
 
     /// 現行ノートは AI 所有。旧 human ノートは読めるが、更新・削除はできない。
