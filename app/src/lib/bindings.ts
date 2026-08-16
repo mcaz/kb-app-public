@@ -68,6 +68,13 @@ export const commands = {
 	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */
 	legacyOpen: (noteId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("legacy_open", { noteId, name })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
+	/**  Vault の有無に依存しないため、初回の「既存 Vault を復元」画面からも呼べる。 */
+	githubAuthState: () => typedError<GitHubAuthState, AppError>(__TAURI_INVOKE("github_auth_state")),
+	/**  OAuth device flow は polling を含む blocking 処理なので同期 command にする。 */
+	githubSignIn: () => typedError<GitHubAuthState, AppError>(__TAURI_INVOKE("github_sign_in")),
+	githubSignOut: () => typedError<null, AppError>(__TAURI_INVOKE("github_sign_out")),
+	/**  Webview に任意 URL を開く権限を渡さず、GitHub の固定ページだけを OS へ渡す。 */
+	githubOpenDevicePage: () => typedError<null, AppError>(__TAURI_INVOKE("github_open_device_page")),
 	/**  Claude Desktop の設定にこの実行ファイルを MCP サーバーとして登録する。 */
 	connectDesktop: () => typedError<null, AppError>(__TAURI_INVOKE("connect_desktop")),
 	backupNow: () => typedError<string, AppError>(__TAURI_INVOKE("backup_now")),
@@ -88,6 +95,7 @@ export const commands = {
 /** Events */
 export const events = {
 	embedProgress: makeEvent<EmbedProgress>("embed-progress"),
+	gitHubDeviceAuthorization: makeEvent<GitHubDeviceAuthorization>("git-hub-device-authorization"),
 	vaultRestoreProgress: makeEvent<VaultRestoreProgress>("vault-restore-progress"),
 };
 
@@ -246,6 +254,21 @@ export type FileRow = {
 	/**  取り寄せを提案してよいか。**方針で閉じているものには提案しない** */
 	can_fetch: boolean,
 	added_at: string,
+};
+
+export type GitHubAuthState = {
+	/**  OAuth App の client ID が build または実行環境に設定済みか。 */
+	configured: boolean,
+	/**  OS keychain に利用可能な credential があるか。 */
+	signed_in: boolean,
+	account_login: string | null,
+};
+
+/**  GitHub device flow で画面へ出してよい情報。device code / token は含めない。 */
+export type GitHubDeviceAuthorization = {
+	user_code: string,
+	verification_uri: string,
+	expires_in: number,
 };
 
 export type GraphData = {

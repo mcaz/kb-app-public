@@ -1,0 +1,16 @@
+{
+  "title": "GitHub",
+  "checking": "Checking the GitHub connection…",
+  "notConfigured": "GitHub connection is not enabled in this build yet",
+  "notConfiguredHelp": "A build configured with the distribution OAuth App client ID is required. Tokens and client secrets are never written to configuration files.",
+  "signedIn": "Signed in as @{{account}}",
+  "storedInKeychain": "Credentials are in the OS keychain. Signing out removes them from this device.",
+  "signOut": "Sign out on this device",
+  "scopeDisclosure": "To create, verify, and sync private repositories, kb-app uses GitHub OAuth’s repo scope. This scope includes access to all private repositories.",
+  "signIn": "Sign in to GitHub",
+  "starting": "Preparing an authorization code…",
+  "enterCode": "Open GitHub and enter this code.",
+  "openGitHub": "Open GitHub authorization",
+  "retry": "Try again",
+  "waiting": "Waiting for approval on GitHub. Keep this screen open."
+}

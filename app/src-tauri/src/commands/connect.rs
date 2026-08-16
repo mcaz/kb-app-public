@@ -42,6 +42,24 @@ pub struct EmbedProgress {
     pub total: usize,
 }
 
+/// GitHub device flow で画面へ出してよい情報。device code / token は含めない。
+#[derive(Clone, Serialize, specta::Type, Event)]
+pub struct GitHubDeviceAuthorization {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+}
+
+impl From<kb_core::github_auth::DeviceAuthorization> for GitHubDeviceAuthorization {
+    fn from(authorization: kb_core::github_auth::DeviceAuthorization) -> Self {
+        Self {
+            user_code: authorization.user_code,
+            verification_uri: authorization.verification_uri,
+            expires_in: authorization.expires_in,
+        }
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
@@ -70,6 +88,40 @@ pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
             },
         })
     })
+}
+
+/// Vault の有無に依存しないため、初回の「既存 Vault を復元」画面からも呼べる。
+#[tauri::command]
+#[specta::specta]
+pub fn github_auth_state() -> AppResult<kb_core::github_auth::GitHubAuthState> {
+    kb_core::github_auth::auth_state().map_err(AppError::backup)
+}
+
+/// OAuth device flow は polling を含む blocking 処理なので同期 command にする。
+#[tauri::command]
+#[specta::specta]
+pub fn github_sign_in(app: AppHandle) -> AppResult<kb_core::github_auth::GitHubAuthState> {
+    kb_core::github_auth::sign_in(|authorization| {
+        // 画面が閉じていても認証処理は続ける。token はイベントへ載せない。
+        let _ = GitHubDeviceAuthorization::from(authorization).emit(&app);
+    })
+    .map_err(AppError::backup)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn github_sign_out() -> AppResult<()> {
+    kb_core::github_auth::sign_out().map_err(AppError::backup)
+}
+
+/// Webview に任意 URL を開く権限を渡さず、GitHub の固定ページだけを OS へ渡す。
+#[tauri::command]
+#[specta::specta]
+pub fn github_open_device_page(app: AppHandle) -> AppResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url("https://github.com/login/device", None::<&str>)
+        .map_err(AppError::unexpected)
 }
 
 /// かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。

@@ -13,6 +13,7 @@ pub mod embed;
 pub mod favorites;
 pub mod frontmatter;
 pub mod github;
+pub mod github_auth;
 pub mod import;
 pub mod index;
 pub mod intake;

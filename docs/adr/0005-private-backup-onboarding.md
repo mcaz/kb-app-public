@@ -37,13 +37,22 @@ Git で追跡される `.kb-workspace` の永続 ID が既にある。
    LFS未導入・remote object欠損・hash不一致・Storage Contract違反・workspace不一致・競合等の
    typed reasonへ境界で分類する。画面と同期sidecarは同じreasonを使い、providerのstderrだけを
    利用者向け文言にしない。
+8. GitHub 認証は OAuth App の device flow とし、`repo` scope の範囲を開始前に表示する。
+   token取得後は `/user` で account を検証してから、access token・任意のrefresh token・期限・
+   account IDをOSキーチェーンへ保存する。client secretとtokenを設定ファイルへ置かず、401を
+   受けたcredentialは削除して再サインインを求める。
+9. Git/Git LFSにはキーチェーンから読んだtokenをprocess限定の`http.extraHeader`として渡す。
+   command line・remote URL・`.git/config`へtokenを残さない。API検査後はGitHubが返したcanonical
+   HTTPS clone URLを使い、入力がSSH URLでも同じOAuth transportへ正規化する。
 
 ## 結果
 
 - 2台目が重複 Vault を作る事故と、別 Vault を誤って混ぜる事故を同じ identity gate で防げる。
 - repository の visibility を後から変更した場合、次の upload は停止できる。ただし既に public に
   なったデータをアプリが取り消せるわけではないため、重大な劣化として案内する。
-- GitHub 認証が未実装・失効中の環境ではバックアップが止まる。ローカルの書き込みは契約4どおり
-  成功させるが、「同期済み」「復元可能」とは扱わない。
+- OAuth App client IDが未設定、未サインイン、失効中の環境ではバックアップが止まる。ローカルの
+  書き込みは契約4どおり成功させるが、「同期済み」「復元可能」とは扱わない。
+- 2台目の初回復元でも同じアプリ内サインインを先に通すため、system Gitのcredential helperや
+  `gh` CLIの設定有無に依存しない。
 - 復元の再試行は検証済みobjectを再利用するため、大容量Vaultでも最初から全件を取り直さない。
   一方、Git履歴のcloneとStorage Contract検査は毎回やり直し、古い一時cloneを信用しない。

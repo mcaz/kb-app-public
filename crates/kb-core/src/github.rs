@@ -4,11 +4,8 @@
 //! 認証済み REST API の repository 応答で `private` と `permissions.push` を確認する。
 //! 401 / 404 / network error / 欠落フィールドはすべて「確認不能」として閉じる。
 //!
-//! 現段階の認証情報は system Git の credential helper から**メモリ上だけ**で借りる。
-//! OAuth device flow + OS keychain へ置き換えても、下の検査結果を upload gate にする構造は同じ。
-
-use std::io::Write;
-use std::process::{Command, Stdio};
+//! 認証は OAuth device flow で取得し OS keychain へ保存する。下の検査結果を upload gate にし、
+//! credential が失効したら再利用せずサインインへ戻す。
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -93,72 +90,9 @@ fn valid_name(value: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// system Git の credential helper から GitHub token を借りる。
-/// stdout は credential 本体なので、失敗メッセージへ含めない。
-fn credential_token() -> Result<String> {
-    let mut child = Command::new("git")
-        .args(["credential", "fill"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "Never")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| {
-            failure(
-                BackupFailureKind::Authentication,
-                format!("GitHub 認証情報の確認を開始できない: {error}"),
-            )
-        })?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or_else(|| {
-            failure(
-                BackupFailureKind::Authentication,
-                "GitHub 認証情報へ問い合わせられない",
-            )
-        })?
-        .write_all(b"protocol=https\nhost=github.com\n\n")
-        .map_err(|error| {
-            failure(
-                BackupFailureKind::Authentication,
-                format!("GitHub 認証情報へ問い合わせられない: {error}"),
-            )
-        })?;
-    let output = child.wait_with_output().map_err(|error| {
-        failure(
-            BackupFailureKind::Authentication,
-            format!("GitHub 認証情報を確認できない: {error}"),
-        )
-    })?;
-    if !output.status.success() {
-        return Err(failure(
-            BackupFailureKind::Authentication,
-            "GitHub にサインインしていないため private repository を確認できない",
-        ));
-    }
-    let text = String::from_utf8(output.stdout).map_err(|error| {
-        failure(
-            BackupFailureKind::Authentication,
-            format!("GitHub 認証情報の形式が不正: {error}"),
-        )
-    })?;
-    text.lines()
-        .find_map(|line| line.strip_prefix("password="))
-        .filter(|token| !token.trim().is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| {
-            failure(
-                BackupFailureKind::Authentication,
-                "GitHub にサインインしていないため private repository を確認できない",
-            )
-        })
-}
-
 /// upload の直前に呼ぶ fail-closed gate。
 pub fn verify_private_repository(url: &str) -> Result<VerifiedPrivateRepository> {
-    let token = credential_token()?;
+    let token = crate::github_auth::access_token()?;
     verify_private_repository_at(API_BASE, url, &token)
 }
 
@@ -171,7 +105,7 @@ pub fn create_private_repository(name: &str) -> Result<VerifiedPrivateRepository
             "repository 名は英数字・ハイフン・アンダースコア・ピリオドで指定する",
         ));
     }
-    let token = credential_token()?;
+    let token = crate::github_auth::access_token()?;
     create_private_repository_at(API_BASE, name, &token)
 }
 
@@ -197,10 +131,13 @@ fn create_private_repository_at(
         .header("User-Agent", "kb-app")
         .send(body.as_slice())
         .map_err(|error| match error {
-            ureq::Error::StatusCode(401) => failure(
-                BackupFailureKind::Authentication,
-                "GitHub の認証が失効しているため private repository を作れない",
-            ),
+            ureq::Error::StatusCode(401) => {
+                crate::github_auth::invalidate();
+                failure(
+                    BackupFailureKind::Authentication,
+                    "GitHub の認証が失効しているため private repository を作れない",
+                )
+            }
             ureq::Error::StatusCode(403) => failure(
                 BackupFailureKind::Permission,
                 "private repository を作る GitHub 権限がない",
@@ -258,10 +195,13 @@ fn verify_private_repository_at(
         .header("User-Agent", "kb-app")
         .call()
         .map_err(|error| match error {
-            ureq::Error::StatusCode(401) => failure(
-                BackupFailureKind::Authentication,
-                "GitHub の認証が失効しているため repository を確認できない",
-            ),
+            ureq::Error::StatusCode(401) => {
+                crate::github_auth::invalidate();
+                failure(
+                    BackupFailureKind::Authentication,
+                    "GitHub の認証が失効しているため repository を確認できない",
+                )
+            }
             ureq::Error::StatusCode(403) => failure(
                 BackupFailureKind::Permission,
                 "GitHub repository を確認する権限がない",

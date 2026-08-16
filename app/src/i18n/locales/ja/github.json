@@ -1,0 +1,16 @@
+{
+  "title": "GitHub",
+  "checking": "GitHub の接続状態を確認しています…",
+  "notConfigured": "このビルドでは GitHub 接続をまだ開始できません",
+  "notConfiguredHelp": "配布用 OAuth App の client ID を設定したビルドが必要です。token や client secret を設定ファイルへ書くことはありません。",
+  "signedIn": "@{{account}} でサインイン済み",
+  "storedInKeychain": "認証情報は OS キーチェーンに保存されています。サインアウトはこの端末から削除します。",
+  "signOut": "この端末からサインアウト",
+  "scopeDisclosure": "private repository の作成・確認・同期のため、GitHub OAuth の repo 権限を使用します。この権限は private repository 全体へのアクセスを含みます。",
+  "signIn": "GitHub にサインイン",
+  "starting": "認証コードを準備中…",
+  "enterCode": "GitHub を開き、次のコードを入力してください。",
+  "openGitHub": "GitHub の認証ページを開く",
+  "retry": "やり直す",
+  "waiting": "GitHub 側の承認を待っています。この画面は閉じないでください。"
+}

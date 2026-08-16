@@ -2,6 +2,7 @@ import type {
   ConnectState,
   Favorite_Serialize,
   GraphData,
+  GitHubAuthState,
   Hit_Serialize,
   HomeState_Serialize,
   NoteCategory,
@@ -27,6 +28,7 @@ export type Favorite = Favorite_Serialize;
 export type {
   ConnectState,
   GraphData,
+  GitHubAuthState,
   NoteCategory,
   NoteListPage,
   NoteSummary,

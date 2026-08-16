@@ -9,6 +9,7 @@ import type {
   ConnectState,
   Favorite,
   GraphData,
+  GitHubAuthState,
   HomeState,
   NoteCategory,
   NoteFiles,
@@ -68,6 +69,14 @@ export const api = {
     IN_TAURI ? unwrap(commands.graphData()) : (await demo()).graphData(),
   connectState: async (): Promise<ConnectState> =>
     IN_TAURI ? unwrap(commands.connectState()) : (await demo()).connectState(),
+  githubAuthState: async (): Promise<GitHubAuthState> =>
+    IN_TAURI ? unwrap(commands.githubAuthState()) : (await demo()).githubAuthState(),
+  githubSignIn: async (): Promise<GitHubAuthState> =>
+    IN_TAURI ? unwrap(commands.githubSignIn()) : (await demo()).githubSignIn(),
+  githubSignOut: async (): Promise<null> =>
+    IN_TAURI ? unwrap(commands.githubSignOut()) : (await demo()).githubSignOut(),
+  githubOpenDevicePage: async (): Promise<null> =>
+    IN_TAURI ? unwrap(commands.githubOpenDevicePage()) : null,
 
   favoritesList: async (): Promise<Favorite[]> =>
     IN_TAURI ? unwrap(commands.favoritesList()) : (await demo()).favoritesList(),

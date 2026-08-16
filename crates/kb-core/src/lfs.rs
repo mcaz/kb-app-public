@@ -43,13 +43,25 @@ fn rel(hash: &ContentHash) -> String {
 }
 
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .args(args)
         .current_dir(&vault.root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-        .output()
-        .context("git 実行")
+        .env("GCM_INTERACTIVE", "Never");
+    let accesses_remote = args.starts_with(&["lfs", "push"])
+        || args.starts_with(&["lfs", "pull"])
+        || args.starts_with(&["lfs", "fetch"]);
+    if accesses_remote {
+        let repo = git2::Repository::open(&vault.root)?;
+        if let Ok(remote) = repo.find_remote("origin")
+            && let Some(url) = remote.url()
+        {
+            crate::github_auth::configure_git_auth(&mut command, url)?;
+        }
+    }
+    command.output().context("git 実行")
 }
 
 /// LFS の置き場にある実体のパス。LFS の配置は `objects/aa/bb/<oid>`。

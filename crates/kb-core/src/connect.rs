@@ -106,17 +106,24 @@ pub fn backup_status(vault: &Vault) -> Result<BackupStatus> {
 }
 
 /// 同期(FR-A6 改定 2026-08-10): 随時 push・メッセージ時 pull。
-/// 認証はシステム git の資格情報(keychain / ssh-agent)に委ねる — GitHub 接続
-/// (OAuth デバイスフロー+keyring)で置き換え予定。
+/// GitHub の remote 操作には OAuth token を process 環境だけで渡す。
 /// git は非対話モード強制(資格情報プロンプトで GUI/MCP をハングさせない)。
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .args(args)
         .current_dir(&vault.root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-        .output()
-        .context("git 実行")
+        .env("GCM_INTERACTIVE", "Never");
+    let accesses_remote = args
+        .iter()
+        .any(|arg| matches!(*arg, "push" | "pull" | "fetch"))
+        || args.starts_with(&["remote", "set-head"]);
+    if accesses_remote && let Ok(url) = origin_url(vault) {
+        crate::github_auth::configure_git_auth(&mut command, &url)?;
+    }
+    command.output().context("git 実行")
 }
 
 fn stderr_of(out: &std::process::Output) -> String {
@@ -318,7 +325,8 @@ fn ensure_origin_upload_allowed(vault: &Vault) -> Result<()> {
 fn inspect_remote(url: &str) -> Result<RemoteContents> {
     let temp = tempfile::tempdir().context("既存 Vault の検査場所を作れない")?;
     let clone_root = temp.path().join("vault");
-    let out = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .args([
             "clone",
             "--no-tags",
@@ -329,7 +337,9 @@ fn inspect_remote(url: &str) -> Result<RemoteContents> {
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-        .env("GCM_INTERACTIVE", "Never")
+        .env("GCM_INTERACTIVE", "Never");
+    crate::github_auth::configure_git_auth(&mut command, url)?;
+    let out = command
         .output()
         .context("既存 Vault の検査用 clone を開始できない")?;
     if !out.status.success() {
@@ -391,9 +401,11 @@ pub fn clone_existing_vault_with_progress(
             ),
         ));
     }
-    if is_github {
-        crate::github::verify_private_repository(url)?;
-    }
+    let clone_url = if is_github {
+        crate::github::verify_private_repository(url)?.clone_url
+    } else {
+        url.to_string()
+    };
     let parent = destination.parent().context("復元先の親が無い")?;
     fs::create_dir_all(parent)?;
     let temp = tempfile::Builder::new()
@@ -402,16 +414,19 @@ pub fn clone_existing_vault_with_progress(
         .context("既存 Vault の一時復元先を作れない")?;
     let clone_root = temp.path().join("vault");
     progress(RestoreProgress::at(RestorePhase::Cloning));
-    let out = std::process::Command::new("git")
+    let mut command = std::process::Command::new("git");
+    command
         .arg("clone")
         .arg("--no-tags")
         .arg("--")
-        .arg(url)
+        .arg(&clone_url)
         .arg(&clone_root)
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
-        .env("GCM_INTERACTIVE", "Never")
+        .env("GCM_INTERACTIVE", "Never");
+    crate::github_auth::configure_git_auth(&mut command, &clone_url)?;
+    let out = command
         .output()
         .context("既存 Vault の clone を開始できない")?;
     if !out.status.success() {
@@ -515,10 +530,12 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
             "バックアップ先は GitHub repository の URL を指定する",
         ));
     }
-    if is_github {
-        crate::github::verify_private_repository(url)?;
-    }
-    let remote = inspect_remote(url)?;
+    let remote_url = if is_github {
+        crate::github::verify_private_repository(url)?.clone_url
+    } else {
+        url.to_string()
+    };
+    let remote = inspect_remote(&remote_url)?;
     let local_workspace_id = crate::workspace::stored_workspace_id(vault).map_err(|error| {
         failure(
             BackupFailureKind::InvalidVault,
@@ -540,9 +557,9 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
     ensure_merge_config(vault)?;
     let repo = git2::Repository::open(&vault.root)?;
     match repo.find_remote("origin") {
-        Ok(_) => repo.remote_set_url("origin", url)?,
+        Ok(_) => repo.remote_set_url("origin", &remote_url)?,
         Err(_) => {
-            repo.remote("origin", url)?;
+            repo.remote("origin", &remote_url)?;
         }
     }
     match remote {

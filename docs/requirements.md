@@ -359,8 +359,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   legacy キーに旧メタ無損失保持・`[[wikilink]]` → markdown リンクのソース横断解決)で
   personal 33 本+team 17 本を移植、バックアップ先へ同期済み。旧リポは無変更(読み取りのみ)。
   残: 旧 vault / team-vault MCP サーバーの引退時期(移行期の並立 routing 観察と合わせて判断)
-- GitHub 連携の認証方式(OAuth App / デバイスフロー / gh CLI 依存のどれで行くか。
-  非エンジニアの「接続」体験と、トークンを平文で持たない設計の両立)
+- ~~GitHub 連携の認証方式~~ → **OAuth App のデバイスフロー + OS キーチェーンに決定・実装
+  (2026-08-16)**。`repo` scope の広さを認証前に表示し、取得後は `/user` で account を検証する。
+  Git/Git LFS には process 限定の認証 header を渡し、URL・`.git/config`・アプリ設定へ token を残さない。
+  残: 配布用 OAuth App の登録と実 GitHub での受入。
 - ~~埋め込みランタイムの同梱方式~~ → **PoC で成立を実証(2026-08-09)**: ort+bge-m3 int8
   同梱(合計約586MB)で品質・速度・サイズとも PASS、既存較正の移植可も実測
   ([poc-report.md](poc-report.md))。残: 常駐時メモリ(RSS 1.8GB)の抑制方式

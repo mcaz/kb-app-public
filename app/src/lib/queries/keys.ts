@@ -6,6 +6,7 @@ export const queryKeys = {
   favorites: ["favorites"] as const,
   graph: ["graph"] as const,
   connect: ["connect"] as const,
+  githubAuth: ["githubAuth"] as const,
   note: (id: string) => ["note", id] as const,
   noteFiles: (id: string) => ["noteFiles", id] as const,
   noteCategories: ["noteCategories"] as const,

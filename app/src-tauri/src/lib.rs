@@ -44,6 +44,10 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             files::file_open,
             files::legacy_open,
             connect::connect_state,
+            connect::github_auth_state,
+            connect::github_sign_in,
+            connect::github_sign_out,
+            connect::github_open_device_page,
             connect::connect_desktop,
             connect::backup_now,
             connect::backup_create_repository,
@@ -53,6 +57,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         ])
         .events(collect_events![
             connect::EmbedProgress,
+            connect::GitHubDeviceAuthorization,
             setup::VaultRestoreProgress
         ])
 }

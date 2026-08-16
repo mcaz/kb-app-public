@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/atoms/ui/button";
 import { ConnectCard } from "@/components/molecules/ConnectCard";
+import { GitHubAuthPanel } from "@/components/organisms/GitHubAuthPanel";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
 import { useEmbedProgress } from "@/hooks/useEmbedProgress";
 import { useBackupErrorText, useErrorText } from "@/hooks/useErrorText";
@@ -15,12 +16,14 @@ import {
   useConnectDesktop,
   useConnectState,
   useEmbedEnable,
+  useGitHubAuthState,
 } from "@/lib/queries";
 
 /** 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)。 */
 export function ConnectPage() {
   const { t } = useTranslation(["connect", "common"]);
   const { data: state, isPending } = useConnectState();
+  const { data: githubAuth } = useGitHubAuthState();
   const errorText = useErrorText();
   const backupErrorText = useBackupErrorText();
   const embedProgress = useEmbedProgress();
@@ -138,8 +141,10 @@ export function ConnectPage() {
             </>
           }
         >
-          {state.backup.remote ? (
+          <GitHubAuthPanel heading />
+          {githubAuth?.signed_in && state.backup.remote ? (
             <Button
+              className="mt-2"
               variant="primary"
               size="sm"
               disabled={backupNow.isPending}
@@ -152,9 +157,9 @@ export function ConnectPage() {
             >
               {t("backup.syncNow")}
             </Button>
-          ) : (
+          ) : githubAuth?.signed_in ? (
             <>
-              <div className="mb-2 flex gap-1">
+              <div className="mt-2 mb-2 flex gap-1">
                 <Button
                   variant={backupMode === "create" ? "primary" : "default"}
                   size="sm"
@@ -218,7 +223,7 @@ export function ConnectPage() {
                 {backupMode === "create" ? t("backup.create") : t("backup.connect")}
               </Button>
             </>
-          )}
+          ) : null}
         </ConnectCard>
       </div>
     </SinglePaneLayout>

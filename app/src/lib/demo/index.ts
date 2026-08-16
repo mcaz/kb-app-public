@@ -7,6 +7,7 @@ import type {
   ConnectState,
   Favorite,
   GraphData,
+  GitHubAuthState,
   FileRow,
   Hit,
   HomeState,
@@ -217,6 +218,12 @@ const connect: ConnectState = {
   smart_search: { state: "not_installed", embedded: 0, total: 3 },
 };
 
+let githubAuth: GitHubAuthState = {
+  configured: true,
+  signed_in: false,
+  account_login: null,
+};
+
 const delay = <T>(value: T): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), 30));
 
@@ -323,6 +330,15 @@ export const demoApi = {
     });
   },
   connectState: (): Promise<ConnectState> => delay(connect),
+  githubAuthState: (): Promise<GitHubAuthState> => delay(githubAuth),
+  githubSignIn: (): Promise<GitHubAuthState> => {
+    githubAuth = { configured: true, signed_in: true, account_login: "octocat" };
+    return delay(githubAuth);
+  },
+  githubSignOut: () => {
+    githubAuth = { configured: true, signed_in: false, account_login: null };
+    return delay(null);
+  },
   favoritesList: (): Promise<Favorite[]> => delay(favorites),
   favoriteAdd: (fav: Favorite) => {
     favorites = [...favorites.filter((f) => f.name !== fav.name), fav];

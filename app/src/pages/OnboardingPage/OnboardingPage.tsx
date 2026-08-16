@@ -6,10 +6,11 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@/components/atoms/Icon";
 
 import { Button } from "@/components/atoms/ui/button";
+import { GitHubAuthPanel } from "@/components/organisms/GitHubAuthPanel";
 import { OnboardingLayout } from "@/components/templates/OnboardingLayout";
 import { useErrorText } from "@/hooks/useErrorText";
 import { useVaultRestoreProgress } from "@/hooks/useVaultRestoreProgress";
-import { useOnboard, useOnboardExisting } from "@/lib/queries";
+import { useGitHubAuthState, useOnboard, useOnboardExisting } from "@/lib/queries";
 
 /** 最初の vault を作る(FR-A1)。 */
 export function OnboardingPage() {
@@ -17,8 +18,9 @@ export function OnboardingPage() {
   const errorText = useErrorText();
   const onboard = useOnboard();
   const existing = useOnboardExisting();
-  const restoreProgress = useVaultRestoreProgress();
   const [showExisting, setShowExisting] = useState(false);
+  const { data: githubAuth } = useGitHubAuthState(showExisting);
+  const restoreProgress = useVaultRestoreProgress();
   const [remoteUrl, setRemoteUrl] = useState("");
   const busy = onboard.isPending || existing.isPending;
   const restoreStatus =
@@ -54,33 +56,45 @@ export function OnboardingPage() {
           </Button>
         ) : (
           <div className="border-line bg-surface mt-2 rounded-lg border p-3 text-left">
-            <label className="text-ink mb-1.5 block text-xs font-medium" htmlFor="vault-remote-url">
-              {t("existingUrl")}
-            </label>
-            <input
-              id="vault-remote-url"
-              className="border-line bg-chip text-ink mb-2 w-full rounded-md border px-2.5 py-2 text-xs"
-              placeholder="https://github.com/owner/vault.git"
-              value={remoteUrl}
-              onChange={(event) => setRemoteUrl(event.target.value)}
-            />
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={busy || remoteUrl.trim().length === 0}
-              onClick={() => existing.mutate(remoteUrl.trim())}
-            >
-              {existing.isPending ? t("restoring") : existing.isError ? t("resume") : t("restore")}
-            </Button>
-            {restoreStatus && (
-              <p className="text-muted mt-2 mb-0 text-[11px]" aria-live="polite">
-                {restoreStatus}
-              </p>
+            <GitHubAuthPanel heading />
+            {githubAuth?.signed_in && (
+              <div className="mt-3">
+                <label
+                  className="text-ink mb-1.5 block text-xs font-medium"
+                  htmlFor="vault-remote-url"
+                >
+                  {t("existingUrl")}
+                </label>
+                <input
+                  id="vault-remote-url"
+                  className="border-line bg-chip text-ink mb-2 w-full rounded-md border px-2.5 py-2 text-xs"
+                  placeholder="https://github.com/owner/vault.git"
+                  value={remoteUrl}
+                  onChange={(event) => setRemoteUrl(event.target.value)}
+                />
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={busy || remoteUrl.trim().length === 0}
+                  onClick={() => existing.mutate(remoteUrl.trim())}
+                >
+                  {existing.isPending
+                    ? t("restoring")
+                    : existing.isError
+                      ? t("resume")
+                      : t("restore")}
+                </Button>
+                {restoreStatus && (
+                  <p className="text-muted mt-2 mb-0 text-[11px]" aria-live="polite">
+                    {restoreStatus}
+                  </p>
+                )}
+                {existing.isError && (
+                  <p className="text-muted mt-2 mb-0 text-[11px]">{t("resumeHelp")}</p>
+                )}
+                <p className="text-muted mt-2 mb-0 text-[11px]">{t("existingHelp")}</p>
+              </div>
             )}
-            {existing.isError && (
-              <p className="text-muted mt-2 mb-0 text-[11px]">{t("resumeHelp")}</p>
-            )}
-            <p className="text-muted mt-2 mb-0 text-[11px]">{t("existingHelp")}</p>
           </div>
         )}
         {(onboard.error || existing.error) && (
