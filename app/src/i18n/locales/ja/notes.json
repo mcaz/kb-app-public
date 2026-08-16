@@ -49,6 +49,18 @@
     "empty": "該当するノートがありません",
     "placeholder": "検索からノートを選ぶと、ここに表示されます。ノートは Claude との会話から育ちます。"
   },
+  "browse": {
+    "root": "直下のノート",
+    "panelLabel": "{{name}}のノート一覧",
+    "count": "{{count}}件",
+    "chooseCategory": "左のカテゴリを選ぶと、ノート一覧が表示されます。",
+    "empty": "このカテゴリにはノートがありません。",
+    "loading": "読み込み中…",
+    "loadError": "ノート一覧を読み込めませんでした。",
+    "retry": "もう一度試す",
+    "loadMore": "さらに読み込む",
+    "back": "一覧へ戻る"
+  },
   "related": {
     "open": "関連",
     "dialogTitle": "つながりと近いノート",

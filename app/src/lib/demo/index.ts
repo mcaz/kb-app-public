@@ -11,6 +11,8 @@ import type {
   Hit,
   HomeState,
   NoteFiles,
+  NoteListPage,
+  NoteSummary,
   NoteView,
   SearchOutcome,
   SetupState,
@@ -70,6 +72,48 @@ const notes: NoteView[] = [
     similar: [],
     vault_root: "(demo)",
   },
+  {
+    id: "research/ai/検索の設計メモ",
+    title: "検索の設計メモ",
+    description: "全文検索と意味検索を組み合わせるときの判断基準。",
+    status: "stable",
+    origin: "agent",
+    tags: ["設計", "検索"],
+    created_at: "2026-08-04T03:00:00Z",
+    generated_at: "2026-08-12T08:30:00Z",
+    body: "まず全文検索を正常系として整え、意味検索は段階的に追加する。\n",
+    related: [],
+    similar: [],
+    vault_root: "(demo)",
+  },
+  {
+    id: "research/読書メモ/情報アーキテクチャ",
+    title: "情報アーキテクチャ",
+    description: "大きな情報群を迷わず辿れる構造についての読書メモ。",
+    status: "stable",
+    origin: "human",
+    tags: ["読書", "設計"],
+    created_at: "2026-07-18T01:00:00Z",
+    generated_at: "2026-08-09T11:00:00Z",
+    body: "利用者が現在地と次の行き先を判断できる手がかりを用意する。\n",
+    related: [],
+    similar: [],
+    vault_root: "(demo)",
+  },
+  {
+    id: "decisions/ノート一覧の表示方針",
+    title: "ノート一覧の表示方針",
+    description: "カテゴリを選ぶと主領域全体を一覧にし、選択後は本文へ切り替える。",
+    status: "stable",
+    origin: "agent",
+    tags: ["決定", "UI"],
+    created_at: "2026-08-16T02:00:00Z",
+    generated_at: "2026-08-16T02:00:00Z",
+    body: "サイドバーにはカテゴリと件数を表示する。カテゴリを選ぶと右側全体を一覧にし、ノートを選ぶと同じ領域を本文へ切り替える。\n",
+    related: [],
+    similar: [],
+    vault_root: "(demo)",
+  },
 ];
 
 const toHit = (n: NoteView): Hit => ({
@@ -83,6 +127,21 @@ const toHit = (n: NoteView): Hit => ({
   created: n.created_at,
   updated: n.generated_at,
 });
+
+const toSummary = (note: NoteView): NoteSummary => ({
+  id: note.id,
+  title: note.title,
+  description: note.description ?? note.body.slice(0, 120).replace(/\n/g, " "),
+  tags: note.tags,
+  created: note.created_at,
+  updated: note.generated_at,
+});
+
+const noteCategory = (id: string) => {
+  const segments = id.split("/").filter(Boolean);
+  segments.pop();
+  return segments;
+};
 
 /** ノートごとのファイル。取得できていない行も1つ置いて、状態の見え方を確かめられるようにする。 */
 const files: Record<string, FileRow[]> = {
@@ -208,6 +267,42 @@ export const demoApi = {
       related: [],
       degraded: [],
     }),
+  noteCategories: () => {
+    const counts = new Map<string, number>();
+    for (const note of notes) {
+      const segments = noteCategory(note.id);
+      if (!segments.length) {
+        counts.set("", (counts.get("") ?? 0) + 1);
+        continue;
+      }
+      for (let index = 0; index < segments.length; index += 1) {
+        const path = segments.slice(0, index + 1).join("/");
+        counts.set(path, (counts.get(path) ?? 0) + 1);
+      }
+    }
+    return delay(
+      [...counts]
+        .sort(([a], [b]) => a.localeCompare(b, "ja"))
+        .map(([path, count]) => ({ path, name: path.split("/").pop() ?? "", count })),
+    );
+  },
+  noteList: (category: string, after: string | null, limit: number): Promise<NoteListPage> => {
+    const matches = notes
+      .filter((note) => {
+        if (!category) return !note.id.includes("/");
+        return note.id.startsWith(`${category}/`);
+      })
+      .map(toSummary)
+      .sort((a, b) => a.id.localeCompare(b.id, "ja"));
+    const start = after ? matches.findIndex((note) => note.id === after) + 1 : 0;
+    const page = matches.slice(start, start + limit);
+    const hasMore = start + page.length < matches.length;
+    return delay({
+      notes: page,
+      total: matches.length,
+      next_cursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+    });
+  },
   graphData: (): Promise<GraphData> => {
     const edges: [string, string][] = notes.flatMap((n) =>
       n.related.map(([dst]) => [n.id, dst] as [string, string]),

@@ -43,7 +43,7 @@ export function NotePane({ noteId, onOpenRelated, onOpenNote }: NotePaneProps) {
       <div className="mb-1 flex flex-none items-center gap-2.5">
         <h1 className="min-w-0 flex-1 text-lg font-bold">{note.title}</h1>
         {onOpenRelated && (
-          <Button variant="quiet" size="sm" className="min-[1280px]:hidden" onClick={onOpenRelated}>
+          <Button variant="quiet" size="sm" onClick={onOpenRelated}>
             <Icon as={Link} size="sm" />
             {t("related.open")}
           </Button>

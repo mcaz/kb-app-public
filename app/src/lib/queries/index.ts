@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Favorite } from "@/lib/api";
 
@@ -31,6 +31,19 @@ export const useNote = (id: string | null) =>
     queryKey: queryKeys.note(id ?? ""),
     queryFn: () => api.noteGet(id!),
     enabled: id !== null,
+  });
+
+export const useNoteCategories = () =>
+  useQuery({ queryKey: queryKeys.noteCategories, queryFn: api.noteCategories });
+
+/** カテゴリを選んだ時だけ100件ずつ取得し、全ノートを初期表示へ載せない。 */
+export const useCategoryNotes = (category: string | null) =>
+  useInfiniteQuery({
+    queryKey: queryKeys.noteList(category ?? ""),
+    queryFn: ({ pageParam }) => api.noteList(category!, pageParam, 100),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: category !== null,
   });
 
 /** 検索は空文字なら投げない(一覧はホームの recent を使う)。 */

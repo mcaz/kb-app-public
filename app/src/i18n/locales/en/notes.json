@@ -49,6 +49,18 @@
     "empty": "No notes match these filters",
     "placeholder": "Choose a note from search to read it here. Notes grow out of your conversations with Claude."
   },
+  "browse": {
+    "root": "Root notes",
+    "panelLabel": "Notes in {{name}}",
+    "count": "{{count}} notes",
+    "chooseCategory": "Choose a category on the left to see its notes.",
+    "empty": "There are no notes in this category.",
+    "loading": "Loading…",
+    "loadError": "Could not load the note list.",
+    "retry": "Try again",
+    "loadMore": "Load more",
+    "back": "Back to list"
+  },
   "related": {
     "open": "Related",
     "dialogTitle": "Linked and similar notes",

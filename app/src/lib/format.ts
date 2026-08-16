@@ -1,4 +1,4 @@
-/** 表示用の整形。ロケールを引数で受け、i18n の現在言語に追従させる。 */
+/** 表示用の整形。日時は全画面で同じ固定形式にする。 */
 
 const dayCache = new Map<string, Intl.DateTimeFormat>();
 const cached = (key: string, make: () => Intl.DateTimeFormat) => {
@@ -10,33 +10,26 @@ const cached = (key: string, make: () => Intl.DateTimeFormat) => {
   return f;
 };
 
-/** 一覧の日付(同じ年なら年を省く)。 */
-export function formatDay(iso: string | null, locale: string, now = new Date()): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const sameYear = d.getFullYear() === now.getFullYear();
-  const key = `day:${locale}:${String(sameYear)}`;
-  return cached(
-    key,
-    () =>
-      new Intl.DateTimeFormat(locale, {
-        year: sameYear ? undefined : "numeric",
-        month: "numeric",
-        day: "numeric",
-      }),
-  ).format(d);
-}
-
-/** 本文ヘッダの日時(秒まで)。 */
+/** ローカル時刻を `yyyy/MM/dd HH:mm:ss` で返す。 */
 export function formatDateTime(iso: string | null, locale: string, unknown = "不明"): string {
   if (!iso) return unknown;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return unknown;
-  return cached(
+  const parts = cached(
     `dt:${locale}`,
-    () => new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium" }),
-  ).format(d);
+    () =>
+      new Intl.DateTimeFormat(locale, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      }),
+  ).formatToParts(d);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}/${value.month}/${value.day} ${value.hour}:${value.minute}:${value.second}`;
 }
 
 /** 添付のサイズ。 */

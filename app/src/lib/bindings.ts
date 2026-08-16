@@ -15,6 +15,10 @@ export const commands = {
 	careDismiss: (key: string) => typedError<null, AppError>(__TAURI_INVOKE("care_dismiss", { key })),
 	noteGet: (id: string) => typedError<NoteView, AppError>(__TAURI_INVOKE("note_get", { id })),
 	noteSearch: (query: string) => typedError<SearchOutcome_Serialize, AppError>(__TAURI_INVOKE("note_search", { query })),
+	/**  サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。 */
+	noteCategories: () => typedError<NoteCategory[], AppError>(__TAURI_INVOKE("note_categories")),
+	/**  選択ディレクトリ配下のノートをcursor pageで返す。 */
+	noteList: (category: string, after: string | null, limit: number) => typedError<NoteListPage, AppError>(__TAURI_INVOKE("note_list", { category, after, limit })),
 	/**  グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。 */
 	graphData: () => typedError<GraphData, AppError>(__TAURI_INVOKE("graph_data")),
 	favoritesList: () => typedError<Favorite_Serialize[], AppError>(__TAURI_INVOKE("favorites_list")),
@@ -295,10 +299,34 @@ export type LegacyFile = {
 	size: number,
 };
 
+/**  サイドバーに出すディレクトリ。count は直下だけでなく子孫ノートを含む。 */
+export type NoteCategory = {
+	path: string,
+	name: string,
+	count: number,
+};
+
 export type NoteFiles = {
 	files: FileRow[],
 	/**  まだ台帳に載っていない旧添付。移行までは並べて見せるだけにする */
 	legacy: LegacyFile[],
+};
+
+/**  ID順のcursor page。全ノートを一度に画面へ渡さない。 */
+export type NoteListPage = {
+	notes: NoteSummary[],
+	total: number,
+	next_cursor: string | null,
+};
+
+/**  カテゴリ別一覧の1行。本文全体を画面へ運ばないための軽量表現。 */
+export type NoteSummary = {
+	id: string,
+	title: string | null,
+	description: string,
+	tags: string[],
+	created: string | null,
+	updated: string | null,
 };
 
 export type NoteView = {

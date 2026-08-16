@@ -7,7 +7,6 @@ import { Pager } from "@/components/molecules/Pager";
 import { RecentNoteRow } from "@/components/molecules/RecentNoteRow";
 import { StatTile } from "@/components/molecules/StatTile";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
-import { formatDay } from "@/lib/format";
 import { paginate } from "@/lib/hits";
 import { useConnectState, useHomeState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
@@ -16,7 +15,7 @@ const RECENT_PER_PAGE = 6;
 
 /** ホーム(健全性の要約・最近のノート)。 */
 export function HomePage() {
-  const { t, i18n } = useTranslation(["home", "common"]);
+  const { t } = useTranslation(["home", "common"]);
   const { data: home } = useHomeState();
   const { data: connect } = useConnectState();
   const openNote = useSession((s) => s.openNote);
@@ -79,18 +78,12 @@ export function HomePage() {
           />
         </div>
 
-        <h2 className="text-muted mt-6 mb-2 text-xs tracking-[0.08em]">{t("recent.head")}</h2>
-        <div className="flex max-w-[46em] flex-col gap-1.5">
+        <h2 className="text-muted mt-7 mb-3 text-xl font-medium tracking-[0.04em]">
+          {t("recent.head")}
+        </h2>
+        <div className="flex w-full flex-col gap-3">
           {recent.items.map((hit) => (
-            <RecentNoteRow
-              key={hit.id}
-              hit={hit}
-              datesLabel={t("common:date.createdUpdated", {
-                created: formatDay(hit.created, i18n.language),
-                updated: formatDay(hit.updated, i18n.language),
-              })}
-              onOpen={() => openNote(hit.id)}
-            />
+            <RecentNoteRow key={hit.id} hit={hit} onOpen={() => openNote(hit.id)} />
           ))}
           <Pager
             page={recent.page}

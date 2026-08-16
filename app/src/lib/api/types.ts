@@ -4,6 +4,9 @@ import type {
   GraphData,
   Hit_Serialize,
   HomeState_Serialize,
+  NoteCategory,
+  NoteListPage,
+  NoteSummary,
   NoteView,
   SearchOutcome_Serialize,
   SetupState,
@@ -21,7 +24,17 @@ export type HomeState = HomeState_Serialize;
 export type SearchOutcome = SearchOutcome_Serialize;
 export type Favorite = Favorite_Serialize;
 
-export type { ConnectState, GraphData, NoteView, SetupState, TagInfo, TagOverview };
+export type {
+  ConnectState,
+  GraphData,
+  NoteCategory,
+  NoteListPage,
+  NoteSummary,
+  NoteView,
+  SetupState,
+  TagInfo,
+  TagOverview,
+};
 export type { Added, Availability, FileRow, LegacyFile, NoteFiles } from "@/lib/bindings";
 export type { CareProposal, GraphNode, Stats } from "@/lib/bindings";
 
