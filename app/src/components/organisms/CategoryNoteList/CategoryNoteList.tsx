@@ -1,9 +1,9 @@
-import { FileText, FolderOpen } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
-import { formatDateTime } from "@/lib/format";
+import { NoteSummaryCard } from "@/components/molecules/NoteSummaryCard";
 import { useCategoryNotes } from "@/lib/queries";
 
 export interface CategoryNoteListProps {
@@ -36,7 +36,7 @@ export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryN
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2 max-[800px]:px-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4 max-[800px]:px-3 max-[800px]:py-3">
         {query.isPending ? (
           <p className="text-muted m-0 px-2 py-3 text-xs" role="status">
             {t("browse.loading")}
@@ -55,41 +55,16 @@ export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryN
             const selected = selectedId === note.id;
             const fallback = note.id.split("/").at(-1) ?? note.id;
             return (
-              <button
+              <NoteSummaryCard
                 key={note.id}
-                type="button"
-                aria-current={selected ? "page" : undefined}
-                onClick={() => onOpenNote(note.id)}
-                className={`mb-1 flex w-full cursor-pointer items-start gap-4 rounded-lg border px-3.5 py-3 text-left max-[900px]:flex-wrap max-[900px]:gap-x-2 max-[900px]:gap-y-1 ${
-                  selected
-                    ? "border-grow bg-sel text-ink"
-                    : "hover:border-line hover:bg-sel/50 border-transparent bg-transparent"
-                }`}
-              >
-                <span className="flex min-w-[180px] flex-1 items-start gap-2 max-[900px]:min-w-0">
-                  <Icon as={FileText} size="sm" className="text-muted mt-0.5 flex-none" />
-                  <span className="min-w-0 flex-1">
-                    <span className="line-clamp-2 block text-[13px] font-semibold">
-                      {note.title?.trim() || fallback}
-                    </span>
-                    {note.tags.length > 0 && (
-                      <span className="text-muted mt-1 block truncate text-[10.5px]">
-                        {note.tags.join(" · ")}
-                      </span>
-                    )}
-                  </span>
-                </span>
-                {note.description && (
-                  <span className="text-muted line-clamp-2 min-w-[240px] flex-[1.5] text-xs leading-relaxed max-[900px]:order-3 max-[900px]:w-full max-[900px]:min-w-0 max-[900px]:pl-5.5">
-                    {note.description}
-                  </span>
-                )}
-                {note.updated && (
-                  <span className="text-muted flex-none text-[11px] tabular-nums">
-                    {formatDateTime(note.updated, i18n.language, t("common:date.unknown"))}
-                  </span>
-                )}
-              </button>
+                title={note.title?.trim() || fallback}
+                description={note.description}
+                tags={note.tags}
+                createdAt={note.created}
+                updatedAt={note.updated}
+                selected={selected}
+                onOpen={() => onOpenNote(note.id)}
+              />
             );
           })
         )}
