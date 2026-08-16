@@ -60,6 +60,9 @@
   "degradation": {
     "remote_sync": "Sync failed: {{detail}}",
     "index_sync": "The index could not be updated. Results may be stale: {{detail}}",
+    "index_metadata": "The update state of {{note}} could not be checked. Its previous index entry was kept: {{detail}}",
+    "index_read": "{{note}} could not be read. Its previous index entry was kept: {{detail}}",
+    "index_parse": "{{note}} could not be parsed. Its previous index entry was kept: {{detail}}",
     "embedding_index_pending": "The smart-search index is catching up ({{remaining}} remaining)",
     "embedding_index": "The smart-search index could not be updated: {{detail}}",
     "main_search": "Primary search is unavailable. Showing the results that were retrieved: {{detail}}",
@@ -70,7 +73,9 @@
     "current_note_context": "The current-note context could not be recorded for the AI: {{detail}}",
     "care_detection": "Care suggestions could not be detected: {{detail}}",
     "care_list": "Care suggestions could not be retrieved. An empty list may not mean zero: {{detail}}",
-    "tag_counts": "Tags could not be retrieved. An empty list may not mean zero: {{detail}}"
+    "tag_counts": "Tags could not be retrieved. An empty list may not mean zero: {{detail}}",
+    "graph_nodes": "Some notes could not be shown in the graph: {{detail}}",
+    "graph_edges": "Some links could not be shown in the graph: {{detail}}"
   },
   "errors": {
     "noteNotFound": "That note doesn’t exist yet",

@@ -10,7 +10,7 @@ use std::io::{BufRead, Write};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::index::{open_db, sync};
+use crate::index::{open_db, sync_with_degradations};
 use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
@@ -222,8 +222,11 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
         crate::connect::pull_if_stale(vault).into_iter().collect();
     let conn = open_db(vault)?;
     // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
-    match sync(vault, &conn) {
-        Ok(_) => degraded.extend(crate::index::embed_step(&conn)),
+    match sync_with_degradations(vault, &conn) {
+        Ok(report) => {
+            degraded.extend(report.degraded);
+            degraded.extend(crate::index::embed_step(&conn));
+        }
         Err(error) => degraded.push(crate::degradation::Degradation::IndexSync {
             detail: error.to_string(),
         }),
@@ -470,5 +473,22 @@ mod tests {
             assert!(call_tool(&vault, "test/client", tool, &args).is_err());
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), "TOP SECRET");
         }
+    }
+
+    #[test]
+    fn mcp_surfaces_partial_index_failures_with_the_stable_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        std::fs::write(vault.root.join("notes/broken.md"), "frontmatterではない").unwrap();
+
+        let text = call_tool(
+            &vault,
+            "test/client",
+            "search",
+            &serde_json::json!({"query": "anything"}),
+        )
+        .unwrap();
+        assert!(text.contains("[index_parse]"), "{text}");
+        assert!(text.contains("notes/broken"), "{text}");
     }
 }

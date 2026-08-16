@@ -21,7 +21,7 @@ import { useSession } from "@/lib/stores/session";
 export function App() {
   const { data: setup, isPending } = useSetupState();
   const { data: home } = useHomeState();
-  const { data: categories } = useNoteCategories();
+  const { data: categoryData } = useNoteCategories();
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -49,11 +49,13 @@ export function App() {
   return (
     <TooltipProvider delayDuration={200}>
       <AppShell
-        banner={<DegradedBanner items={home?.degraded ?? []} />}
+        banner={
+          <DegradedBanner items={[...(home?.degraded ?? []), ...(categoryData?.degraded ?? [])]} />
+        }
         sidebar={
           <Sidebar
             vaultName={setup?.vault_name ?? "kb"}
-            categories={categories ?? []}
+            categories={categoryData?.categories ?? []}
             onOpenSearch={openSearch}
             settingsOpen={settingsOpen}
             onOpenSettings={openSettings}

@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use kb_core::index::{open_db, sync};
+use kb_core::index::{open_db, sync_with_degradations};
 use kb_core::ledger::Ledger;
 use kb_core::registry::Registry;
 use kb_core::rusqlite::Connection;
@@ -112,8 +112,13 @@ impl AppState {
 
         let stale = ctx.last_sync.is_none_or(|at| at.elapsed() >= SYNC_INTERVAL);
         if policy == Sync::Force || stale {
-            ctx.degraded = match sync(&ctx.vault, &ctx.conn) {
-                Ok(_) => kb_core::index::embed_step(&ctx.conn).into_iter().collect(),
+            ctx.degraded = match sync_with_degradations(&ctx.vault, &ctx.conn) {
+                Ok(mut report) => {
+                    report
+                        .degraded
+                        .extend(kb_core::index::embed_step(&ctx.conn));
+                    report.degraded
+                }
                 Err(error) => vec![kb_core::degradation::Degradation::IndexSync {
                     detail: error.to_string(),
                 }],

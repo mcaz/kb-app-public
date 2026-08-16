@@ -14,16 +14,20 @@ export interface DegradedBannerProps {
 export function DegradedBanner({ items, variant = "bar" }: DegradedBannerProps) {
   const { t } = useTranslation("common");
   if (items.length === 0) return null;
-  const entries = items.map((item) => ({
-    key:
-      item.code === "embedding_index_pending"
-        ? `${item.code}:${item.remaining}`
-        : `${item.code}:${item.detail}`,
-    text:
-      item.code === "embedding_index_pending"
-        ? t(`degradation.${item.code}`, { remaining: item.remaining })
-        : t(`degradation.${item.code}`, { detail: item.detail }),
-  }));
+  const entries = [
+    ...new Map(
+      items.map((item) => {
+        const key = JSON.stringify(item);
+        const text =
+          item.code === "embedding_index_pending"
+            ? t(`degradation.${item.code}`, { remaining: item.remaining })
+            : "note" in item
+              ? t(`degradation.${item.code}`, { note: item.note, detail: item.detail })
+              : t(`degradation.${item.code}`, { detail: item.detail });
+        return [key, { key, text }] as const;
+      }),
+    ).values(),
+  ];
   if (variant === "bar") {
     return (
       <div className="border-line bg-prop-soft text-prop flex items-center gap-2 border-b px-3.5 py-1.5 text-[12.5px]">

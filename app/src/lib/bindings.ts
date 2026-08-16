@@ -20,8 +20,7 @@ export const commands = {
 	careDismiss: (key: string) => typedError<null, AppError>(__TAURI_INVOKE("care_dismiss", { key })),
 	noteGet: (id: string) => typedError<NoteView, AppError>(__TAURI_INVOKE("note_get", { id })),
 	noteSearch: (query: string) => typedError<SearchOutcome_Serialize, AppError>(__TAURI_INVOKE("note_search", { query })),
-	/**  サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。 */
-	noteCategories: () => typedError<NoteCategory[], AppError>(__TAURI_INVOKE("note_categories")),
+	noteCategories: () => typedError<NoteCategories, AppError>(__TAURI_INVOKE("note_categories")),
 	/**  選択ディレクトリ配下のノートをcursor pageで返す。 */
 	noteList: (category: string, after: string | null, limit: number) => typedError<NoteListPage, AppError>(__TAURI_INVOKE("note_list", { category, after, limit })),
 	/**  グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。 */
@@ -186,7 +185,7 @@ export type ConnectState = {
 export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
 
 /**  データ本体を返し続けられる部分失敗。 */
-export type Degradation = { code: "remote_sync"; detail: string } | { code: "index_sync"; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string };
+export type Degradation = { code: "remote_sync"; detail: string } | { code: "index_sync"; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
 
 export type DeliveryStatus = 
 /**  `local_only` なので送信対象ではない。 */
@@ -282,6 +281,7 @@ export type GitHubDeviceAuthorization = {
 export type GraphData = {
 	nodes: GraphNode[],
 	edges: ([string, string])[],
+	degraded: Degradation[],
 };
 
 export type GraphNode = {
@@ -354,6 +354,12 @@ export type LegacyFile = {
 	size: number,
 };
 
+/**  サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。 */
+export type NoteCategories = {
+	categories: NoteCategory[],
+	degraded: Degradation[],
+};
+
 /**  サイドバーに出すディレクトリ。count は直下だけでなく子孫ノートを含む。 */
 export type NoteCategory = {
 	path: string,
@@ -372,6 +378,7 @@ export type NoteListPage = {
 	notes: NoteSummary[],
 	total: number,
 	next_cursor: string | null,
+	degraded: Degradation[],
 };
 
 /**  カテゴリ別一覧の1行。本文全体を画面へ運ばないための軽量表現。 */

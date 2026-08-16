@@ -14,6 +14,7 @@ const data: GraphData = {
     ["b", "c"],
     ["c", "d"],
   ],
+  degraded: [{ code: "graph_edges", detail: "fixture" }],
 };
 
 describe("subgraph", () => {
@@ -42,6 +43,10 @@ describe("subgraph", () => {
   });
 
   it("孤立ノートを中心にしても自分だけ返る", () => {
-    expect(subgraph(data, "z", 2)).toEqual({ nodes: [node("z")], edges: [] });
+    expect(subgraph(data, "z", 2)).toEqual({
+      nodes: [node("z")],
+      edges: [],
+      degraded: data.degraded,
+    });
   });
 });

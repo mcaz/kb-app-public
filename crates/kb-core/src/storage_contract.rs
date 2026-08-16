@@ -121,7 +121,7 @@ fn digest(snapshot: &RepositorySnapshotV1) -> Result<String> {
 
 fn read_notes(vault: &Vault) -> Result<Vec<SnapshotNote>> {
     vault
-        .list_note_files()
+        .list_note_files()?
         .into_iter()
         .map(|(id, path)| {
             let text = fs::read_to_string(&path)

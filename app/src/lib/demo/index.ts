@@ -298,11 +298,12 @@ export const demoApi = {
         counts.set(path, (counts.get(path) ?? 0) + 1);
       }
     }
-    return delay(
-      [...counts]
+    return delay({
+      categories: [...counts]
         .sort(([a], [b]) => a.localeCompare(b, "ja"))
         .map(([path, count]) => ({ path, name: path.split("/").pop() ?? "", count })),
-    );
+      degraded: [],
+    });
   },
   noteList: (category: string, after: string | null, limit: number): Promise<NoteListPage> => {
     const matches = notes
@@ -319,6 +320,7 @@ export const demoApi = {
       notes: page,
       total: matches.length,
       next_cursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+      degraded: [],
     });
   },
   graphData: (): Promise<GraphData> => {
@@ -334,6 +336,7 @@ export const demoApi = {
         degree: edges.filter(([s, d]) => s === n.id || d === n.id).length,
       })),
       edges,
+      degraded: [],
     });
   },
   connectState: (): Promise<ConnectState> => delay(connect),

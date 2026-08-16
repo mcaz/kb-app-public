@@ -11,7 +11,7 @@ import type {
   GraphData,
   GitHubAuthState,
   HomeState,
-  NoteCategory,
+  NoteCategories,
   NoteFiles,
   NoteListPage,
   NoteView,
@@ -59,7 +59,7 @@ export const api = {
     IN_TAURI ? unwrap(commands.noteGet(id)) : (await demo()).noteGet(id),
   noteSearch: async (query: string): Promise<SearchOutcome> =>
     IN_TAURI ? unwrap(commands.noteSearch(query)) : (await demo()).noteSearch(query),
-  noteCategories: async (): Promise<NoteCategory[]> =>
+  noteCategories: async (): Promise<NoteCategories> =>
     IN_TAURI ? unwrap(commands.noteCategories()) : (await demo()).noteCategories(),
   noteList: async (category: string, after: string | null, limit = 100): Promise<NoteListPage> =>
     IN_TAURI

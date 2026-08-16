@@ -414,6 +414,7 @@ pub struct NoteListPage {
     pub notes: Vec<NoteSummary>,
     pub total: usize,
     pub next_cursor: Option<String>,
+    pub degraded: Vec<crate::degradation::Degradation>,
 }
 
 pub fn note_categories(conn: &Connection) -> Result<Vec<NoteCategory>> {
@@ -503,6 +504,7 @@ pub fn notes_in_category(
         notes,
         total,
         next_cursor,
+        degraded: Vec::new(),
     })
 }
 

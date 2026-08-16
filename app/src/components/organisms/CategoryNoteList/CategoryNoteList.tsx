@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
+import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { NoteSummaryCard } from "@/components/molecules/NoteSummaryCard";
 import { useCategoryNotes } from "@/lib/queries";
 
@@ -18,6 +19,7 @@ export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryN
   const query = useCategoryNotes(category);
   const notes = query.data?.pages.flatMap((page) => page.notes) ?? [];
   const total = query.data?.pages[0]?.total ?? 0;
+  const degraded = query.data?.pages.flatMap((page) => page.degraded) ?? [];
   const name = category.split("/").filter(Boolean).at(-1) ?? t("browse.root");
   const formattedTotal = new Intl.NumberFormat(i18n.language).format(total);
 
@@ -37,6 +39,7 @@ export function CategoryNoteList({ category, selectedId, onOpenNote }: CategoryN
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 py-4 max-[800px]:px-3 max-[800px]:py-3">
+        <DegradedBanner items={degraded} variant="inline" />
         {query.isPending ? (
           <p className="text-muted m-0 px-2 py-3 text-xs" role="status">
             {t("browse.loading")}

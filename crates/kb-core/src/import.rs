@@ -395,7 +395,7 @@ mod tests {
         .unwrap();
         assert!(report.imported.is_empty());
         assert_eq!(report.skipped.len(), 3);
-        assert!(vault.list_note_files().is_empty());
+        assert!(vault.list_note_files().unwrap().is_empty());
     }
 
     #[test]

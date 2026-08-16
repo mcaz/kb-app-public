@@ -10,6 +10,9 @@
 pub enum Degradation {
     RemoteSync { detail: String },
     IndexSync { detail: String },
+    IndexMetadata { note: String, detail: String },
+    IndexRead { note: String, detail: String },
+    IndexParse { note: String, detail: String },
     EmbeddingIndexPending { remaining: usize },
     EmbeddingIndex { detail: String },
     MainSearch { detail: String },
@@ -21,6 +24,8 @@ pub enum Degradation {
     CareDetection { detail: String },
     CareList { detail: String },
     TagCounts { detail: String },
+    GraphNodes { detail: String },
+    GraphEdges { detail: String },
 }
 
 impl Degradation {
@@ -29,6 +34,9 @@ impl Degradation {
         match self {
             Self::RemoteSync { .. } => "remote_sync",
             Self::IndexSync { .. } => "index_sync",
+            Self::IndexMetadata { .. } => "index_metadata",
+            Self::IndexRead { .. } => "index_read",
+            Self::IndexParse { .. } => "index_parse",
             Self::EmbeddingIndexPending { .. } => "embedding_index_pending",
             Self::EmbeddingIndex { .. } => "embedding_index",
             Self::MainSearch { .. } => "main_search",
@@ -40,6 +48,8 @@ impl Degradation {
             Self::CareDetection { .. } => "care_detection",
             Self::CareList { .. } => "care_list",
             Self::TagCounts { .. } => "tag_counts",
+            Self::GraphNodes { .. } => "graph_nodes",
+            Self::GraphEdges { .. } => "graph_edges",
         }
     }
 }
@@ -49,6 +59,11 @@ impl std::fmt::Display for Degradation {
         match self {
             Self::RemoteSync { detail } => write!(f, "同期に失敗: {detail}"),
             Self::IndexSync { detail } => write!(f, "索引の更新に失敗: {detail}"),
+            Self::IndexMetadata { note, detail } => {
+                write!(f, "{note} の更新日時を取得できない: {detail}")
+            }
+            Self::IndexRead { note, detail } => write!(f, "{note} を読めない: {detail}"),
+            Self::IndexParse { note, detail } => write!(f, "{note} の形式が不正: {detail}"),
             Self::EmbeddingIndexPending { remaining } => {
                 write!(f, "かしこい検索の索引が追い付き中(残り {remaining} 件)")
             }
@@ -70,6 +85,8 @@ impl std::fmt::Display for Degradation {
             Self::CareDetection { detail } => write!(f, "お手入れ検知に失敗: {detail}"),
             Self::CareList { detail } => write!(f, "お手入れ一覧を取得できない: {detail}"),
             Self::TagCounts { detail } => write!(f, "タグ一覧を取得できない: {detail}"),
+            Self::GraphNodes { detail } => write!(f, "グラフのノードを一部読めない: {detail}"),
+            Self::GraphEdges { detail } => write!(f, "グラフの辺を一部読めない: {detail}"),
         }
     }
 }
@@ -83,6 +100,18 @@ mod tests {
         let items = [
             Degradation::RemoteSync { detail: "x".into() },
             Degradation::IndexSync { detail: "x".into() },
+            Degradation::IndexMetadata {
+                note: "notes/a".into(),
+                detail: "x".into(),
+            },
+            Degradation::IndexRead {
+                note: "notes/a".into(),
+                detail: "x".into(),
+            },
+            Degradation::IndexParse {
+                note: "notes/a".into(),
+                detail: "x".into(),
+            },
             Degradation::EmbeddingIndexPending { remaining: 3 },
             Degradation::EmbeddingIndex { detail: "x".into() },
             Degradation::MainSearch { detail: "x".into() },
@@ -94,6 +123,8 @@ mod tests {
             Degradation::CareDetection { detail: "x".into() },
             Degradation::CareList { detail: "x".into() },
             Degradation::TagCounts { detail: "x".into() },
+            Degradation::GraphNodes { detail: "x".into() },
+            Degradation::GraphEdges { detail: "x".into() },
         ];
         for item in items {
             let value = serde_json::to_value(&item).unwrap();
