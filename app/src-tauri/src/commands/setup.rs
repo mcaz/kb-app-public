@@ -63,7 +63,7 @@ pub fn setup_state() -> AppResult<SetupState> {
 /// 最初の vault を自動作成(既定名「わたしのノート」実体 my-notes)。
 #[tauri::command]
 #[specta::specta]
-pub fn onboard(state: State<'_, AppState>) -> AppResult<SetupState> {
+pub fn onboard(app: AppHandle, state: State<'_, AppState>) -> AppResult<SetupState> {
     let path = dirs::home_dir()
         .ok_or(AppError::VaultUnavailable)?
         .join("kb")
@@ -73,6 +73,7 @@ pub fn onboard(state: State<'_, AppState>) -> AppResult<SetupState> {
     reg.add("my-notes", vault.root.clone())
         .map_err(AppError::configuration)?;
     reg.save().map_err(AppError::configuration)?;
+    crate::state::allow_vault_assets(&app, &vault.root)?;
     // 作ったばかりの vault を次のコマンドから使えるようにする
     state.reset();
     setup_state()
@@ -114,6 +115,10 @@ pub fn onboard_existing(
     .map_err(AppError::backup)?;
     registry.add(&name, path).map_err(AppError::configuration)?;
     registry.save().map_err(AppError::configuration)?;
+    let restored = registry
+        .resolve(Some(&name))
+        .map_err(AppError::configuration)?;
+    crate::state::allow_vault_assets(&app, &restored)?;
     state.reset();
     setup_state()
 }

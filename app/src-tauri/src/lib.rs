@@ -97,6 +97,12 @@ pub fn run() {
             builder.mount_events(app);
             // vault と索引接続はここに集約する(生成は遅延 — 未オンボーディングでも起動できる)
             app.manage(state::AppState::default());
+            // asset protocolの静的scopeは空。登録済みの現在Vaultだけを動的に許可する。
+            if let Ok(registry) = kb_core::registry::Registry::load()
+                && let Ok(root) = registry.resolve(None)
+            {
+                state::allow_vault_assets(app.handle(), &root)?;
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -110,5 +116,18 @@ mod tests {
     #[test]
     fn bindings_are_up_to_date() {
         super::export_bindings().expect("bindings.ts の生成に失敗");
+    }
+
+    #[test]
+    fn webview_security_boundary_is_not_wide_open() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let security = &config["app"]["security"];
+        let csp = security["csp"].as_str().expect("CSPはnullにしない");
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("connect-src ipc: http://ipc.localhost"));
+        assert!(csp.contains("object-src 'none'"));
+        assert!(!csp.contains("https:"), "外部通信を既定許可しない");
+        assert_eq!(security["assetProtocol"]["scope"], serde_json::json!([]));
     }
 }

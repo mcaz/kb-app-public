@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { marked } from "marked";
 import { useEffect, useMemo, useRef } from "react";
+
+import { noteIdFromHref, renderMarkdown, vaultImagePath } from "./markdown";
 
 export interface MarkdownViewProps {
   body: string;
@@ -10,30 +11,33 @@ export interface MarkdownViewProps {
   onOpenNote: (id: string) => void;
 }
 
-/**
- * ノート本文の表示。
- * 描画後に2つだけ手を入れる: vault 内画像を asset プロトコルへ、
- * `.md` へのリンクをアプリ内遷移へ。
- */
+function vaultAssetPath(vaultRoot: string, imagePath: string): string {
+  const separator = vaultRoot.includes("\\") ? "\\" : "/";
+  const root = vaultRoot.replace(/[\\/]+$/, "");
+  return `${root}${separator}${imagePath.slice(1).replaceAll("/", separator)}`;
+}
+
+/** ノート本文を、ネットワークとVault外ファイルへ到達できないHTMLとして表示する。 */
 export function MarkdownView({ body, vaultRoot, inTauri, onOpenNote }: MarkdownViewProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => marked.parse(body, { async: false }), [body]);
+  const html = useMemo(() => renderMarkdown(body), [body]);
 
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
 
     for (const img of root.querySelectorAll("img")) {
-      const src = decodeURIComponent(img.getAttribute("src") ?? "");
-      if (src.startsWith("/") && inTauri) img.src = convertFileSrc(`${vaultRoot}${src}`);
+      const path = vaultImagePath(img.dataset.kbImage ?? "");
+      img.removeAttribute("data-kb-image");
+      if (path && inTauri) img.src = convertFileSrc(vaultAssetPath(vaultRoot, path));
     }
 
     const onClick = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement).closest("a");
       if (!anchor) return;
       e.preventDefault();
-      const href = decodeURIComponent(anchor.getAttribute("href") ?? "");
-      if (href.endsWith(".md")) onOpenNote(href.replace(/^\//, "").replace(/\.md$/, ""));
+      const id = noteIdFromHref(anchor.getAttribute("href") ?? "");
+      if (id) onOpenNote(id);
     };
 
     root.addEventListener("click", onClick);
@@ -46,7 +50,7 @@ export function MarkdownView({ body, vaultRoot, inTauri, onOpenNote }: MarkdownV
       // 書式は styles/app.css の .markdown にまとめてある(Markdown が生む要素は
       // 種類が多く、ユーティリティを並べるより1箇所に置いたほうが読める)
       className="markdown"
-      // 本文は自分の vault 内の Markdown(AI が書いたもの)。外部入力ではない
+      // DOMPurify済みのHTMLだけを渡す。AI生成・同期済みMarkdownは信頼境界の外。
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
