@@ -46,9 +46,12 @@
 | Rust の警告ゼロ | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `app/src/lib/bindings.ts` は生成物(手書き禁止) | CI の `git diff --exit-code` |
 | 対訳の欠落・余剰・空文字 | `src/i18n/locales/locales.test.ts` |
+| JSX の日本語文字列は locale に置く | `no-restricted-syntax` で JSX 内だけを検査(コメント・正規表現は対象外) |
+| TSX に生の hex を書かない | `no-restricted-syntax`。canvas の `.ts` fallback は対象外 |
 | 契約1〜4(タグ・OKF・所有・劣化表示) | `kb-core` の検証コード |
 | 契約文書と強制実装・テストの同一コミット更新 | 契約SHA-256テスト + `scripts/check-contract-cochange.py`(CI) |
 | coreの診断文をGUIへ直送しない | `CoreError` → `AppError`。`From<anyhow::Error>` を持たず未分類はコンパイル失敗 |
+| Rust の unsafe・仮実装・理由なし allow 禁止 | workspace lint(`unsafe_code` / `dbg_macro` / `todo` / `unimplemented` / `allow_attributes_without_reason`) |
 
 手元の通し方は [AGENTS.md](../AGENTS.md) の Verification に一本化してある。
 
@@ -57,9 +60,6 @@
 - **コメント・ドキュメント・コミットメッセージ・`docs/` は日本語。**
   識別子・ファイル名・タグ・git のブランチ名は英語。`AGENTS.md` だけは英語
   (AI クライアントが読む面のため)。
-- **UI 文言をソースに直書きしない。** 文言は `src/i18n/locales/{ja,en}/<画面>.json`。
-  日本語が正本で、英語未訳は日本語にフォールバックする(ADR-0002 決定7)。
-  JSX に日本語の文字列リテラルが出たら、それは locale へ出し忘れている。
 - **エラー文言は `code` / `kind` で訳し分ける。** `unexpected.message` もログ専用で、
   画面は locale の一般文言を表示する(§5)。
 
@@ -121,9 +121,6 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
   — 配色やサイズを追うときに開くファイルが1つに定まる。
   例外は `atoms/ui` の shadcn 由来部品で、上流の形(同ファイルで `buttonVariants` を
   公開)のまま置く(ADR-0002 決定2「できるだけ素のまま取り込む」)。
-- **色はトークン経由。** `bg-ground` / `text-ink` のようなユーティリティだけを使い、
-  `.tsx` に生の hex を書かない。canvas のように CSS 変数を読めない経路だけ例外で、
-  そこでは変数名とフォールバック値を対で持つ(`lib/graph/force-graph.ts`)。
 - **ダークは `dark:`(= `data-theme`)のみ。** CSS に `prefers-color-scheme` を書かない。
 - **ノートの段(`NotesLayout`)は幅を内容から決める。** 列が横に並び、はみ出したら
   横スクロールする形なので、**内側に横長の要素を足すと列そのものが広がって窓の外へ出る**。
@@ -164,11 +161,6 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
 
 ## 9. まだ機械化できていないもの(次の一手)
 
-**この節がこの文書の生存戦略。** §2〜§8 のうち機械へ上げられるものを、上げ方と一緒に置く。
-一つ上げたら、対応する条文をここと本文から消して §1 の表へ移す。
-
-| いまは文章 | 上げ先 | 備考 |
-| --- | --- | --- |
-| JSX に日本語リテラルを書かない(§2) | eslint `no-restricted-syntax` で `JSXText` の非 ASCII を落とす | 正規表現などの誤検出を除外する設計が要る |
-| `.tsx` に生の hex を書かない(§6) | 同上、または stylelint | canvas 経路の例外指定とセット |
-| clippy の追加 lint | `Cargo.toml` の `[workspace.lints]` | いまは既定 + `-D warnings` のみ |
+**この節がこの文書の生存戦略。** 現在、§2〜§8 に機械へ上げられる既知の残件はない。
+新しく見つけたら、上げ方と一緒にここへ置き、機械化した時点で対応する条文を本文から消して
+§1 の表へ移す。

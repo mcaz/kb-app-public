@@ -36,6 +36,38 @@ const DIRECT_INVOKE = [
   },
 ];
 
+/** locale へ出すべき日本語を JSX 内だけで検出する。コメントや正規表現は対象外。 */
+const JAPANESE_UI_LITERALS = [
+  {
+    selector: "JSXText[value=/[ぁ-んァ-ヶ一-龠々ー]/]",
+    message: "JSX の日本語文言は src/i18n/locales の locale から取得する。",
+  },
+  {
+    selector: "JSXAttribute > Literal[value=/[ぁ-んァ-ヶ一-龠々ー]/]",
+    message: "JSX 属性の日本語文言は src/i18n/locales の locale から取得する。",
+  },
+  {
+    selector: "JSXExpressionContainer Literal[value=/[ぁ-んァ-ヶ一-龠々ー]/]",
+    message: "JSX 式内の日本語文言は src/i18n/locales の locale から取得する。",
+  },
+  {
+    selector: "JSXExpressionContainer TemplateElement[value.raw=/[ぁ-んァ-ヶ一-龠々ー]/]",
+    message: "JSX 式内の日本語文言は src/i18n/locales の locale から取得する。",
+  },
+];
+
+/** TSX の色は design token に寄せる。.ts の canvas fallback は対象外。 */
+const RAW_TSX_HEX = [
+  {
+    selector: "Literal[value=/#[0-9A-Fa-f]{3,8}\\b/]",
+    message: "TSX の色は design token を使い、生の hex を書かない。",
+  },
+  {
+    selector: "TemplateElement[value.raw=/#[0-9A-Fa-f]{3,8}\\b/]",
+    message: "TSX の色は design token を使い、生の hex を書かない。",
+  },
+];
+
 /** 副作用(取得・変更・グローバル状態)。organisms 以上でのみ許す。 */
 const SIDE_EFFECTS = [
   {
@@ -109,6 +141,14 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/consistent-type-imports": ["error", { fixStyle: "inline-type-imports" }],
       "no-restricted-imports": restrictedImports([]),
+    },
+  },
+
+  // UI 文言と色の直書きは TSX の AST だけを調べ、コメント・正規表現・canvas を誤検出しない。
+  {
+    files: ["src/**/*.tsx"],
+    rules: {
+      "no-restricted-syntax": ["error", ...JAPANESE_UI_LITERALS, ...RAW_TSX_HEX],
     },
   },
 
