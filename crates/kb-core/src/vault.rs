@@ -17,6 +17,27 @@ pub struct Vault {
     pub root: PathBuf,
 }
 
+/// ノート起票の入力。タグ契約の明示フラグを起票内容と一体で渡す。
+pub struct NoteProposal<'a> {
+    pub title: &'a str,
+    pub body: &'a str,
+    pub description: Option<&'a str>,
+    pub tags: &'a [String],
+    pub allow_new_tags: bool,
+    pub client: &'a str,
+}
+
+/// ノート更新の入力。`None` の項目は変更しない。
+pub struct NoteUpdate<'a> {
+    pub id: &'a str,
+    pub title: Option<&'a str>,
+    pub body: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub tags: Option<&'a [String]>,
+    pub allow_new_tags: bool,
+    pub client: &'a str,
+}
+
 impl Vault {
     /// 既存 vault を開く(git リポであることを確認)。
     pub fn open(root: impl AsRef<Path>) -> Result<Vault> {
@@ -78,9 +99,7 @@ impl Vault {
         Ok(id)
     }
 
-    /// 旧 Markdown の移植にだけ使う内部互換口。通常のノート書き込みは
-    /// [`Self::propose`] / [`Self::agent_update_note`] / [`Self::agent_delete_note`] を通す。
-    pub(crate) fn write_note(&self, id: &str, note: &Note) -> Result<()> {
+    fn write_note(&self, id: &str, note: &Note) -> Result<()> {
         let file = Path::new(id)
             .file_name()
             .and_then(|f| f.to_str())
@@ -96,19 +115,17 @@ impl Vault {
         Ok(())
     }
 
-    /// アプリ契約1(docs/contract.md): タグは1〜4個。
-    fn validate_tags(tags: &[String]) -> Result<()> {
-        if tags.is_empty() || tags.len() > 4 {
-            bail!(
-                "契約: ノートにはタグを1〜4個付ける(いまは {} 個)。既存の語彙に揃えること",
-                tags.len()
-            );
-        }
-        // 形式(英小文字ケバブ)は tags モジュールが正本 — 語彙外タグの拒否と同じ検証を使う
-        for t in tags {
-            crate::tags::validate_shape(t)?;
-        }
-        Ok(())
+    /// 旧 Markdown import の内部互換口。通常書き込みと同じタグ契約を通し、
+    /// raw writer 自体は vault の外へ公開しない。
+    pub(crate) fn write_imported_note(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+        note: &Note,
+        allow_new_tags: bool,
+    ) -> Result<()> {
+        crate::tags::validate(conn, &note.front.tags, allow_new_tags)?;
+        self.write_note(id, note)
     }
 
     /// AI からのノート起票(origin: agent)。FR-C4 propose。
@@ -116,13 +133,18 @@ impl Vault {
     /// 扱いはタグで表現し、その意味づけはユーザーと AI の会話で決まる(運用)。
     pub fn propose(
         &self,
-        title: &str,
-        body: &str,
-        description: Option<&str>,
-        tags: &[String],
-        client: &str,
+        conn: &rusqlite::Connection,
+        proposal: NoteProposal<'_>,
     ) -> Result<String> {
-        Self::validate_tags(tags)?;
+        let NoteProposal {
+            title,
+            body,
+            description,
+            tags,
+            allow_new_tags,
+            client,
+        } = proposal;
+        crate::tags::validate(conn, tags, allow_new_tags)?;
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("agent".into());
         front.created = Some(now_iso());
@@ -172,13 +194,18 @@ impl Vault {
     /// AI 自身によるノート更新(MCP)。自分のノート(origin: agent)のみ。
     pub fn agent_update_note(
         &self,
-        id: &str,
-        title: Option<&str>,
-        body: Option<&str>,
-        description: Option<&str>,
-        tags: Option<&[String]>,
-        client: &str,
+        conn: &rusqlite::Connection,
+        update: NoteUpdate<'_>,
     ) -> Result<()> {
+        let NoteUpdate {
+            id,
+            title,
+            body,
+            description,
+            tags,
+            allow_new_tags,
+            client,
+        } = update;
         let mut note = self.require_origin(
             id,
             "agent",
@@ -191,7 +218,7 @@ impl Vault {
             note.front.description = Some(d.to_string());
         }
         if let Some(ts) = tags {
-            Self::validate_tags(ts)?; // 契約1: タグの全消し・過多は不可
+            crate::tags::validate(conn, ts, allow_new_tags)?;
             note.front.tags = ts.to_vec();
         }
         if let Some(b) = body {
@@ -209,6 +236,37 @@ impl Vault {
         self.write_index_md()?;
         self.commit_note_op(id, &format!("note: update {id} (via {client})"))?;
         Ok(())
+    }
+
+    /// 製品APIを迂回せずに他モジュールのテストfixtureを作るための専用口。
+    #[cfg(test)]
+    pub(crate) fn propose_for_test(
+        &self,
+        title: &str,
+        body: &str,
+        description: Option<&str>,
+        tags: &[String],
+        client: &str,
+    ) -> Result<String> {
+        let conn = crate::index::open_db(self)?;
+        crate::index::sync(self, &conn)?;
+        self.propose(
+            &conn,
+            NoteProposal {
+                title,
+                body,
+                description,
+                tags,
+                allow_new_tags: true,
+                client,
+            },
+        )
+    }
+
+    /// 既に壊れた外部編集データを再現するテスト専用fixture。製品buildには存在しない。
+    #[cfg(test)]
+    pub(crate) fn write_note_fixture(&self, id: &str, note: &Note) -> Result<()> {
+        self.write_note(id, note)
     }
 
     fn delete_note_inner(&self, id: &str, message: &str) -> Result<()> {
@@ -433,7 +491,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let id = vault
-            .propose(
+            .propose_for_test(
                 "添付テスト",
                 "本文。",
                 None,
@@ -456,9 +514,10 @@ mod tests {
     fn ai_owns_current_notes_and_legacy_human_notes_are_read_only() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
         let legacy = write_legacy_human_fixture(&vault, "旧メモ", "本文");
         let ai = vault
-            .propose("AI の知見", "本文", None, &["dev".into()], "claude/x")
+            .propose_for_test("AI の知見", "本文", None, &["dev".into()], "claude/x")
             .unwrap();
 
         assert_eq!(
@@ -467,7 +526,18 @@ mod tests {
         );
         assert!(
             vault
-                .agent_update_note(&legacy, None, Some("侵入"), None, None, "claude/x")
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        id: &legacy,
+                        title: None,
+                        body: Some("侵入"),
+                        description: None,
+                        tags: None,
+                        allow_new_tags: false,
+                        client: "claude/x",
+                    },
+                )
                 .is_err()
         );
         assert!(vault.agent_delete_note(&legacy, "claude/x").is_err());
@@ -478,15 +548,96 @@ mod tests {
         );
         assert!(
             vault
-                .agent_update_note(&ai, Some("AI の知見 v2"), None, None, None, "claude/x")
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        id: &ai,
+                        title: Some("AI の知見 v2"),
+                        body: None,
+                        description: None,
+                        tags: None,
+                        allow_new_tags: false,
+                        client: "claude/x",
+                    },
+                )
                 .is_ok()
         );
 
         // AI は自分のノートを消せる
         let ai2 = vault
-            .propose("捨てる知見", "本文", None, &["dev".into()], "claude/x")
+            .propose_for_test("捨てる知見", "本文", None, &["dev".into()], "claude/x")
             .unwrap();
         assert!(vault.agent_delete_note(&ai2, "claude/x").is_ok());
+    }
+
+    #[test]
+    fn all_note_write_apis_use_the_same_tag_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+
+        assert!(
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: "タグなし",
+                        body: "本文",
+                        description: None,
+                        tags: &[],
+                        allow_new_tags: true,
+                        client: "test/client",
+                    },
+                )
+                .is_err()
+        );
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "既存語",
+                    body: "本文",
+                    description: None,
+                    tags: &["known".into()],
+                    allow_new_tags: false,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        crate::index::sync(&vault, &conn).unwrap();
+
+        assert!(
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: "語彙外",
+                        body: "本文",
+                        description: None,
+                        tags: &["brand-new".into()],
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .is_err()
+        );
+        assert!(
+            vault
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        id: &id,
+                        title: None,
+                        body: None,
+                        description: None,
+                        tags: Some(&[]),
+                        allow_new_tags: true,
+                        client: "test/client",
+                    },
+                )
+                .is_err()
+        );
+        assert_eq!(vault.read_note(&id).unwrap().front.tags, vec!["known"]);
     }
 
     #[test]
@@ -494,7 +645,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let id = vault
-            .propose(
+            .propose_for_test(
                 "テスト起票",
                 "本文です。",
                 Some("説明"),

@@ -227,7 +227,7 @@ mod tests {
     /// 旧添付を1つ置く(移行前の状態を作る)。
     fn legacy(vault: &Vault, title: &str, file_name: &str, bytes: &[u8]) -> String {
         let id = vault
-            .propose(title, "本文。", None, &["test".into()], "test/client")
+            .propose_for_test(title, "本文。", None, &["test".into()], "test/client")
             .unwrap();
         let dir = vault.attach_dir(&id);
         fs::create_dir_all(&dir).unwrap();

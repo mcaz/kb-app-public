@@ -656,7 +656,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         vault
-            .propose(
+            .propose_for_test(
                 "認証設計メモ",
                 "認証フローの見直しを行った。監査ログも整備する。",
                 None,
@@ -665,7 +665,7 @@ mod tests {
             )
             .unwrap();
         vault
-            .propose(
+            .propose_for_test(
                 "運用ノート",
                 "本番環境の運用手順とバックアップのライフサイクルを記録。",
                 None,
@@ -674,7 +674,7 @@ mod tests {
             )
             .unwrap();
         vault
-            .propose(
+            .propose_for_test(
                 "無関係",
                 "昨日の打ち合わせ内容を整理する。",
                 None,

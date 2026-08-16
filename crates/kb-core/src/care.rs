@@ -3,7 +3,7 @@
 //!
 //! 検知 → 平易な提案に変換 → 受信箱で「はい / いいえ」。ユーザーは維持作業を計画しない
 //! (原則8)。実行は常に承諾経由で、メモ(origin: human)への操作は「つなげる」まで(原則9)。
-//! v1 の検知: ①リンク切れ ②タグ無し(契約違反状態)。
+//! v1 の検知: ①リンク切れ ②タグ契約違反(個数・形・語彙)。
 //! **意味的な近接の「つなげますか?」は 2026-08-11 に撤去** — ノート間の関連を決めるのは
 //! AI の領分であり、ユーザーに二択で決めさせるのは方針に反する。近さの提示は
 //! 「近いノート」パネル(人間の閲覧用)と MCP の get 応答(AI の判断材料)が担う。
@@ -20,7 +20,7 @@ const MAX_OPEN_PROPOSALS: usize = 5;
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CareProposal {
     pub key: String,
-    pub kind: String, // "broken"(リンク切れ)| "untagged"(タグ無し=契約違反状態)
+    pub kind: String, // "broken" | "untagged" | "invalid-tags" | "glossary"
     pub a: String,
     pub b: String,
     pub detail: String,
@@ -51,23 +51,50 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
     }
     let mut added = 0;
 
-    // ②' タグ無し(契約1違反状態の可視化 — 修復は Claude への依頼で)
-    let untagged: Vec<(String, String)> = {
+    // ②' タグ契約違反の可視化。外部編集や旧データは読み取りを止めず、care へ出す。
+    let notes: Vec<(String, String, String)> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT id, coalesce(title, id) FROM notes
-             WHERE status != 'deprecated' AND (tags IS NULL OR tags = '')",
+            "SELECT id, coalesce(title, id), coalesce(tags, '') FROM notes
+             WHERE status != 'deprecated' ORDER BY id",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    for (id, title) in untagged {
+    let tag_validator = crate::tags::validator(conn)?;
+    for (id, title, raw_tags) in notes {
         if added >= budget {
             break;
         }
-        let key = format!("untagged:{id}");
-        let detail =
-            format!("「{title}」にタグがありません(契約: 1〜4個)。Claude に整理を頼めます。");
-        if insert_new(conn, &key, "untagged", &id, "", &detail)? {
+        let tags: Vec<String> = raw_tags.split_whitespace().map(String::from).collect();
+        let Err(error) = tag_validator.validate(&tags, false) else {
+            continue;
+        };
+        let (kind, key, detail) = if tags.is_empty() {
+            (
+                "untagged",
+                format!("untagged:{id}"),
+                format!("「{title}」にタグがありません(契約: 1〜4個)。Claude に整理を頼めます。"),
+            )
+        } else {
+            let reason = error
+                .to_string()
+                .lines()
+                .next()
+                .unwrap_or("タグ契約に違反している")
+                .to_string();
+            (
+                "invalid-tags",
+                format!("invalid-tags:{id}"),
+                format!("「{title}」のタグが契約違反です({reason})。Claude に整理を頼めます。"),
+            )
+        };
+        if insert_new(conn, &key, kind, &id, "", &detail)? {
             added += 1;
         }
     }
@@ -179,7 +206,7 @@ mod tests {
         let mut front = Frontmatter::new_note("親");
         front.origin = Some("agent".into());
         vault
-            .write_note(
+            .write_note_fixture(
                 "notes/親",
                 &Note {
                     front,
@@ -206,5 +233,63 @@ mod tests {
         }
         assert!(list_open(&conn).unwrap().is_empty());
         assert_eq!(detect(&conn, &vault).unwrap(), 0);
+    }
+
+    #[test]
+    fn all_existing_tag_contract_violations_are_visible() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "タグ運用 — 合意の置き場",
+                "## 語彙\n\n| タグ | 説明 |\n|---|---|\n| kb-app | 主題 |\n| knowledge-base | 主題 |\n| governance | 活動 |\n| ops | 活動 |\n",
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        for (id, title, tags) in [
+            (
+                "notes/多すぎる",
+                "多すぎる",
+                vec!["kb-app", "knowledge-base", "governance", "ops", "extra"],
+            ),
+            ("notes/形が不正", "形が不正", vec!["日本語"]),
+            ("notes/語彙外", "語彙外", vec!["stray"]),
+        ] {
+            let mut front = Frontmatter::new_note(title);
+            front.origin = Some("agent".into());
+            front.tags = tags.into_iter().map(String::from).collect();
+            vault
+                .write_note_fixture(
+                    id,
+                    &Note {
+                        front,
+                        body: "本文".into(),
+                    },
+                )
+                .unwrap();
+        }
+
+        let conn = open_db(&vault).unwrap();
+        sync(&vault, &conn).unwrap();
+        assert_eq!(detect(&conn, &vault).unwrap(), 3);
+        let open = list_open(&conn).unwrap();
+        assert_eq!(
+            open.iter()
+                .filter(|proposal| proposal.kind == "invalid-tags")
+                .count(),
+            3
+        );
+        assert!(open.iter().any(|proposal| proposal.detail.contains("5 個")));
+        assert!(
+            open.iter()
+                .any(|proposal| proposal.detail.contains("日本語"))
+        );
+        assert!(
+            open.iter()
+                .any(|proposal| proposal.detail.contains("stray"))
+        );
     }
 }

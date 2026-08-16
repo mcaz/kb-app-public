@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use serde_yaml::Value;
 
 use crate::frontmatter::{Frontmatter, Generated, Note};
+use crate::index::{open_db, sync};
 use crate::vault::Vault;
 
 /// 取り込み元1つ。`prefix` が空なら vault 直下へ同じ相対パスで入る。
@@ -67,8 +68,10 @@ fn scan(root: &Path) -> Vec<(String, PathBuf)> {
 
 /// 複数ソースをまとめて取り込む(リンク解決はソース横断 — 旧・二層構成の
 /// personal → team 参照も新パスへ張り替わる)。1コミット+随時 push。
-pub fn import(vault: &Vault, sources: &[Source]) -> Result<ImportReport> {
+pub fn import(vault: &Vault, sources: &[Source], allow_new_tags: bool) -> Result<ImportReport> {
     let mut report = ImportReport::default();
+    let conn = open_db(vault)?;
+    sync(vault, &conn)?;
 
     // 第1パス: 全ソースの id(ファイル名)→ 新相対パスの対応表
     let mut link_map: HashMap<String, String> = HashMap::new();
@@ -99,7 +102,12 @@ pub fn import(vault: &Vault, sources: &[Source]) -> Result<ImportReport> {
         let content = fs::read_to_string(path)?;
         match convert(&content, &link_map, &mut report.unresolved_links) {
             Ok(note) => {
-                vault.write_note(dest, &note)?;
+                if let Err(error) = vault.write_imported_note(&conn, dest, &note, allow_new_tags) {
+                    report.skipped.push(format!("{dest}({error})"));
+                    continue;
+                }
+                // 次のノートも同じ語彙判定を受けるよう、成功分を派生索引へ反映する。
+                sync(vault, &conn)?;
                 written.push(dest.clone());
                 report.imported.push(dest.clone());
             }
@@ -320,12 +328,12 @@ mod tests {
         fs::write(p.join("INDEX.md"), "skip me").unwrap();
         fs::write(
             p.join("dev/note-a.md"),
-            "---\nid: note-a\ntitle: A\ntype: note\nstatus: active\nupdated: 2026-08-01\n---\n\n[[shared-b]] 参照。\n",
+            "---\nid: note-a\ntitle: A\ntype: note\nstatus: active\nupdated: 2026-08-01\ntags: [test]\n---\n\n[[shared-b]] 参照。\n",
         )
         .unwrap();
         fs::write(
             t.join("work/shared-b.md"),
-            "---\nid: shared-b\ntitle: B\ntype: decision\nstatus: archived\n---\n\n本文 B。\n",
+            "---\nid: shared-b\ntitle: B\ntype: decision\nstatus: archived\ntags: [test]\n---\n\n本文 B。\n",
         )
         .unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
@@ -343,6 +351,7 @@ mod tests {
                     label: "team".into(),
                 },
             ],
+            false,
         )
         .unwrap();
         assert_eq!(report.imported.len(), 2);
@@ -355,5 +364,69 @@ mod tests {
         );
         let b = vault.read_note("team/work/shared-b").unwrap();
         assert_eq!(b.front.effective_status(), "deprecated");
+    }
+
+    #[test]
+    fn import_rejects_structurally_invalid_tags_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        for (name, tags) in [
+            ("missing", ""),
+            ("too-many", "tags: [a, b, c, d, e]\n"),
+            ("bad-shape", "tags: [日本語]\n"),
+        ] {
+            fs::write(
+                source.join(format!("{name}.md")),
+                format!("---\ntitle: {name}\ntype: note\n{tags}---\n\n本文。\n"),
+            )
+            .unwrap();
+        }
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let report = import(
+            &vault,
+            &[Source {
+                root: source,
+                prefix: String::new(),
+                label: "legacy".into(),
+            }],
+            true,
+        )
+        .unwrap();
+        assert!(report.imported.is_empty());
+        assert_eq!(report.skipped.len(), 3);
+        assert!(vault.list_note_files().is_empty());
+    }
+
+    #[test]
+    fn import_requires_explicit_permission_for_new_vocabulary() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("new-tag.md"),
+            "---\ntitle: 新語\ntype: note\ntags: [brand-new]\n---\n\n本文。\n",
+        )
+        .unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test("既存", "本文", None, &["known".into()], "test/client")
+            .unwrap();
+        let sources = [Source {
+            root: source,
+            prefix: String::new(),
+            label: "legacy".into(),
+        }];
+
+        let rejected = import(&vault, &sources, false).unwrap();
+        assert!(rejected.imported.is_empty());
+        assert!(rejected.skipped[0].contains("語彙にないタグ"));
+
+        let accepted = import(&vault, &sources, true).unwrap();
+        assert_eq!(accepted.imported, vec!["new-tag"]);
+        assert_eq!(
+            vault.read_note("new-tag").unwrap().front.origin.as_deref(),
+            Some("agent")
+        );
     }
 }
