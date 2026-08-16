@@ -38,6 +38,7 @@
 | 整形(TS/CSS/MD、Tailwind クラス順) | Prettier(`printWidth: 100`・二重引用符・末尾カンマ)→ `npm run format:check` |
 | 整形(Rust) | `rustfmt` 既定(edition 2024)→ `cargo fmt --all -- --check` |
 | 層の境界(副作用は organisms 以上・下から上を見ない) | `eslint.config.js` の `no-restricted-imports` |
+| Tauri commandの入口は `src/lib/api` だけ | `no-restricted-imports` で `invoke` とnamespace importを禁止 |
 | コンポーネントの公開面は `index.ts` だけ | 同上(`DEEP_IMPORT`) |
 | 型の厳しさ(`strict` / `noUncheckedIndexedAccess` / 未使用の禁止) | `tsconfig.json` → `npm run typecheck` |
 | 投げっぱなしの Promise 禁止、型 import はインライン | typescript-eslint(型情報あり) |
@@ -88,9 +89,6 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
   `mcp` は、コア API を呼ぶだけの薄い口。判断を口の側に書いたら、他の2つから消える。
 - **書き込み経路はコアで合流させる。** ノートを変える経路は MCP と CLI の2つあるので、
   検証を経路ごとに書かない(`tags.rs` がこの形)。
-- **画面から `invoke` を直接呼ばない。** 唯一の窓口は `src/lib/api`。
-  生成物 `bindings.ts` を包み、`Result` を例外に開き、Tauri 外ではデモに切り替える責務が
-  そこに閉じている。`convertFileSrc` のような invoke でない Tauri API は例外。
 - **サーバ由来の状態は `lib/queries`、画面の都合は `lib/stores`。**
   手書きのキャッシュを作らない(旧実装の `tagOv` / `graphCache` に戻る)。
 
@@ -171,7 +169,6 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
 
 | いまは文章 | 上げ先 | 備考 |
 | --- | --- | --- |
-| 画面から `invoke` を直接呼ばない(§4) | eslint `no-restricted-imports` — `@tauri-apps/api/core` の `invoke` を `lib/api` 以外で禁止 | いちばん安く上げられる |
 | JSX に日本語リテラルを書かない(§2) | eslint `no-restricted-syntax` で `JSXText` の非 ASCII を落とす | 正規表現などの誤検出を除外する設計が要る |
 | `.tsx` に生の hex を書かない(§6) | 同上、または stylelint | canvas 経路の例外指定とセット |
 | clippy の追加 lint | `Cargo.toml` の `[workspace.lints]` | いまは既定 + `-D warnings` のみ |
