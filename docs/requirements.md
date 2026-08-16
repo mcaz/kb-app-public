@@ -163,7 +163,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     full 転送用の pointer まで。`sensitivity`(非公開/共有)と `sync_policy`
     (このPCのみ/別PCでも復元)の**二軸**を持ち、client repo 由来は `local_only` 固定で
     プロンプトから緩和できない。availability は同期せず端末ごとに導出する
-  - **full 転送は同一 origin の Git LFS**(`git-lfs` は同梱。ユーザーに追加設定を求めない)。
+  - **full 転送は同一 origin の Git LFS**(`git-lfs` は公式releaseのchecksum固定sidecarとして
+    同梱。配布CIはambient版なしの実処理とpackage内容を検査し、ユーザーに追加設定を求めない)。
     manifest の取得と blob の取得を分離し、取得失敗は端末ごとの「この端末にない」として出す
   - **旧方式 `<id>.files/`(同名サイドカー)は legacy transport**。ノート=1ファイルの
     OKF 互換を壊さない利点(`index.md` 予約名衝突の A 案・ID が汚れる B 案を棄却した理由)は

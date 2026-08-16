@@ -98,7 +98,7 @@
     "backupInvalidRepository": "GitHub repository の指定を確認してください",
     "backupRemoteMissing": "repository が見つからないか、現在のアカウントからアクセスできません",
     "backupQuota": "Git LFS の保存容量または通信量の上限に達しています",
-    "backupLfsUnavailable": "Git LFS を利用できません。Git LFS の導入状態を確認してください",
+    "backupLfsUnavailable": "同梱された Git LFS を利用できません。アプリを再インストールしてください",
     "backupRemoteObjectMissing": "バックアップ先に必要なファイル本体がありません。元の端末から再同期してください",
     "backupIntegrityMismatch": "取得したファイルの内容が一致しません。再試行しても続く場合はバックアップ元を確認してください",
     "backupInvalidVault": "選んだ repository は復元可能な kb-app の知識ベースではありません",

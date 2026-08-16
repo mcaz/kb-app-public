@@ -12,6 +12,7 @@ pub mod connect;
 pub mod degradation;
 pub mod embed;
 pub mod error;
+mod external_tools;
 pub mod favorites;
 pub mod frontmatter;
 pub mod github;

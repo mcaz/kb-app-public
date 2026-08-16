@@ -43,7 +43,7 @@ fn rel(hash: &ContentHash) -> String {
 }
 
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    let mut command = std::process::Command::new("git");
+    let mut command = crate::external_tools::git_command();
     command
         .args(args)
         .current_dir(&vault.root)
@@ -161,7 +161,7 @@ fn shrink_to_pointer(vault: &Vault, hash: &ContentHash) -> Result<()> {
     }
     fs::remove_file(&path)?;
     let rel = rel(hash);
-    let out = std::process::Command::new("git")
+    let out = crate::external_tools::git_command()
         .args(["checkout", "--", &rel])
         .current_dir(&vault.root)
         .env("GIT_LFS_SKIP_SMUDGE", "1") // 実体を書き戻させない
@@ -409,11 +409,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn lfs_ready() -> bool {
-        std::process::Command::new("git")
-            .args(["lfs", "version"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        crate::external_tools::git_lfs_available()
     }
 
     #[test]
@@ -593,6 +589,78 @@ mod tests {
         assert_eq!(
             verify(&restored_again, &taken.manifest.hash).unwrap(),
             Verified::Ok
+        );
+    }
+
+    /// 配布受入。親processでシステムの git-lfs を PATH から外し、同梱候補だけを
+    /// `KB_GIT_LFS_BIN` で渡した子processが実際の pointer 化まで完走することを確かめる。
+    /// CI だけが明示実行し、通常の unit test ではダウンロード済みsidecarを要求しない。
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "配布用git-lfs sidecarを準備したCIで実行する"]
+    fn bundled_git_lfs_works_without_an_ambient_installation() {
+        const CHILD_MARKER: &str = "KB_GIT_LFS_ACCEPTANCE_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let bundled = std::env::var_os("KB_GIT_LFS_BIN")
+                .map(PathBuf::from)
+                .expect("KB_GIT_LFS_BINで配布候補を指定する");
+            assert!(bundled.is_absolute(), "配布候補は絶対pathで指定する");
+            assert!(bundled.is_file(), "配布候補がない: {}", bundled.display());
+
+            let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|directory| directory.join("git"))
+                .find(|candidate| candidate.is_file())
+                .expect("gitがPATHにある");
+            let isolated = tempdir().unwrap();
+            let isolated_git = isolated.path().join("git");
+            std::os::unix::fs::symlink(git, &isolated_git).unwrap();
+            let isolated_path = std::env::join_paths([isolated.path()]).unwrap();
+
+            let ambient = std::process::Command::new(&isolated_git)
+                .args(["lfs", "version"])
+                .env("PATH", &isolated_path)
+                .output()
+                .unwrap();
+            assert!(!ambient.status.success(), "隔離PATHにgit-lfsが混入している");
+
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "lfs::tests::bundled_git_lfs_works_without_an_ambient_installation",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("PATH", isolated_path)
+                .env(CHILD_MARKER, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "同梱git-lfs受入に失敗\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let expected = std::fs::canonicalize(std::env::var_os("KB_GIT_LFS_BIN").unwrap()).unwrap();
+        let actual = std::fs::canonicalize(crate::external_tools::git_lfs_binary()).unwrap();
+        assert_eq!(actual, expected, "同梱候補以外のgit-lfsを解決した");
+        assert!(lfs_ready());
+
+        let dir = tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        ensure_vault_config(&vault).unwrap();
+        let src = dir.path().join("bundled.bin");
+        let bytes: Vec<u8> = (0..900_000).map(|index| (index % 251) as u8).collect();
+        fs::write(&src, &bytes).unwrap();
+        let (hash, size) = import(&vault, &src).unwrap();
+
+        assert_eq!(size, bytes.len() as u64);
+        assert_eq!(verify(&vault, &hash).unwrap(), Verified::Ok);
+        assert!(
+            fs::metadata(tracked_path(&vault, &hash)).unwrap().len() < 1024,
+            "同梱版でpointer化されていない"
         );
     }
 }

@@ -392,21 +392,60 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use clap::CommandFactory;
 
     use super::Cli;
 
-    /// ノートの書き込みは AI 経路だけ。CLI に人間所有の抜け道を戻さない。
-    #[test]
-    fn human_note_write_commands_are_not_exposed() {
-        let command = Cli::command();
-        for removed in ["new", "archive", "delete"] {
-            assert!(
-                command.find_subcommand(removed).is_none(),
-                "{removed} を CLI に公開してはいけない"
-            );
+    fn command_paths(command: &clap::Command, prefix: Option<&str>, paths: &mut BTreeSet<String>) {
+        for subcommand in command.get_subcommands() {
+            // clapが自動生成するhelpは公開APIの追加ではない。
+            if subcommand.get_name() == "help" {
+                continue;
+            }
+            let path = match prefix {
+                Some(prefix) => format!("{prefix} {}", subcommand.get_name()),
+                None => subcommand.get_name().to_string(),
+            };
+            paths.insert(path.clone());
+            command_paths(subcommand, Some(&path), paths);
         }
-        assert!(command.find_subcommand("propose").is_some());
+    }
+
+    /// CLI の公開面を完全一致で固定する。`edit` を含む人間所有の書き込み口や、
+    /// 将来追加された未監査commandを「禁止名の列挙漏れ」で通さない。
+    #[test]
+    fn cli_command_tree_matches_the_reviewed_allowlist() {
+        let mut actual = BTreeSet::new();
+        command_paths(&Cli::command(), None, &mut actual);
+        let expected = BTreeSet::from([
+            "care".to_string(),
+            "care dismiss".to_string(),
+            "care list".to_string(),
+            "embed".to_string(),
+            "embed enable".to_string(),
+            "embed status".to_string(),
+            "get".to_string(),
+            "import".to_string(),
+            "mcp".to_string(),
+            "migrate-files".to_string(),
+            "propose".to_string(),
+            "recent".to_string(),
+            "search".to_string(),
+            "storage".to_string(),
+            "storage export".to_string(),
+            "storage verify".to_string(),
+            "sync".to_string(),
+            "vault".to_string(),
+            "vault create".to_string(),
+            "vault list".to_string(),
+        ]);
+
+        assert_eq!(
+            actual, expected,
+            "CLI commandを追加・削除する場合は、所有境界を監査してallowlistも更新する"
+        );
     }
 
     #[test]

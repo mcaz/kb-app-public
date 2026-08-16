@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run prepare:git-lfs && npm run dev",
+    "beforeBuildCommand": "npm run prepare:git-lfs && npm run build"
   },
   "app": {
     "windows": [
@@ -29,6 +29,10 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": ["binaries/git-lfs"],
+    "resources": {
+      "../../third_party/git-lfs/LICENSE.md": "licenses/git-lfs-LICENSE.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
