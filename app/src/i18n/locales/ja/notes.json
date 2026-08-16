@@ -10,7 +10,6 @@
     "previewEmpty": "結果を選ぶと、ここに内容が表示されます。",
     "backToResults": "検索結果へ戻る",
     "openNote": "ノートを開く",
-    "degraded": "検索の一部が一時的に使えません。利用可能な結果を表示しています。",
     "clearFilters": "フィルターを解除",
     "removeFilter": "{{tag}} の絞り込みを外す",
     "keyMove": "↑↓ 選択",

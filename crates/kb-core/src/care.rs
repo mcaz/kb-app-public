@@ -64,7 +64,7 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
                 r.get::<_, String>(2)?,
             ))
         })?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.collect::<std::result::Result<_, _>>()?
     };
     let tag_validator = crate::tags::validator(conn)?;
     for (id, title, raw_tags) in notes {
@@ -101,17 +101,17 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
 
     // ③ 語彙表に読めない行(沈黙しない — fail-open を選んだ経路は劣化を可視化する)。
     // 語彙表の行を黙って捨てると、合意したはずのタグが一覧から消えたまま気づけない。
+    let glossary = crate::tags::glossary(conn)?;
     if added < budget
-        && let Ok(g) = crate::tags::glossary(conn)
-        && !g.skipped.is_empty()
-        && let Some(note) = g.note_id.clone()
+        && !glossary.skipped.is_empty()
+        && let Some(note) = glossary.note_id.clone()
     {
-        let key = format!("glossary:{note}:{}", g.skipped.len());
+        let key = format!("glossary:{note}:{}", glossary.skipped.len());
         let detail = format!(
             "「タグ運用」ノートの語彙表に、タグとして読めない行が {} 行あります({})。\
 形は英小文字・数字・ハイフンです。",
-            g.skipped.len(),
-            g.skipped.join("、")
+            glossary.skipped.len(),
+            glossary.skipped.join("、")
         );
         if insert_new(conn, &key, "glossary", &note, "", &detail)? {
             added += 1;
@@ -127,7 +127,7 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
              WHERE d.id IS NULL",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.collect::<std::result::Result<_, _>>()?
     };
     for (src, dst) in broken {
         if added >= budget {

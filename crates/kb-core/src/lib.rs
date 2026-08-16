@@ -9,6 +9,7 @@ pub mod artifact_search;
 pub mod backup;
 pub mod care;
 pub mod connect;
+pub mod degradation;
 pub mod embed;
 pub mod favorites;
 pub mod frontmatter;

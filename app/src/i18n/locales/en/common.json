@@ -57,6 +57,21 @@
     "languageEn": "English",
     "note": "These settings are stored on this device only (they never go into your notes)."
   },
+  "degradation": {
+    "remote_sync": "Sync failed: {{detail}}",
+    "index_sync": "The index could not be updated. Results may be stale: {{detail}}",
+    "embedding_index_pending": "The smart-search index is catching up ({{remaining}} remaining)",
+    "embedding_index": "The smart-search index could not be updated: {{detail}}",
+    "main_search": "Primary search is unavailable. Showing the results that were retrieved: {{detail}}",
+    "semantic_search": "Smart search is unavailable. Showing full-text results: {{detail}}",
+    "rescue_search": "Partial-match search is unavailable. Showing the results that were retrieved: {{detail}}",
+    "related_notes": "Linked notes could not be retrieved. An empty list may not mean zero: {{detail}}",
+    "similar_notes": "Similar notes could not be retrieved. An empty list may not mean zero: {{detail}}",
+    "current_note_context": "The current-note context could not be recorded for the AI: {{detail}}",
+    "care_detection": "Care suggestions could not be detected: {{detail}}",
+    "care_list": "Care suggestions could not be retrieved. An empty list may not mean zero: {{detail}}",
+    "tag_counts": "Tags could not be retrieved. An empty list may not mean zero: {{detail}}"
+  },
   "errors": {
     "noteNotFound": "That note doesn’t exist yet",
     "fileTooLarge": "Files larger than {{limit}}MB can’t be synced",

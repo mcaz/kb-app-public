@@ -11,6 +11,8 @@ import { paginate } from "@/lib/hits";
 import { useConnectState, useHomeState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
+import type { Degradation } from "@/lib/api";
+
 const RECENT_PER_PAGE = 6;
 
 /** ホーム(健全性の要約・最近のノート)。 */
@@ -36,15 +38,17 @@ export function HomePage() {
         ? t("tile.backupPending", { count: connect.backup.pending })
         : t("tile.backupOk");
 
-  const warnings = [
+  const warnings: Degradation[] = [
     ...home.degraded,
-    ...(connect?.sync_error ? [t("warning.syncError", { error: connect.sync_error })] : []),
+    ...(connect?.sync_error && !home.degraded.some((item) => item.code === "remote_sync")
+      ? [{ code: "remote_sync" as const, detail: connect.sync_error }]
+      : []),
   ];
 
   return (
     <SinglePaneLayout>
       <div className="px-6 py-5">
-        <DegradedBanner messages={warnings} variant="card" />
+        <DegradedBanner items={warnings} variant="card" />
 
         <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2.5">
           <StatTile

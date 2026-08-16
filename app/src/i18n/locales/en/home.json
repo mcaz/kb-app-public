@@ -12,8 +12,5 @@
   },
   "recent": {
     "head": "Recent notes"
-  },
-  "warning": {
-    "syncError": "Sync error: {{error}}"
   }
 }

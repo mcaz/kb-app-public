@@ -23,33 +23,65 @@ pub struct NoteView {
     generated_at: Option<String>,
     related: Vec<(String, Option<String>)>,
     similar: Vec<(String, Option<String>, f32)>,
+    degraded: Vec<kb_core::degradation::Degradation>,
     vault_root: String,
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn note_get(state: State<'_, AppState>, id: String) -> AppResult<NoteView> {
-    state.with_index(Sync::Throttled, |vault, conn, _| {
-        let note = vault
-            .read_note(&id)
-            .map_err(|_| AppError::NoteNotFound { id: id.clone() })?;
-        // 「このノート」文脈(FR-A5): 開いたノートを現在ノートとして記録
-        // (MCP の get 引数なしがこれを返す)。失敗しても表示は続ける
-        let _ = kb_core::connect::set_current_note(vault, &id);
-        Ok(NoteView {
-            title: note.front.title.clone().unwrap_or_else(|| id.clone()),
-            description: note.front.description.clone(),
-            body: note.body.clone(),
-            status: note.front.effective_status().to_string(),
-            origin: note.front.origin.clone(),
-            tags: note.front.tags.clone(),
-            created_at: note.front.created_at(),
-            generated_at: note.front.updated_at(),
-            related: related_of(conn, Some(&id)).unwrap_or_default(),
-            similar: kb_core::search::similar_notes(conn, &id, 6).unwrap_or_default(),
-            vault_root: vault.root.display().to_string(),
-            id: id.clone(),
-        })
+    state.with_index(Sync::Throttled, |vault, conn, degraded| {
+        note_view_from(vault, conn, &id, degraded)
+    })
+}
+
+fn note_view_from(
+    vault: &kb_core::vault::Vault,
+    conn: &kb_core::rusqlite::Connection,
+    id: &str,
+    mut degraded: Vec<kb_core::degradation::Degradation>,
+) -> AppResult<NoteView> {
+    let note = vault
+        .read_note(id)
+        .map_err(|_| AppError::NoteNotFound { id: id.to_string() })?;
+    // 本文は表示できるので、現在ノート文脈や派生索引の失敗だけを型付きで添える。
+    if let Err(error) = kb_core::connect::set_current_note(vault, id) {
+        degraded.push(kb_core::degradation::Degradation::CurrentNoteContext {
+            detail: error.to_string(),
+        });
+    }
+    let related = match related_of(conn, Some(id)) {
+        Ok(related) => related,
+        Err(error) => {
+            degraded.push(kb_core::degradation::Degradation::RelatedNotes {
+                detail: error.to_string(),
+            });
+            Vec::new()
+        }
+    };
+    let similar = match kb_core::search::similar_notes(conn, id, 6) {
+        Ok(similar) => similar,
+        Err(error) => {
+            degraded.push(kb_core::degradation::Degradation::SimilarNotes {
+                detail: error.to_string(),
+            });
+            Vec::new()
+        }
+    };
+    Ok(NoteView {
+        title: note.front.title.clone().unwrap_or_else(|| id.to_string()),
+        description: note.front.description.clone(),
+        body: note.body.clone(),
+        status: note.front.effective_status().to_string(),
+        origin: note.front.origin.clone(),
+        tags: note.front.tags.clone(),
+        created_at: note.front.created_at(),
+        generated_at: note.front.updated_at(),
+        related,
+        similar,
+        degraded,
+        vault_root: vault.root.display().to_string(),
+        id: id.to_string(),
     })
 }
 
@@ -62,6 +94,52 @@ pub fn note_search(state: State<'_, AppState>, query: String) -> AppResult<Searc
         out.degraded.extend(degraded);
         Ok(out)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kb_core::index::{open_db, sync};
+    use kb_core::vault::{NoteProposal, Vault};
+
+    /// 2026-08-16までは関連・近いノートのDB失敗が空配列になり、0件と見分けられなかった。
+    #[test]
+    fn note_body_survives_partial_failures_with_typed_degradations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "本文は読める",
+                    body: "本文",
+                    description: None,
+                    tags: &["test".into()],
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+        conn.execute_batch("DROP TABLE links; DROP TABLE note_vecs;")
+            .unwrap();
+
+        let view = note_view_from(&vault, &conn, &id, Vec::new()).unwrap();
+        assert_eq!(view.body, "本文\n");
+        assert!(view.related.is_empty());
+        assert!(view.similar.is_empty());
+        assert!(
+            view.degraded
+                .iter()
+                .any(|item| matches!(item, kb_core::degradation::Degradation::RelatedNotes { .. }))
+        );
+        assert!(
+            view.degraded
+                .iter()
+                .any(|item| matches!(item, kb_core::degradation::Degradation::SimilarNotes { .. }))
+        );
+    }
 }
 
 /// サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。

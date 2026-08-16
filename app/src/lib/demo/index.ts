@@ -43,6 +43,7 @@ const notes: NoteView[] = [
       "- 住所変更: 免許・銀行・[確定申告の準備](/notes/確定申告の準備.md)にも影響\n",
     related: [["notes/確定申告の準備", "確定申告の準備"]],
     similar: [["notes/沖縄旅行の持ち物リスト", "沖縄旅行の持ち物リスト", 0.42]],
+    degraded: [],
     vault_root: "(demo)",
   },
   {
@@ -57,6 +58,7 @@ const notes: NoteView[] = [
     body: "医療費の領収書を集める。\n",
     related: [],
     similar: [["notes/引っ越し手続きメモ", "引っ越し手続きメモ", 0.38]],
+    degraded: [],
     vault_root: "(demo)",
   },
   {
@@ -71,6 +73,7 @@ const notes: NoteView[] = [
     body: "会話でまとめた持ち物:\n\n- 日焼け止め\n- モバイルバッテリー\n- 子どもの浮き輪\n",
     related: [],
     similar: [],
+    degraded: [],
     vault_root: "(demo)",
   },
   {
@@ -85,6 +88,7 @@ const notes: NoteView[] = [
     body: "まず全文検索を正常系として整え、意味検索は段階的に追加する。\n",
     related: [],
     similar: [],
+    degraded: [],
     vault_root: "(demo)",
   },
   {
@@ -99,6 +103,7 @@ const notes: NoteView[] = [
     body: "利用者が現在地と次の行き先を判断できる手がかりを用意する。\n",
     related: [],
     similar: [],
+    degraded: [],
     vault_root: "(demo)",
   },
   {
@@ -113,6 +118,7 @@ const notes: NoteView[] = [
     body: "サイドバーにはカテゴリと件数を表示する。カテゴリを選ぶと右側全体を一覧にし、ノートを選ぶと同じ領域を本文へ切り替える。\n",
     related: [],
     similar: [],
+    degraded: [],
     vault_root: "(demo)",
   },
 ];
@@ -264,6 +270,7 @@ export const demoApi = {
         { tag: "旅行", count: 1, description: null },
       ],
       glossary_note: "notes/タグ運用",
+      degraded: [],
     }),
   noteGet: (id: string): Promise<NoteView> => {
     const found = notes.find((n) => n.id === id);

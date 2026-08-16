@@ -127,14 +127,16 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
 
 /// sync の後段: 未埋め込みノートの追い付き(1回あたり少数に制限し、残は劣化情報で見せる)。
 /// モデル未導入なら None(段0 の正常形 — 劣化ではない)。
-pub fn embed_step(conn: &Connection) -> Option<String> {
+pub fn embed_step(conn: &Connection) -> Option<crate::degradation::Degradation> {
     if !crate::embed::model_installed() {
         return None;
     }
     match crate::embed::embed_pending(conn, 5) {
         Ok(0) => None,
-        Ok(rest) => Some(format!("かしこい検索の索引が追い付き中(残り {rest} 件)")),
-        Err(e) => Some(format!("かしこい検索が一時停止(全文検索のみ): {e}")),
+        Ok(remaining) => Some(crate::degradation::Degradation::EmbeddingIndexPending { remaining }),
+        Err(error) => Some(crate::degradation::Degradation::EmbeddingIndex {
+            detail: error.to_string(),
+        }),
     }
 }
 

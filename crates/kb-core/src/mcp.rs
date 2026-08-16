@@ -218,21 +218,22 @@ fn tool_definitions() -> Value {
 fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<String> {
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
     // スロットリング付き・失敗は劣化情報(fail-open)
-    let pull_note = crate::connect::pull_if_stale(vault);
+    let mut degraded: Vec<crate::degradation::Degradation> =
+        crate::connect::pull_if_stale(vault).into_iter().collect();
     let conn = open_db(vault)?;
     // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
-    let sync_note = match sync(vault, &conn) {
-        Ok(_) => pull_note.or_else(|| crate::index::embed_step(&conn)),
-        Err(e) => Some(format!("索引の更新に失敗(結果が古い可能性): {e}")),
-    };
+    match sync(vault, &conn) {
+        Ok(_) => degraded.extend(crate::index::embed_step(&conn)),
+        Err(error) => degraded.push(crate::degradation::Degradation::IndexSync {
+            detail: error.to_string(),
+        }),
+    }
     match name {
         "search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
             let mut out = search(&conn, query, limit);
-            if let Some(s) = sync_note {
-                out.degraded.push(s);
-            }
+            out.degraded.extend(degraded);
             let mut text = String::new();
             if out.hits.is_empty() {
                 text.push_str("該当なし。\n");
@@ -255,9 +256,7 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 text.push_str(&rel.join(", "));
                 text.push('\n');
             }
-            for d in &out.degraded {
-                text.push_str(&format!("⚠ 劣化: {d}\n"));
-            }
+            text.push_str(&degradation_text(&out.degraded));
             Ok(text)
         }
         "get" => {
@@ -283,7 +282,15 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 )
             };
             // 関連を決めるのは AI(2026-08-11 方針)。判断材料として近いノートを添える
-            let similar = crate::search::similar_notes(&conn, &id, 5).unwrap_or_default();
+            let similar = match crate::search::similar_notes(&conn, &id, 5) {
+                Ok(similar) => similar,
+                Err(error) => {
+                    degraded.push(crate::degradation::Degradation::SimilarNotes {
+                        detail: error.to_string(),
+                    });
+                    Vec::new()
+                }
+            };
             let sim_line = if similar.is_empty() {
                 String::new()
             } else {
@@ -300,14 +307,15 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 )
             };
             Ok(format!(
-                "(note: {id})\n{attach_line}{sim_line}{}",
+                "(note: {id})\n{attach_line}{sim_line}{}{}",
+                degradation_text(&degraded),
                 note.to_file_string()?
             ))
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
             let hits = recent(&conn, limit)?;
-            Ok(hits
+            let text = hits
                 .iter()
                 .map(|h| {
                     format!(
@@ -318,7 +326,8 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     )
                 })
                 .collect::<Vec<_>>()
-                .join("\n"))
+                .join("\n");
+            Ok(with_degradations(text, &degraded))
         }
         "propose" => {
             let title = args
@@ -362,7 +371,10 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             } else {
                 ""
             };
-            Ok(format!("起票した: {id}。{added}"))
+            Ok(with_degradations(
+                format!("起票した: {id}。{added}"),
+                &degraded,
+            ))
         }
         "update" => {
             let id = args
@@ -390,7 +402,7 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     client,
                 },
             )?;
-            Ok(format!("更新した: {id}"))
+            Ok(with_degradations(format!("更新した: {id}"), &degraded))
         }
         "remove" => {
             let id = args
@@ -398,8 +410,43 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
             vault.agent_delete_note(id, client)?;
-            Ok(format!("削除した: {id}(履歴には残る)"))
+            Ok(with_degradations(
+                format!("削除した: {id}(履歴には残る)"),
+                &degraded,
+            ))
         }
         other => anyhow::bail!("unknown tool: {other}"),
+    }
+}
+
+fn degradation_text(degraded: &[crate::degradation::Degradation]) -> String {
+    degraded
+        .iter()
+        .map(|item| format!("⚠ 劣化 [{}]: {item}\n", item.code()))
+        .collect()
+}
+
+fn with_degradations(mut text: String, degraded: &[crate::degradation::Degradation]) -> String {
+    if degraded.is_empty() {
+        return text;
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&degradation_text(degraded));
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_degradation_keeps_the_stable_code() {
+        let text = degradation_text(&[crate::degradation::Degradation::SimilarNotes {
+            detail: "db locked".into(),
+        }]);
+        assert!(text.contains("[similar_notes]"), "{text}");
+        assert!(text.contains("db locked"), "{text}");
     }
 }

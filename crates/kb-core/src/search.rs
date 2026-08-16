@@ -3,8 +3,9 @@
 //! 検索 API は Result で全滅させず「結果+劣化情報」を返す(fail-open を型で強制、原則4)。
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
+use crate::degradation::Degradation;
 use crate::tokenize::match_expr;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -35,7 +36,7 @@ pub struct SearchOutcome {
     /// 上位ヒットから1ホップのリンク先・被リンク(id, title)
     pub related: Vec<(String, Option<String>)>,
     /// 劣化情報(空 = 全経路正常)。UI/クライアントに必ず見せる
-    pub degraded: Vec<String>,
+    pub degraded: Vec<Degradation>,
 }
 
 pub fn search(conn: &Connection, query: &str, limit: usize) -> SearchOutcome {
@@ -51,7 +52,9 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
     // 主経路: lindera 分かち書き + bm25
     match main_search(conn, query, limit, any) {
         Ok(main_hits) => hits.extend(main_hits),
-        Err(e) => degraded.push(format!("主索引が利用できない: {e}")),
+        Err(error) => degraded.push(Degradation::MainSearch {
+            detail: error.to_string(),
+        }),
     }
 
     // 意味検索(段1)。モデル未導入なら黙って全文のみ(段0 の正常形)。
@@ -59,7 +62,9 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
     match vec_search(conn, query, limit) {
         Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
         Ok(None) => {}
-        Err(e) => degraded.push(format!("かしこい検索が一時停止(全文検索のみ): {e}")),
+        Err(error) => degraded.push(Degradation::SemanticSearch {
+            detail: error.to_string(),
+        }),
     }
 
     // レスキュー経路: 主経路で拾えない部分語・未知語形(常に実行し、差分だけ足す)
@@ -74,10 +79,20 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
                 }
             }
         }
-        Err(e) => degraded.push(format!("レスキュー索引が利用できない: {e}")),
+        Err(error) => degraded.push(Degradation::RescueSearch {
+            detail: error.to_string(),
+        }),
     }
 
-    let related = related_of(conn, hits.first().map(|h| h.id.as_str())).unwrap_or_default();
+    let related = match related_of(conn, hits.first().map(|hit| hit.id.as_str())) {
+        Ok(related) => related,
+        Err(error) => {
+            degraded.push(Degradation::RelatedNotes {
+                detail: error.to_string(),
+            });
+            Vec::new()
+        }
+    };
     SearchOutcome {
         hits,
         related,
@@ -323,7 +338,7 @@ pub fn similar_notes(
             rusqlite::params![id, embed::EMBED_STAMP],
             |r| r.get(0),
         )
-        .ok();
+        .optional()?;
     let Some(blob) = blob else {
         return Ok(Vec::new());
     }; // 未埋め込み・段0 は空
@@ -333,7 +348,7 @@ pub fn similar_notes(
             "SELECT dst FROM links WHERE src = ?1 UNION SELECT src FROM links WHERE dst = ?1",
         )?;
         let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
-        rows.filter_map(|r| r.ok()).collect()
+        rows.collect::<std::result::Result<_, _>>()?
     };
     let mut out = Vec::new();
     let mut stmt =
@@ -710,6 +725,35 @@ mod tests {
         let out = super::search(&conn, "サイクル", 10);
         assert_eq!(out.hits.len(), 1, "{:?}", out.hits);
         assert_eq!(out.hits[0].via, "rescue");
+    }
+
+    /// 2026-08-16までは関連取得のDB失敗が空配列になり、本当の0件と区別できなかった。
+    #[test]
+    fn related_failure_keeps_search_hits_and_adds_a_typed_degradation() {
+        let (_d, _v, conn) = setup();
+        conn.execute_batch("DROP TABLE links").unwrap();
+
+        let out = super::search(&conn, "認証", 10);
+        assert_eq!(out.hits.len(), 1);
+        assert!(out.related.is_empty());
+        assert!(
+            out.degraded
+                .iter()
+                .any(|item| matches!(item, crate::degradation::Degradation::RelatedNotes { .. }))
+        );
+    }
+
+    /// 未埋め込みは正常な空だが、埋め込み表そのものの故障は部分失敗として返す。
+    #[test]
+    fn similar_notes_distinguishes_missing_data_from_a_broken_index() {
+        let (_d, _v, conn) = setup();
+        assert!(
+            super::similar_notes(&conn, "notes/認証設計メモ", 5)
+                .unwrap()
+                .is_empty()
+        );
+        conn.execute_batch("DROP TABLE note_vecs").unwrap();
+        assert!(super::similar_notes(&conn, "notes/認証設計メモ", 5).is_err());
     }
 
     #[test]
