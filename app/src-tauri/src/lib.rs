@@ -16,7 +16,7 @@ pub mod state;
 use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events};
 
-use commands::{connect, favorites, files, home, notes, setup};
+use commands::{connect, favorites, files, home, notes, settings, setup};
 
 /// GUI が呼べるコマンドとイベントの全集合。ここが `app/src/lib/bindings.ts` の正本。
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
@@ -25,6 +25,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             setup::setup_state,
             setup::onboard,
             setup::onboard_existing,
+            settings::settings_get,
+            settings::settings_set_ai_kb_enabled,
             home::home_state,
             home::tag_overview,
             home::care_dismiss,

@@ -13,6 +13,19 @@ export { queryKeys };
 
 export const useSetupState = () => useQuery({ queryKey: queryKeys.setup, queryFn: api.setupState });
 
+export const useSettings = () =>
+  useQuery({ queryKey: queryKeys.settings, queryFn: api.settingsGet });
+
+export function useSetAiKbEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsSetAiKbEnabled,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.settings, settings);
+    },
+  });
+}
+
 export const useHomeState = () => useQuery({ queryKey: queryKeys.home, queryFn: api.homeState });
 
 export const useTagOverview = () =>

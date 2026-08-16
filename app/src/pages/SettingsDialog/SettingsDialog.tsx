@@ -1,4 +1,4 @@
-import { Palette, Plug, Settings } from "lucide-react";
+import { Brain, Palette, Plug, Settings } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
 import { ConnectPage } from "@/pages/ConnectPage";
+import { KnowledgeBaseSettingsPage } from "@/pages/KnowledgeBaseSettingsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 export interface SettingsDialogProps {
@@ -17,13 +18,14 @@ export interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type SettingsSection = "connect" | "theme";
+type SettingsSection = "kb" | "connect" | "theme";
 
-/** 接続と端末設定を、アプリ本体の画面遷移を変えずにまとめて扱う。 */
+/** KB利用・接続・端末設定を、アプリ本体の画面遷移を変えずにまとめて扱う。 */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const { t } = useTranslation("common");
-  const [section, setSection] = useState<SettingsSection>("connect");
+  const [section, setSection] = useState<SettingsSection>("kb");
   const items = [
+    { id: "kb" as const, icon: Brain, label: t("settings.kbUsage") },
     { id: "connect" as const, icon: Plug, label: t("nav.connect") },
     { id: "theme" as const, icon: Palette, label: t("settings.theme") },
   ];
@@ -60,7 +62,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </aside>
 
         <div className="flex min-h-0 min-w-0 overflow-hidden">
-          {section === "connect" ? <ConnectPage /> : <SettingsPage />}
+          {section === "kb" ? (
+            <KnowledgeBaseSettingsPage />
+          ) : section === "connect" ? (
+            <ConnectPage />
+          ) : (
+            <SettingsPage />
+          )}
         </div>
       </DialogContent>
     </Dialog>

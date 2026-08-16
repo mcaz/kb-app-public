@@ -16,6 +16,7 @@ import type {
   NoteSummary,
   NoteView,
   SearchOutcome,
+  Settings,
   SetupState,
   TagOverview,
 } from "@/lib/api/types";
@@ -233,6 +234,8 @@ let githubAuth: GitHubAuthState = {
 const delay = <T>(value: T): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), 30));
 
+let settings: Settings = { ai_kb_enabled: true };
+
 export const demoApi = {
   setupState: (): Promise<SetupState> =>
     delay({
@@ -240,6 +243,11 @@ export const demoApi = {
       vault_name: "わたしのノート",
       vault_path: "(demo)",
     }),
+  settingsGet: (): Promise<Settings> => delay(settings),
+  settingsSetAiKbEnabled: (enabled: boolean): Promise<Settings> => {
+    settings = { ai_kb_enabled: enabled };
+    return delay(settings);
+  },
   onboard: (): Promise<SetupState> =>
     delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" }),
   homeState: (): Promise<HomeState> =>

@@ -14,6 +14,8 @@ export const commands = {
 	 *  復元先は未使用 path を選び、既存フォルダへ overlay しない。
 	 */
 	onboardExisting: (url: string) => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard_existing", { url })),
+	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
+	settingsSetAiKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_ai_kb_enabled", { enabled })),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
@@ -438,6 +440,10 @@ export type SearchOutcome_Serialize = {
  *  (統合すると、正本が分けた軸を画面で混ぜ直すことになる)。
  */
 export type Sensitivity = "private" | "shared";
+
+export type Settings = {
+	ai_kb_enabled?: boolean,
+};
 
 export type SetupState = {
 	needs_onboarding: boolean,

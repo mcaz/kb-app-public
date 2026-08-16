@@ -1,6 +1,7 @@
 /** キャッシュキーの一覧。無効化のたびに文字列を書くのをやめ、ここへ集約する。 */
 export const queryKeys = {
   setup: ["setup"] as const,
+  settings: ["settings"] as const,
   home: ["home"] as const,
   tagOverview: ["tagOverview"] as const,
   favorites: ["favorites"] as const,
