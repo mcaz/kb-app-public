@@ -84,7 +84,8 @@
     "clipboardImageTooLarge": "The pasted image is too large. Save it as a file and import that instead",
     "claudeDesktopNotFound": "Claude Desktop not found",
     "claudeDesktopLaunchFailed": "Could not launch Claude Desktop (check that it is installed)",
-    "backupFailed": "Backup failed: {{message}}",
+    "backupFailed": "Backup failed",
+    "backupFailedDetail": "Backup failed: {{message}}",
     "backupAuthentication": "Sign in to GitHub again, then retry",
     "backupPermission": "Write access to this repository could not be verified",
     "backupPrivacyCheck": "Upload stopped because the destination could not be verified as a private repository",
@@ -103,7 +104,12 @@
     "backupGitPush": "Changes from this device could not be sent to the backup",
     "backupGitPull": "The latest state could not be retrieved from the backup",
     "backupGitConflict": "Changes from another device conflict with this device. Nothing was overwritten automatically",
-    "embedFailed": "Could not set up smart search: {{message}}",
-    "vaultUnavailable": "Could not open your notes: {{message}}"
+    "embedFailed": "Could not set up smart search",
+    "vaultUnavailable": "Could not open your notes",
+    "coreInvalidInput": "The input or stored data is not valid",
+    "coreStorage": "Could not read or write data on this device",
+    "coreIndex": "Could not read or write the search index",
+    "coreConfiguration": "Could not read or write settings",
+    "unexpected": "An unexpected error occurred"
   }
 }

@@ -6,8 +6,7 @@ export type { AppError };
  * コアが返したエラー。`detail.code` で種類が分かるので、画面はそれを訳す。
  *
  * Error を継承しているのは TanStack Query が例外としてエラー状態に載せるため。
- * message には日本語の文言(コア由来)が入るが、表示にはできるだけ
- * `code` からの訳を使う — message はまだ日本語固定のため(ADR-0002 の限界)。
+ * message はログ用。画面は `code` / `kind` から必ず翻訳する。
  */
 export class KbError extends Error {
   readonly detail: AppError;
@@ -23,8 +22,13 @@ export class KbError extends Error {
 function describe(detail: AppError): string {
   switch (detail.code) {
     case "vault_unavailable":
+      return "vault unavailable";
     case "backup_failed":
+      return `backup failed: ${detail.kind ?? "unknown"}`;
     case "embed_failed":
+      return "embedding failed";
+    case "core_failed":
+      return `core failed: ${detail.kind}`;
     case "unexpected":
       return detail.message;
     case "note_not_found":

@@ -7,19 +7,19 @@
 //! ここで種類を型にすると specta が TS 側へ判別可能な union として書き出すので、
 //! 画面は `code` で訳し分けられる。
 //!
-//! **限界**: kb-core は anyhow を使っており内部のエラーは文字列のままなので、
-//! 分類できるのは Tauri 層が文脈を知っている場合に限られる。それ以外は
-//! `Unexpected` に落ち、コアの日本語文言をそのまま運ぶ。コア側を型付きエラーに
-//! するのは別の作業(ADR-0002 の残課題)。
+//! `CoreError` は診断詳細をコア側に保持し、この境界では安定した kind だけへ
+//! 変換する。`From<anyhow::Error>` は意図的に実装しない。新しいコア呼び出しを
+//! 分類せず追加するとコンパイルで止まり、内部文言が画面へ漏れない。
 
 use kb_core::artifact::ArtifactError;
+use kb_core::error::{CoreError, CoreErrorKind};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, specta::Type)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AppError {
     /// vault を開けない(未オンボーディング・レジストリの不整合)。
-    VaultUnavailable { message: String },
+    VaultUnavailable,
     /// 指定 ID のノートが無い(消された・まだ書かれていない)。
     NoteNotFound { id: String },
     /// 「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。
@@ -46,20 +46,20 @@ pub enum AppError {
     /// バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。
     BackupFailed {
         kind: Option<kb_core::backup::BackupFailureKind>,
-        message: String,
     },
     /// かしこい検索の準備に失敗。
-    EmbedFailed { message: String },
-    /// 分類できないもの。message はコアが返した文言(いまは日本語)。
+    EmbedFailed,
+    /// コアの失敗。診断詳細は画面へ運ばず、kindだけを翻訳する。
+    CoreFailed { kind: CoreErrorKind },
+    /// Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。
     Unexpected { message: String },
 }
 
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::VaultUnavailable { message } | Self::Unexpected { message } => {
-                write!(f, "{message}")
-            }
+            Self::VaultUnavailable => write!(f, "vault unavailable"),
+            Self::Unexpected { message } => write!(f, "{message}"),
             Self::NoteNotFound { id } => write!(f, "ノートが見つからない: {id}"),
             Self::FileTooLarge { size, limit } => write!(f, "大きすぎる({size} > {limit})"),
             Self::FileConflict { expected, current } => {
@@ -75,26 +75,26 @@ impl std::fmt::Display for AppError {
             Self::ClipboardImageTooLarge => write!(f, "クリップボードの画像が大きすぎる"),
             Self::ClaudeDesktopNotFound => write!(f, "Claude Desktop が見つからない"),
             Self::ClaudeDesktopLaunchFailed => write!(f, "Claude Desktop を起動できなかった"),
-            Self::BackupFailed { message, .. } => write!(f, "バックアップに失敗: {message}"),
-            Self::EmbedFailed { message } => write!(f, "かしこい検索の準備に失敗: {message}"),
+            Self::BackupFailed { kind } => write!(f, "backup failed: {kind:?}"),
+            Self::EmbedFailed => write!(f, "embedding failed"),
+            Self::CoreFailed { kind } => write!(f, "core failed: {}", kind.code()),
         }
     }
 }
 
 impl std::error::Error for AppError {}
 
-/// コア(anyhow)のエラーは基本的に分類できないので Unexpected に落とす。
-/// ただし Artifact 層だけは型付きなので、包まれていても取り出して訳せるようにする。
-impl From<anyhow::Error> for AppError {
-    fn from(e: anyhow::Error) -> Self {
-        if kb_core::backup::failure_kind(&e).is_some() {
-            return Self::backup(e);
-        }
-        match e.downcast_ref::<ArtifactError>() {
-            Some(artifact) => artifact.clone().into(),
-            None => Self::Unexpected {
-                message: e.to_string(),
+impl From<CoreError> for AppError {
+    fn from(error: CoreError) -> Self {
+        match error {
+            CoreError::Operation { kind, .. } => match kind {
+                CoreErrorKind::VaultUnavailable => Self::VaultUnavailable,
+                CoreErrorKind::Embedding => Self::EmbedFailed,
+                kind => Self::CoreFailed { kind },
             },
+            CoreError::NoteNotFound { id } => Self::NoteNotFound { id },
+            CoreError::Backup { kind, .. } => Self::BackupFailed { kind },
+            CoreError::Artifact(error) => error.into(),
         }
     }
 }
@@ -132,11 +132,36 @@ impl AppError {
         }
     }
 
-    pub fn backup(error: anyhow::Error) -> Self {
-        Self::BackupFailed {
-            kind: kb_core::backup::failure_kind(&error),
-            message: error.to_string(),
-        }
+    pub fn vault(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::vault(error).into()
+    }
+
+    pub fn invalid_input(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::invalid_input(error).into()
+    }
+
+    pub fn note_not_found(id: impl Into<String>) -> Self {
+        CoreError::note_not_found(id).into()
+    }
+
+    pub fn storage(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::storage(error).into()
+    }
+
+    pub fn index(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::index(error).into()
+    }
+
+    pub fn configuration(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::configuration(error).into()
+    }
+
+    pub fn embed(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::embedding(error).into()
+    }
+
+    pub fn backup(error: impl Into<anyhow::Error>) -> Self {
+        CoreError::backup(error).into()
     }
 }
 
@@ -151,11 +176,22 @@ mod tests {
         let error =
             kb_core::github::parse_repository_url("https://example.com/not-github").unwrap_err();
         match AppError::backup(error) {
-            AppError::BackupFailed { kind, .. } => assert_eq!(
+            AppError::BackupFailed { kind } => assert_eq!(
                 kind,
                 Some(kb_core::backup::BackupFailureKind::InvalidRepository)
             ),
             other => panic!("別のエラーへ変換された: {other}"),
         }
+    }
+
+    /// 2026-08-16まではcoreの日本語detailがUnexpected.messageとして英語UIにも届いた。
+    #[test]
+    fn core_diagnostic_detail_never_reaches_serialized_app_error() {
+        let error = AppError::from(CoreError::index(anyhow::anyhow!(
+            "画面へ出してはいけない診断"
+        )));
+        let json = serde_json::to_string(&error).unwrap();
+        assert_eq!(json, r#"{"code":"core_failed","kind":"index"}"#);
+        assert!(!json.contains("画面へ出してはいけない診断"));
     }
 }

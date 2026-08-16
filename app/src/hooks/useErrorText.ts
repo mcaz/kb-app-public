@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { isKbError } from "@/lib/api";
 
-import type { BackupFailureKind } from "@/lib/bindings";
+import type { BackupFailureKind, CoreErrorKind } from "@/lib/bindings";
 
 function backupErrorKey(kind: BackupFailureKind) {
   switch (kind) {
@@ -50,18 +50,40 @@ function backupErrorKey(kind: BackupFailureKind) {
 export function useBackupErrorText(): (kind: BackupFailureKind | null, fallback: string) => string {
   const { t } = useTranslation();
   return useCallback(
-    (kind, fallback) =>
-      kind ? t(backupErrorKey(kind)) : t("errors.backupFailed", { message: fallback }),
+    (kind, fallback) => {
+      if (kind) return t(backupErrorKey(kind));
+      return fallback
+        ? t("errors.backupFailedDetail", { message: fallback })
+        : t("errors.backupFailed");
+    },
     [t],
   );
+}
+
+function coreErrorKey(kind: CoreErrorKind) {
+  switch (kind) {
+    case "vault_unavailable":
+      return "errors.vaultUnavailable";
+    case "invalid_input":
+      return "errors.coreInvalidInput";
+    case "storage":
+      return "errors.coreStorage";
+    case "index":
+      return "errors.coreIndex";
+    case "configuration":
+      return "errors.coreConfiguration";
+    case "embedding":
+      return "errors.embedFailed";
+    case "unexpected":
+      return "errors.unexpected";
+  }
 }
 
 /**
  * 例外を画面に出す文字列へ。
  *
- * コア由来のエラーは `code` で訳し分ける。`unexpected` だけは訳せないので
- * コアの文言をそのまま出す(英語環境ではここだけ日本語が混じる —
- * コア側のエラーコード化が済むまでの限界。ADR-0002)。
+ * コア由来のエラーは `code` / `kind` で訳し分ける。診断detailは表示しない。
+ * `unexpected` のmessageもログ用で、画面では言語別の一般文言へ置き換える。
  */
 export function useErrorText(): (e: unknown) => string {
   const { t } = useTranslation();
@@ -95,13 +117,15 @@ export function useErrorText(): (e: unknown) => string {
         case "claude_desktop_launch_failed":
           return t("errors.claudeDesktopLaunchFailed");
         case "backup_failed":
-          return backupErrorText(d.kind, d.message);
+          return backupErrorText(d.kind, "");
         case "embed_failed":
-          return t("errors.embedFailed", { message: d.message });
+          return t("errors.embedFailed");
         case "vault_unavailable":
-          return t("errors.vaultUnavailable", { message: d.message });
-        default:
-          return d.message;
+          return t("errors.vaultUnavailable");
+        case "core_failed":
+          return t(coreErrorKey(d.kind));
+        case "unexpected":
+          return t("errors.unexpected");
       }
     },
     [backupErrorText, t],
