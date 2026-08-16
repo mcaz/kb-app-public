@@ -27,6 +27,9 @@ Git で追跡される `.kb-workspace` の永続 ID が既にある。
    push 権限を確認できない場合は、通常のバックアップ先として接続しない。
 4. privacy の確認は接続時だけでなく、ノートと LFS object の各 upload の直前にも認証済み
    GitHub API で行う。public / internal / 401 / 404 / network error / ambiguous はすべて fail-closed。
+   gate の失敗は同期 sidecar の latch として残し、後続の正常な pull では消さない。認証済みAPIで
+   private + push 権限を再確認できたときだけ解除する。non-fast-forward 後の retry push も別の
+   upload として直前に再検査し、最初の検査結果を使い回さない。
 5. fresh clone では LFS の暗黙 smudge に依存せず、tracked manifest の `full` object を列挙して
    全件 fetch し、`content_hash` を照合する。これを終えるまで「復元済み」と表示しない。
 6. 復元は検査・clone・Full object検証・登録の進捗をTauriイベントで表示する。取得済みobjectは
@@ -56,6 +59,14 @@ Git で追跡される `.kb-workspace` の永続 ID が既にある。
   `gh` CLIの設定有無に依存しない。
 - 復元の再試行は検証済みobjectを再利用するため、大容量Vaultでも最初から全件を取り直さない。
   一方、Git履歴のcloneとStorage Contract検査は毎回やり直し、古い一時cloneを信用しない。
+
+## 機械化回帰（2026-08-17）
+
+- localhostのHTTP fixtureで、private + push許可の成功応答と、401／403／404／通信断／不正JSONの
+  `BackupFailureKind` 写像を実リクエスト境界から固定した。
+- bare Git remoteを使い、gate失敗時にremote refが進まないこと、成功pull後もlatchと画面用errorが
+  残ること、private再確認後だけpushと解除が成立することを固定した。
+- non-fast-forwardのrebase retryではgateが2回呼ばれ、各pushの直前に検査されることを固定した。
 
 ## 実受入(2026-08-16)
 

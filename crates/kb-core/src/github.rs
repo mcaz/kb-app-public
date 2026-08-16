@@ -178,6 +178,15 @@ fn verify_private_repository_at(
     url: &str,
     token: &str,
 ) -> Result<VerifiedPrivateRepository> {
+    verify_private_repository_at_with(api_base, url, token, crate::github_auth::invalidate)
+}
+
+fn verify_private_repository_at_with(
+    api_base: &str,
+    url: &str,
+    token: &str,
+    on_unauthorized: impl FnOnce(),
+) -> Result<VerifiedPrivateRepository> {
     let name = parse_repository_url(url)?;
     let endpoint = format!(
         "{}/repos/{}/{}",
@@ -196,7 +205,7 @@ fn verify_private_repository_at(
         .call()
         .map_err(|error| match error {
             ureq::Error::StatusCode(401) => {
-                crate::github_auth::invalidate();
+                on_unauthorized();
                 failure(
                     BackupFailureKind::Authentication,
                     "GitHub の認証が失効しているため repository を確認できない",
@@ -267,7 +276,12 @@ fn evaluate(
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread::JoinHandle;
+
     use super::*;
+    use crate::backup::failure_kind;
 
     fn response(private: bool, visibility: Option<&str>, push: Option<bool>) -> RepositoryResponse {
         RepositoryResponse {
@@ -298,5 +312,93 @@ mod tests {
         assert!(evaluate(response(true, Some("private"), Some(false)), &name).is_err());
         assert!(evaluate(response(true, Some("private"), None), &name).is_err());
         assert!(evaluate(response(true, None, Some(true)), &name).is_err());
+    }
+
+    fn serve_once(status: &str, body: &str) -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let status = status.to_string();
+        let body = body.to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request[..read]).into_owned()
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn verify_at(api_base: &str) -> Result<VerifiedPrivateRepository> {
+        verify_private_repository_at_with(
+            api_base,
+            "https://github.com/mcaz/my-notes.git",
+            "test-token",
+            || {},
+        )
+    }
+
+    #[test]
+    fn private_gate_accepts_an_authenticated_private_repository_response() {
+        let body = serde_json::json!({
+            "id": 42,
+            "full_name": "mcaz/my-notes",
+            "private": true,
+            "visibility": "private",
+            "clone_url": "https://github.com/mcaz/my-notes.git",
+            "permissions": { "push": true }
+        })
+        .to_string();
+        let (api_base, server) = serve_once("200 OK", &body);
+
+        let verified = verify_at(&api_base).unwrap();
+        let request = server.join().unwrap();
+        assert_eq!(verified.full_name, "mcaz/my-notes");
+        assert!(request.starts_with("GET /repos/mcaz/my-notes HTTP/1.1"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-token")
+        );
+    }
+
+    #[test]
+    fn private_gate_maps_http_failures_to_stable_failure_kinds() {
+        for (status, expected) in [
+            ("401 Unauthorized", BackupFailureKind::Authentication),
+            ("403 Forbidden", BackupFailureKind::Permission),
+            ("404 Not Found", BackupFailureKind::RemoteMissing),
+        ] {
+            let (api_base, server) = serve_once(status, r#"{"message":"fixture"}"#);
+            let error = verify_at(&api_base).unwrap_err();
+            server.join().unwrap();
+            assert_eq!(failure_kind(&error), Some(expected), "status={status}");
+        }
+    }
+
+    #[test]
+    fn private_gate_maps_invalid_json_to_privacy_check() {
+        let (api_base, server) = serve_once("200 OK", "not-json");
+        let error = verify_at(&api_base).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(failure_kind(&error), Some(BackupFailureKind::PrivacyCheck));
+    }
+
+    #[test]
+    fn private_gate_maps_a_broken_connection_to_network() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let api_base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+        });
+
+        let error = verify_at(&api_base).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(failure_kind(&error), Some(BackupFailureKind::Network));
     }
 }
