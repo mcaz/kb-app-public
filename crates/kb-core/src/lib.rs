@@ -73,6 +73,9 @@ fn test_data_root() -> std::path::PathBuf {
 pub const OWNER_ACTOR: &str = "human:owner";
 
 #[cfg(test)]
+mod contract_guard;
+
+#[cfg(test)]
 mod tests {
     /// 2026-08-13: テストが実ユーザーのデータ領域に置き場を作り続けていた
     /// (168 個・19MB)。**テストビルドからは実領域へ到達できない**ことを固定する。

@@ -46,6 +46,7 @@
 | `app/src/lib/bindings.ts` は生成物(手書き禁止) | CI の `git diff --exit-code` |
 | 対訳の欠落・余剰・空文字 | `src/i18n/locales/locales.test.ts` |
 | 契約1〜4(タグ・OKF・所有・劣化表示) | `kb-core` の検証コード |
+| 契約文書と強制実装・テストの同一コミット更新 | 契約SHA-256テスト + `scripts/check-contract-cochange.py`(CI) |
 | coreの診断文をGUIへ直送しない | `CoreError` → `AppError`。`From<anyhow::Error>` を持たず未分類はコンパイル失敗 |
 
 手元の通し方は [AGENTS.md](../AGENTS.md) の Verification に一本化してある。
@@ -155,8 +156,6 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
 
 - 着手前に `git status` を見て、無関係な作業を巻き込まない([AGENTS.md](../AGENTS.md))。
 - コアを変えたら `cargo test` で `bindings.ts` を生成し直す(忘れると CI が落ちる)。
-- 契約に触れる変更は、`docs/contract.md` と `kb-core` の検証を**同じコミットで**変える。
-  文書だけ・コードだけの変更は契約変更として認めない。
 - **コミットメッセージは Conventional Commits の接頭辞 + 日本語の要約。**
   実績のある接頭辞は `feat:` / `fix:` / `docs:` / `refactor:` / `style:` / `build:` / `perf:` /
   `chore:`。スコープを付けてよい(`fix(ci):`)。**方針の撤回や機能の削除は `feat!:`**
@@ -176,4 +175,3 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
 | JSX に日本語リテラルを書かない(§2) | eslint `no-restricted-syntax` で `JSXText` の非 ASCII を落とす | 正規表現などの誤検出を除外する設計が要る |
 | `.tsx` に生の hex を書かない(§6) | 同上、または stylelint | canvas 経路の例外指定とセット |
 | clippy の追加 lint | `Cargo.toml` の `[workspace.lints]` | いまは既定 + `-D warnings` のみ |
-| 契約変更を文書とコアで同時に行う(§8) | 現状は機械化の当てが無い | レビューで見る |
