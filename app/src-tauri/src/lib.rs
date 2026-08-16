@@ -24,6 +24,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .commands(collect_commands![
             setup::setup_state,
             setup::onboard,
+            setup::onboard_existing,
             home::home_state,
             home::tag_overview,
             home::care_dismiss,
@@ -45,6 +46,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             connect::connect_state,
             connect::connect_desktop,
             connect::backup_now,
+            connect::backup_create_repository,
             connect::backup_set_remote,
             connect::embed_enable,
             connect::launch_ai,

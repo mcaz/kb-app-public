@@ -1,5 +1,11 @@
 {
   "title": "あなたの知識ベースをつくります",
   "lead": "Claude と繋ぐと、会話から知識が育ち始めます。",
-  "start": "はじめる"
+  "start": "はじめる",
+  "createNew": "新しい知識ベースをつくる",
+  "useExisting": "別の端末で使っている知識ベースを復元",
+  "existingUrl": "既存の private GitHub repository",
+  "existingHelp": "内容と保管庫IDを検査し、ファイル本体まで確認してからこの端末へ復元します。既存フォルダは上書きしません。",
+  "restore": "検査して復元",
+  "restoring": "復元しています…"
 }

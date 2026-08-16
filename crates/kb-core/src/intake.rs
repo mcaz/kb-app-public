@@ -22,6 +22,20 @@ use crate::ledger::Ledger;
 use crate::store::Stores;
 use crate::vault::Vault;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub enum DeliveryStatus {
+    /// `local_only` なので送信対象ではない。
+    LocalOnly,
+    /// `full` だがバックアップ先がまだ無い。
+    RemoteNotConfigured,
+    /// LFS object と Git ref の双方が remote へ到達した。
+    Confirmed,
+    /// ローカル取り込みは成功したが commit / privacy gate / upload のいずれかが失敗した。
+    Degraded,
+}
+
 /// 取り込みの指定。区分を指定しなくても、場所から安全側の既定が決まる。
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -51,6 +65,8 @@ pub struct Taken {
     pub warn_over: Option<u64>,
     /// 場所から区分を固定した(画面はこの理由を出す)
     pub forced_local_only: bool,
+    /// `full` を「同期済み」と呼べるか。失敗理由の詳細は sync state に残す。
+    pub delivery: DeliveryStatus,
 }
 
 /// `src` を含む Git リポジトリを探す。保管庫自身は client repo とみなさない。
@@ -84,6 +100,9 @@ pub fn take(
     src: &Path,
     req: Request,
 ) -> Result<Taken> {
+    // check→write の参照名競合と、manifest commit→LFS upload の間へ別 process の
+    // push が割り込む race を同じ transaction lock で防ぐ。
+    let _lock = crate::connect::sync_lock(vault)?;
     let client_repo = is_client_repo(vault, src);
 
     // 0. 差し替え元。無ければ普通の新規取り込み
@@ -213,24 +232,47 @@ pub fn take(
             "仕事のリポジトリの中にあるため、同期しない設定に固定した",
         );
     }
-    ledger.put(vault, &manifest)?;
+    let mut commit_error = ledger.put_with_outcome(vault, &manifest)?.sync_error;
 
     let artifact_ref = match inherited {
         // 前の版を指していた参照を最新版へ向け直す。**名前は変えない** —
         // 参照名を変えると本文リンクが切れるので、それは詳細画面の明示操作にする
         Some(mut r) => {
             r.point_to(r.revision, manifest.id.clone())?;
-            ledger.put_ref(vault, policy.sync, &r)?;
+            let outcome = ledger.put_ref_with_outcome(vault, policy.sync, &r)?;
+            if let Some(error) = outcome.sync_error {
+                crate::connect::record_sync_degradation(vault, &error);
+                commit_error.get_or_insert(error);
+            }
             Some(r)
         }
         None => match req.ref_name {
             Some(name) => {
                 let r = ArtifactRef::new(workspace_id, name, manifest.id.clone());
-                ledger.put_ref(vault, policy.sync, &r)?;
+                let outcome = ledger.put_ref_with_outcome(vault, policy.sync, &r)?;
+                if let Some(error) = outcome.sync_error {
+                    crate::connect::record_sync_degradation(vault, &error);
+                    commit_error.get_or_insert(error);
+                }
                 Some(r)
             }
             None => None,
         },
+    };
+
+    let delivery = if policy.sync == SyncPolicy::LocalOnly {
+        DeliveryStatus::LocalOnly
+    } else if let Some(error) = commit_error {
+        crate::connect::record_sync_degradation(vault, &error);
+        DeliveryStatus::Degraded
+    } else {
+        match crate::connect::deliver_full_locked(vault, &manifest.hash) {
+            Ok(crate::connect::FullDelivery::RemoteNotConfigured) => {
+                DeliveryStatus::RemoteNotConfigured
+            }
+            Ok(crate::connect::FullDelivery::Confirmed) => DeliveryStatus::Confirmed,
+            Err(_) => DeliveryStatus::Degraded,
+        }
     };
 
     Ok(Taken {
@@ -238,6 +280,7 @@ pub fn take(
         artifact_ref,
         warn_over,
         forced_local_only,
+        delivery,
     })
 }
 

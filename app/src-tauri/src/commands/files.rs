@@ -72,6 +72,8 @@ pub struct Added {
     warn_over_bytes: Option<u64>,
     /// 仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す
     forced_local_only: bool,
+    /// Full Artifact の remote 到達状態。失敗の詳細は同期状態に集約する。
+    delivery: intake::DeliveryStatus,
 }
 
 fn row(vault: &Vault, stores: &Stores, m: &Manifest) -> FileRow {
@@ -212,6 +214,7 @@ fn take(
             file: row(vault, stores, &taken.manifest),
             warn_over_bytes: taken.warn_over,
             forced_local_only: taken.forced_local_only,
+            delivery: taken.delivery,
         })
     })
 }

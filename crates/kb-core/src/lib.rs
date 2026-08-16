@@ -11,6 +11,7 @@ pub mod connect;
 pub mod embed;
 pub mod favorites;
 pub mod frontmatter;
+pub mod github;
 pub mod import;
 pub mod index;
 pub mod intake;

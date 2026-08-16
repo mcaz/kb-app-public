@@ -9,6 +9,11 @@ export const commands = {
 	setupState: () => typedError<SetupState, AppError>(__TAURI_INVOKE("setup_state")),
 	/**  最初の vault を自動作成(既定名「わたしのノート」実体 my-notes)。 */
 	onboard: () => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard")),
+	/**
+	 *  2台目以降: private GitHub repository にある既存 Vault を検査・復元して登録する。
+	 *  復元先は未使用 path を選び、既存フォルダへ overlay しない。
+	 */
+	onboardExisting: (url: string) => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard_existing", { url })),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
@@ -43,6 +48,8 @@ export const commands = {
 	warn_over_bytes: number | null,
 	/**  仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す */
 	forced_local_only: boolean,
+	/**  Full Artifact の remote 到達状態。失敗の詳細は同期状態に集約する。 */
+	delivery: DeliveryStatus,
 } | null, AppError>(__TAURI_INVOKE("file_add_from_clipboard", { noteId })),
 	/**  このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。 */
 	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
@@ -64,6 +71,7 @@ export const commands = {
 	/**  Claude Desktop の設定にこの実行ファイルを MCP サーバーとして登録する。 */
 	connectDesktop: () => typedError<null, AppError>(__TAURI_INVOKE("connect_desktop")),
 	backupNow: () => typedError<string, AppError>(__TAURI_INVOKE("backup_now")),
+	backupCreateRepository: (name: string) => typedError<null, AppError>(__TAURI_INVOKE("backup_create_repository", { name })),
 	backupSetRemote: (url: string) => typedError<null, AppError>(__TAURI_INVOKE("backup_set_remote", { url })),
 	/**
 	 *  かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
@@ -90,6 +98,8 @@ export type Added = {
 	warn_over_bytes: number | null,
 	/**  仕事のリポジトリ内なので同期しない設定に固定した。画面はこの理由を出す */
 	forced_local_only: boolean,
+	/**  Full Artifact の remote 到達状態。失敗の詳細は同期状態に集約する。 */
+	delivery: DeliveryStatus,
 };
 
 export type AppError = 
@@ -155,8 +165,19 @@ export type ConnectState = {
 	desktop: DesktopStatus,
 	backup: BackupStatus,
 	sync_error: string | null,
+	sync_error_kind: SyncFailureKind | null,
 	smart_search: SmartSearchState,
 };
+
+export type DeliveryStatus = 
+/**  `local_only` なので送信対象ではない。 */
+"local_only" | 
+/**  `full` だがバックアップ先がまだ無い。 */
+"remote_not_configured" | 
+/**  LFS object と Git ref の双方が remote へ到達した。 */
+"confirmed" | 
+/**  ローカル取り込みは成功したが commit / privacy gate / upload のいずれかが失敗した。 */
+"degraded";
 
 export type DesktopStatus = 
 /**  Claude Desktop の設定ファイルが見つからない(未インストールか未起動) */
@@ -406,6 +427,8 @@ export type Stats = {
 	/**  現行スタンプで埋め込み済みのノート数(欠損の可視化 — 沈黙停止の教訓) */
 	embedded: number,
 };
+
+export type SyncFailureKind = "privacy_check" | "commit" | "lfs_upload" | "git_push" | "git_pull" | "git_conflict";
 
 /**  転送軸。どこまで端末の外へ出すか。並び順がそのまま「広さ」になる。 */
 export type SyncPolicy = 

@@ -36,6 +36,16 @@ pub struct Ledger {
     sidecar: PathBuf,
 }
 
+/// 論理データの書き込み後に行う Git commit の結果。
+///
+/// 同期は派生なので commit 失敗でローカルの書き込みを巻き戻さない。一方で、
+/// `full` Artifact の取り込みは remote 到達を確認する必要があるため、呼び出し側が
+/// 失敗を握り潰さず劣化として返せるようにする。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CommitOutcome {
+    pub sync_error: Option<String>,
+}
+
 impl Ledger {
     /// 既定の置き場で開く。
     pub fn open(vault: &Vault, workspace_id: &str) -> Result<Self> {
@@ -81,6 +91,11 @@ impl Ledger {
 
     /// 台帳を書く。区分が変わっていたら反対側から消す(二重に残さない)。
     pub fn put(&self, vault: &Vault, manifest: &Manifest) -> Result<()> {
+        self.put_with_outcome(vault, manifest).map(|_| ())
+    }
+
+    /// 台帳を書き、同期対象なら commit の成否も返す。
+    pub fn put_with_outcome(&self, vault: &Vault, manifest: &Manifest) -> Result<CommitOutcome> {
         let sync = manifest.policy.sync;
         let dest = self.manifest_path(sync, &manifest.id);
         write_json(&dest, manifest)?;
@@ -95,8 +110,7 @@ impl Ledger {
             fs::remove_file(&stale)?;
         }
 
-        self.commit_if_tracked(vault, &[dest, stale], "vault: ファイルの台帳を更新");
-        Ok(())
+        Ok(self.commit_if_tracked(vault, &[dest, stale], "vault: ファイルの台帳を更新"))
     }
 
     /// 台帳を読む。同期される側 → sidecar の順に探す。
@@ -173,6 +187,16 @@ impl Ledger {
 
     /// 参照を書く。置き場は指す先の区分に従う(台帳と同じ理由)。
     pub fn put_ref(&self, vault: &Vault, sync: SyncPolicy, r: &ArtifactRef) -> Result<()> {
+        self.put_ref_with_outcome(vault, sync, r).map(|_| ())
+    }
+
+    /// 参照を書き、同期対象なら commit の成否も返す。
+    pub fn put_ref_with_outcome(
+        &self,
+        vault: &Vault,
+        sync: SyncPolicy,
+        r: &ArtifactRef,
+    ) -> Result<CommitOutcome> {
         let dest = self.ref_path(sync, &r.name);
         write_json(&dest, r)?;
         let other = match sync {
@@ -183,8 +207,7 @@ impl Ledger {
         if stale.is_file() {
             fs::remove_file(&stale)?;
         }
-        self.commit_if_tracked(vault, &[dest, stale], "vault: ファイルの参照を更新");
-        Ok(())
+        Ok(self.commit_if_tracked(vault, &[dest, stale], "vault: ファイルの参照を更新"))
     }
 
     /// 参照を引く。
@@ -267,16 +290,18 @@ impl Ledger {
 
     /// 保管庫の中にあるものだけ commit する。sidecar は Git に触れない。
     /// **同期は派生**なので、失敗しても書き込み自体は成功のまま(契約4)。
-    fn commit_if_tracked(&self, vault: &Vault, paths: &[PathBuf], message: &str) {
+    fn commit_if_tracked(&self, vault: &Vault, paths: &[PathBuf], message: &str) -> CommitOutcome {
         let rels: Vec<String> = paths
             .iter()
             .filter_map(|p| Self::rel(p, &self.vault_root))
             .collect();
         if rels.is_empty() {
-            return;
+            return CommitOutcome::default();
         }
         let refs: Vec<&str> = rels.iter().map(String::as_str).collect();
-        let _ = vault.commit(&refs, message);
+        CommitOutcome {
+            sync_error: vault.commit(&refs, message).err().map(|e| e.to_string()),
+        }
     }
 }
 
@@ -343,6 +368,23 @@ mod tests {
         assert!(
             repo.index().unwrap().get_path(Path::new(&rel), 0).is_some(),
             "台帳が Git に入っていない"
+        );
+    }
+
+    /// 2026-08-16 まで Artifact の commit 失敗は捨てられ、取り込み側が
+    /// remote 到達を確認できなかった。ローカルの台帳は残しつつ劣化を返す。
+    #[test]
+    fn tracked_write_reports_commit_failure_without_losing_the_manifest() {
+        let (_d, vault, ledger) = setup();
+        let m = manifest(SyncPolicy::Full, false);
+        fs::write(vault.root.join(".git/index.lock"), b"locked").unwrap();
+
+        let outcome = ledger.put_with_outcome(&vault, &m).unwrap();
+
+        assert!(outcome.sync_error.is_some(), "commit 失敗が見えない");
+        assert!(
+            ledger.get(&m.id).unwrap().is_some(),
+            "同期失敗でローカルの台帳まで失ってはいけない"
         );
     }
 

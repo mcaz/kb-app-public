@@ -48,6 +48,8 @@ export const api = {
     IN_TAURI ? unwrap(commands.setupState()) : (await demo()).setupState(),
   onboard: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboard()) : (await demo()).onboard(),
+  onboardExisting: async (url: string): Promise<SetupState> =>
+    IN_TAURI ? unwrap(commands.onboardExisting(url)) : (await demo()).onboard(),
   homeState: async (): Promise<HomeState> =>
     IN_TAURI ? unwrap(commands.homeState()) : (await demo()).homeState(),
   tagOverview: async (): Promise<TagOverview> =>
@@ -118,6 +120,8 @@ export const api = {
     IN_TAURI ? unwrap(commands.embedEnable()) : (await demo()).embedEnable(),
   backupSetRemote: async (url: string): Promise<null> =>
     IN_TAURI ? unwrap(commands.backupSetRemote(url)) : (await demo()).backupSetRemote(url),
+  backupCreateRepository: async (name: string): Promise<null> =>
+    IN_TAURI ? unwrap(commands.backupCreateRepository(name)) : (await demo()).backupSetRemote(name),
   backupNow: async (): Promise<string> =>
     IN_TAURI ? unwrap(commands.backupNow()) : (await demo()).backupNow(),
   launchAi: async (note: string | null): Promise<null> =>

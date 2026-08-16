@@ -65,6 +65,16 @@ export function useOnboard() {
   });
 }
 
+export function useOnboardExisting() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (url: string) => api.onboardExisting(url),
+    onSuccess: async () => {
+      await qc.invalidateQueries();
+    },
+  });
+}
+
 export function useCareDismiss() {
   const qc = useQueryClient();
   return useMutation({
@@ -183,6 +193,16 @@ export function useBackupSetRemote() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (url: string) => api.backupSetRemote(url),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.connect });
+    },
+  });
+}
+
+export function useBackupCreateRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.backupCreateRepository(name),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: queryKeys.connect });
     },

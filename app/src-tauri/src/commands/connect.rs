@@ -31,6 +31,7 @@ pub struct ConnectState {
     desktop: kb_core::connect::DesktopStatus,
     backup: kb_core::connect::BackupStatus,
     sync_error: Option<String>,
+    sync_error_kind: Option<kb_core::connect::SyncFailureKind>,
     smart_search: SmartSearchState,
 }
 
@@ -50,12 +51,14 @@ pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
 
     state.with_index(Sync::Throttled, |vault, conn, _| {
         let s = stats(conn).map_err(AppError::from)?;
+        let sync = kb_core::connect::sync_state(vault);
         Ok(ConnectState {
             desktop,
             backup: kb_core::connect::backup_status(vault).map_err(|e| AppError::BackupFailed {
                 message: e.to_string(),
             })?,
-            sync_error: kb_core::connect::sync_state(vault).last_error,
+            sync_error: sync.last_error,
+            sync_error_kind: sync.last_error_kind,
             smart_search: SmartSearchState {
                 state: if s.embed_enabled {
                     SmartSearchPhase::Enabled
@@ -115,6 +118,22 @@ pub fn backup_set_remote(state: State<'_, AppState>, url: String) -> AppResult<(
     state.with_vault(|vault| {
         kb_core::connect::set_backup_remote(vault, &url).map_err(|e| AppError::BackupFailed {
             message: e.to_string(),
+        })
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn backup_create_repository(state: State<'_, AppState>, name: String) -> AppResult<()> {
+    let repository =
+        kb_core::github::create_private_repository(&name).map_err(|e| AppError::BackupFailed {
+            message: e.to_string(),
+        })?;
+    state.with_vault(|vault| {
+        kb_core::connect::set_backup_remote(vault, &repository.clone_url).map_err(|e| {
+            AppError::BackupFailed {
+                message: e.to_string(),
+            }
         })
     })
 }

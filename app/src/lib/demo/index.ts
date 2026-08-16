@@ -213,6 +213,7 @@ const connect: ConnectState = {
   desktop: (params().get("connect") as ConnectState["desktop"] | null) ?? "not_connected",
   backup: { remote: null, pending: 4 },
   sync_error: null,
+  sync_error_kind: null,
   smart_search: { state: "not_installed", embedded: 0, total: 3 },
 };
 
@@ -357,7 +358,12 @@ export const demoApi = {
       added_at: new Date().toISOString(),
     };
     files[noteId] = [...(files[noteId] ?? []), file];
-    return delay({ file, warn_over_bytes: null, forced_local_only: false });
+    return delay({
+      file,
+      warn_over_bytes: null,
+      forced_local_only: false,
+      delivery: "remote_not_configured",
+    });
   },
   // ブラウザでは DOM の paste 経路が動くのでフォールバックは不要
   fileAddFromClipboard: () => delay<Added | null>(null),

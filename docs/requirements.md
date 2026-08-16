@@ -210,14 +210,21 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   自動へ変更)、**複数デバイス運用を想定して、AI とのメッセージのやり取り(MCP ツール
   呼び出し)や画面更新の際に pull** して他端末の変化を取り込む。非エンジニアには
   「バックアップ / 復元」の語彙で見せ、エンジニアには remote 設定の実体をそのまま開放する。
-  安全機構: push 先は紐付けたリポ(origin)に固定 / **push 対象はノートのみ**(索引・
-  キャッシュ等の派生物は .gitignore で構造的に除外)/ push 前の private 実確認は GitHub
-  OAuth 実装時に追加(**移行後は個人ノート実データが流れるため優先度高**) / 同期の失敗は握りつぶさず劣化として表示(原則4)/
+  安全機構: push 先は紐付けたリポ(origin)に固定 / **push 対象はノートと Git 管理される
+  正本(Full Artifact の台帳・参照・LFS pointer を含む)のみ**。索引・キャッシュ等の派生物と
+  `local_only` は構造的に除外し、Full の実体は private 確認後に Git LFS へ送る / push 前の
+  private 実確認は認証済み GitHub API で行う / 同期の失敗は握りつぶさず劣化として表示(原則4)/
   pull は時間スロットリング(会話のたび全呼び出しで同期待ちしない — 旧 KB の
   レイテンシ実測の教訓)/ 資格情報プロンプトでハングさせない(非対話モード強制)/
   **生成ファイルは競合させない**(実装時に多デバイステストで実証した必須条件:
   index.md = merge ours+pull 後に再生成で自己修復、log.md = union merge。
   ノート本文の競合は rebase 失敗 → 劣化表示に倒し、自動解決しない)
+  **2026-08-16 補足**: 初回導線は「アプリが private repository を新規作成」と
+  「既存 Vault の private repository を使う」に分ける。後者は clone 後に Storage Contract と
+  `.kb-workspace` を検査し、同じ ID の Vault だけを同期対象として接続する。別 ID を自動で
+  merge・上書きしない。privacy と push 権限は接続時および各 upload 直前に認証済み GitHub API
+  で確認し、判定不能を含めて fail-closed とする。fresh clone は全 `full` LFS object を明示取得し、
+  hash 照合が終わるまで復元完了としない(詳細: ADR-0005)
 - **FR-A7 グラフビュー(v1 実装済み 2026-08-10)**: Obsidian ライクな力学グラフ。実現性は確認済み —
   つながりは索引に保存済みで、描画層(Canvas / WebGL の力学グラフライブラリ)を被せるだけ。
   NFR-3 の規模(10^3〜10^4)は既存ライブラリの守備範囲。差別化は「操作できるグラフ」:
