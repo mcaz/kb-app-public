@@ -48,6 +48,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
                 conn.execute_batch(&format!("{ddl}; UPDATE notes SET mtime = -1;"))?;
             }
         }
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS links_dst ON links(dst);")?;
         return Ok(());
     }
     conn.execute_batch(&format!(
@@ -64,6 +65,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT
         );
         CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
+        CREATE INDEX links_dst ON links(dst);
         DROP TABLE IF EXISTS note_vecs;
         CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
         CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');

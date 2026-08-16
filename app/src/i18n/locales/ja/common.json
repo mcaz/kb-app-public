@@ -28,6 +28,14 @@
     "unknown": "不明",
     "none": "—"
   },
+  "noteSignals": {
+    "linked": "つながり {{count}}",
+    "similar": "近いノート {{state}}",
+    "attachments": "添付 {{count}}",
+    "available": "あり",
+    "empty": "なし",
+    "unknown": "未準備"
+  },
   "toast": {
     "deleted": "削除しました",
     "renamed": "名前を変更しました"

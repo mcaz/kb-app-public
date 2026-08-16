@@ -104,8 +104,7 @@ export const useNoteFiles = (id: string | null) =>
   });
 
 /**
- * ファイルの操作。ノート本体は変わらないので、無効化するのはファイル欄だけ
- * (旧添付は note_get にも載っていたが、いまは欄が唯一の持ち主)。
+ * ファイルの操作。ファイル欄と、添付件数を持つノート一覧を更新する。
  */
 function useFileMutation<TArgs, TData>(
   fn: (args: TArgs) => Promise<TData>,
@@ -115,7 +114,10 @@ function useFileMutation<TArgs, TData>(
   return useMutation({
     mutationFn: fn,
     onSuccess: async (_data, args) => {
-      await qc.invalidateQueries({ queryKey: queryKeys.noteFiles(noteId(args)) });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.noteFiles(noteId(args)) }),
+        qc.invalidateQueries({ queryKey: queryKeys.noteLists }),
+      ]);
     },
   });
 }

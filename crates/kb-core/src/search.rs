@@ -384,6 +384,12 @@ pub struct NoteSummary {
     pub tags: Vec<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
+    /// リンク先と被リンクを合わせた、現存するノートの件数。
+    pub linked_count: usize,
+    /// 現行の埋め込みがなければ None。あれば、未リンクの近いノートがあるか。
+    pub has_similar: Option<bool>,
+    /// 台帳ファイルと旧添付の合計。ファイルシステム由来なので呼び出し層で補う。
+    pub file_count: usize,
 }
 
 /// ID順のcursor page。全ノートを一度に画面へ渡さない。
@@ -474,6 +480,7 @@ pub fn notes_in_category(
     if has_more {
         notes.truncate(limit);
     }
+    populate_note_relations(conn, &mut notes)?;
     let next_cursor = has_more
         .then(|| notes.last().map(|note| note.id.clone()))
         .flatten();
@@ -492,7 +499,85 @@ fn note_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary> {
         tags: split_tags(row.get::<_, Option<String>>(3)?),
         created: row.get(4)?,
         updated: row.get(5)?,
+        linked_count: 0,
+        has_similar: None,
+        file_count: 0,
     })
+}
+
+/// 一覧ページにだけ必要な関係メタデータを補う。
+///
+/// リンク件数は逆引き用 index を使う。近いノートは全ベクトルを一度だけ読み、
+/// ページ内の各ノートについて最初の候補が見つかった時点で打ち切る。
+fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Result<()> {
+    let mut count_links = conn.prepare_cached(
+        "SELECT count(*) FROM (
+             SELECT l.dst AS other
+             FROM links l JOIN notes n ON n.id = l.dst AND n.status != 'deprecated'
+             WHERE l.src = ?1
+             UNION
+             SELECT l.src AS other
+             FROM links l JOIN notes n ON n.id = l.src AND n.status != 'deprecated'
+             WHERE l.dst = ?1
+         )",
+    )?;
+    for note in notes.iter_mut() {
+        note.linked_count = count_links.query_row([&note.id], |row| row.get::<_, i64>(0))? as usize;
+    }
+
+    if notes.is_empty() {
+        return Ok(());
+    }
+
+    use crate::embed;
+    let vectors: std::collections::HashMap<String, Vec<f32>> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT v.id, v.embedding
+             FROM note_vecs v JOIN notes n ON n.id = v.id
+             WHERE v.stamp = ?1 AND n.status != 'deprecated'",
+        )?;
+        let rows = stmt.query_map([embed::EMBED_STAMP], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|(id, blob)| (id, embed::from_blob(&blob)))
+            .collect()
+    };
+    if vectors.is_empty() {
+        return Ok(());
+    }
+
+    let linked: std::collections::HashMap<String, std::collections::HashSet<String>> = {
+        let mut stmt = conn.prepare_cached("SELECT src, dst FROM links")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut by_note =
+            std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
+        for row in rows {
+            let (src, dst): (String, String) = row?;
+            by_note.entry(src.clone()).or_default().insert(dst.clone());
+            by_note.entry(dst).or_default().insert(src);
+        }
+        by_note
+    };
+
+    for note in notes.iter_mut() {
+        let Some(me) = vectors.get(&note.id) else {
+            continue;
+        };
+        let note_links = linked.get(&note.id);
+        note.has_similar = Some(vectors.iter().any(|(other_id, other)| {
+            if other_id == &note.id
+                || note_links.is_some_and(|ids| ids.contains(other_id))
+                || other.len() != me.len()
+            {
+                return false;
+            }
+            let similarity: f32 = me.iter().zip(other).map(|(a, b)| a * b).sum();
+            1.0 - similarity <= embed::RELATED_DISTANCE
+        }));
+    }
+    Ok(())
 }
 
 /// 健全性の要約(FR-A2 ホーム表示用)。
@@ -666,5 +751,48 @@ mod tests {
         assert_eq!(second.notes.len(), 1);
         assert!(second.next_cursor.is_none());
         assert_ne!(first.notes[0].id, second.notes[0].id);
+    }
+
+    #[test]
+    fn category_list_includes_link_and_similar_presence() {
+        let (_d, _v, conn) = setup();
+        for id in ["signals/a", "signals/b", "signals/c", "signals/d"] {
+            conn.execute(
+                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,'stable','','')",
+                [id],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO links(src,dst) VALUES ('signals/a','signals/b')",
+            [],
+        )
+        .unwrap();
+        for (id, vector) in [
+            ("signals/a", vec![1.0, 0.0]),
+            ("signals/c", vec![1.0, 0.0]),
+            ("signals/d", vec![0.0, 1.0]),
+        ] {
+            conn.execute(
+                "INSERT INTO note_vecs(id,stamp,embedding) VALUES (?1,?2,?3)",
+                rusqlite::params![
+                    id,
+                    crate::embed::EMBED_STAMP,
+                    crate::embed::to_blob(&vector)
+                ],
+            )
+            .unwrap();
+        }
+
+        let page = super::notes_in_category(&conn, "signals", None, 10).unwrap();
+        let by_id: std::collections::HashMap<_, _> = page
+            .notes
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect();
+        assert_eq!(by_id["signals/a"].linked_count, 1);
+        assert_eq!(by_id["signals/a"].has_similar, Some(true));
+        assert_eq!(by_id["signals/b"].has_similar, None);
+        assert_eq!(by_id["signals/d"].has_similar, Some(false));
     }
 }

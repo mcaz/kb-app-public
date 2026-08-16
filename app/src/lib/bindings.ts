@@ -327,6 +327,12 @@ export type NoteSummary = {
 	tags: string[],
 	created: string | null,
 	updated: string | null,
+	/**  リンク先と被リンクを合わせた、現存するノートの件数。 */
+	linked_count: number,
+	/**  現行の埋め込みがなければ None。あれば、未リンクの近いノートがあるか。 */
+	has_similar: boolean | null,
+	/**  台帳ファイルと旧添付の合計。ファイルシステム由来なので呼び出し層で補う。 */
+	file_count: number,
 };
 
 export type NoteView = {
