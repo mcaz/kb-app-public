@@ -35,10 +35,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # 契約変更をコミット単位で検査するため、PRのbaseまで取得する。
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: 契約 co-change gate 自体の回帰テスト
+        run: python3 tests/contract-cochange/test_contract_cochange.py
+      - name: 契約文書とコア実装・テストを同じコミットで変更する
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/check-contract-cochange.py "$BASE_SHA" "$HEAD_SHA"
       # Tauri(kb-app)のビルドに必要な GTK/WebKit まわり
       - name: システム依存を入れる
         run: |
