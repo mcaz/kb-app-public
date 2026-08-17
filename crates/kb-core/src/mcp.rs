@@ -16,6 +16,19 @@ use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServeOptions {
+    /// tool callの前にGitHub pullを試す。短命な自動retrieval processではfalseにし、
+    /// Keychain認証やremote I/Oを発話回数へ結び付けない。
+    pub remote_sync: bool,
+}
+
+impl Default for ServeOptions {
+    fn default() -> Self {
+        Self { remote_sync: true }
+    }
+}
+
 /// server instructions(FR-C5)。「まず引く・終わりに起票を提案」の規律を配る。
 /// 旧 KB の M1/M3 実測で「instructions だけでフック無し環境でも規律が成立」を確認済み。
 /// FR-C6(プロバイダ別出し分け)は保留中のため、現接続先の Claude に直接最適化した文面
@@ -46,7 +59,15 @@ kb-app はこの AI クライアントで無効です。\
 KB のデータを shell・ファイル操作・保存先の探索など別経路で参照・推測・更新しないでください。\
 過去の会話に残る KB 内容も代替経路として使わず、必要な場合は「現在は KB を参照できない」と伝えてください。";
 
-pub fn serve(client_hint: &str, mut open_vault: impl FnMut() -> Result<Vault>) -> Result<()> {
+pub fn serve(client_hint: &str, open_vault: impl FnMut() -> Result<Vault>) -> Result<()> {
+    serve_with_options(client_hint, ServeOptions::default(), open_vault)
+}
+
+pub fn serve_with_options(
+    client_hint: &str,
+    options: ServeOptions,
+    mut open_vault: impl FnMut() -> Result<Vault>,
+) -> Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -89,6 +110,7 @@ pub fn serve(client_hint: &str, mut open_vault: impl FnMut() -> Result<Vault>) -
             vault.as_ref(),
             client_hint,
             enabled,
+            options.remote_sync,
             method,
             msg.get("params"),
         ) {
@@ -112,6 +134,7 @@ fn handle(
     vault: Option<&Vault>,
     client: &str,
     enabled: bool,
+    remote_sync: bool,
     method: &str,
     params: Option<&Value>,
 ) -> Result<Option<Value>> {
@@ -176,7 +199,7 @@ fn handle(
                 .cloned()
                 .unwrap_or(json!({}));
             let vault = vault.context("Vault is unavailable")?;
-            let output = call_tool(vault, client, name, &args);
+            let output = call_tool(vault, client, name, &args, remote_sync);
             match output {
                 Ok(output) => {
                     let mut result = json!({
@@ -299,11 +322,28 @@ impl ToolOutput {
     }
 }
 
-fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<ToolOutput> {
+fn remote_degradations(
+    enabled: bool,
+    pull: impl FnOnce() -> Option<crate::degradation::Degradation>,
+) -> Vec<crate::degradation::Degradation> {
+    if enabled {
+        pull().into_iter().collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn call_tool(
+    vault: &Vault,
+    client: &str,
+    name: &str,
+    args: &Value,
+    remote_sync: bool,
+) -> Result<ToolOutput> {
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
-    // スロットリング付き・失敗は劣化情報(fail-open)
-    let mut degraded: Vec<crate::degradation::Degradation> =
-        crate::connect::pull_if_stale(vault).into_iter().collect();
+    // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
+    // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
+    let mut degraded = remote_degradations(remote_sync, || crate::connect::pull_if_stale(vault));
     let conn = open_db(vault)?;
     // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
     match sync_with_degradations(vault, &conn) {
@@ -547,6 +587,7 @@ mod tests {
             Some(&vault),
             "test/client",
             false,
+            true,
             "initialize",
             Some(&serde_json::json!({"protocolVersion": "test"})),
         )
@@ -561,12 +602,19 @@ mod tests {
                 .contains("~/kb")
         );
 
-        let tools = handle(Some(&vault), "test/client", false, "tools/list", None)
+        let tools = handle(Some(&vault), "test/client", false, true, "tools/list", None)
             .unwrap()
             .unwrap();
-        let prompts = handle(Some(&vault), "test/client", false, "prompts/list", None)
-            .unwrap()
-            .unwrap();
+        let prompts = handle(
+            Some(&vault),
+            "test/client",
+            false,
+            true,
+            "prompts/list",
+            None,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(tools, serde_json::json!({"tools": []}));
         assert_eq!(prompts, serde_json::json!({"prompts": []}));
     }
@@ -582,6 +630,7 @@ mod tests {
             Some(&vault),
             "test/client",
             false,
+            true,
             "tools/call",
             Some(&serde_json::json!({
                 "name": "search",
@@ -608,7 +657,7 @@ mod tests {
     fn enabled_initialize_keeps_the_existing_tools_and_instructions() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        let initialized = handle(Some(&vault), "test/client", true, "initialize", None)
+        let initialized = handle(Some(&vault), "test/client", true, true, "initialize", None)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -628,6 +677,21 @@ mod tests {
     }
 
     #[test]
+    fn local_only_mode_does_not_invoke_remote_pull() {
+        let called = std::cell::Cell::new(false);
+        let degraded = remote_degradations(false, || {
+            called.set(true);
+            Some(crate::degradation::Degradation::RemoteSync {
+                detail: "should not run".into(),
+            })
+        });
+
+        assert!(!called.get());
+        assert!(degraded.is_empty());
+        assert!(ServeOptions::default().remote_sync);
+    }
+
+    #[test]
     fn mcp_get_update_and_remove_cannot_escape_the_vault() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
@@ -644,7 +708,7 @@ mod tests {
             ),
             ("remove", serde_json::json!({"note": "../outside/secret"})),
         ] {
-            assert!(call_tool(&vault, "test/client", tool, &args).is_err());
+            assert!(call_tool(&vault, "test/client", tool, &args, true).is_err());
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), "TOP SECRET");
         }
     }
@@ -660,6 +724,7 @@ mod tests {
             "test/client",
             "search",
             &serde_json::json!({"query": "anything"}),
+            true,
         )
         .unwrap();
         assert!(output.text.contains("[index_parse]"), "{}", output.text);
@@ -684,6 +749,7 @@ mod tests {
         let result = handle(
             Some(&vault),
             "test/client",
+            true,
             true,
             "tools/call",
             Some(&serde_json::json!({
