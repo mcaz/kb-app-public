@@ -10,6 +10,7 @@
 
 pub mod commands;
 pub mod error;
+pub mod hook_mode;
 pub mod mcp_mode;
 pub mod state;
 

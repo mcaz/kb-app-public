@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // 管理 lifecycle hook から、MCP だけを通る自動retrievalを実行する。
+    if kb_app_lib::hook_mode::run_if_requested() {
+        return;
+    }
     // 同じ実行ファイルが MCP サーバーにもなる(詳細は mcp_mode)
     if kb_app_lib::mcp_mode::run_if_requested() {
         return;

@@ -12,37 +12,21 @@ Vault と kb-app の端末設定を Claude の Read / Edit / sandboxed Bash か�
 | 部品 | 役割 | 置き場 |
 |---|---|---|
 | MCP サーバー | search / get / recent / propose(confirm は非公開) | `claude mcp add --scope user kb-app -- <kb バイナリ> mcp --vault <名前> --client claude-code/claude` |
-| 前出しフック | 発話のたびに `kb search --any`(OR・bm25)で関連ノートを文脈注入。実行前に `kb settings ai-enabled --client claude-code/claude` で全体・Claude別設定を確認し、OFF・判定不能なら注入しない | [kb-hook-preprompt.py](kb-hook-preprompt.py) を settings.json の UserPromptSubmit へ |
+| 前出しフック | 発話ごとに同じkb-app実行ファイルをMCP serverとして子起動し、`initialize → search(any) → get`を実行。OFFならinitializeでtoolsが非公開なので無音終了 | 完全保護のmanaged settingsがUserPromptSubmitへ登録 |
 | kb-researcher | 検索専用サブエージェント(複数クエリ・全文読み・要点だけ返す) | `~/.claude/agents/kb-researcher.md` |
 | 規律 | まず引く・終わりに propose 提案・確定は本人指示の二経路 | `~/.claude/CLAUDE.md`(server instructions と同型) |
 
-## settings.json 断片
+## 管理フック
 
-```json
-"hooks": {
-  "UserPromptSubmit": [{
-    "hooks": [{
-      "type": "command",
-      "command": "python3 <このリポ>/integrations/claude-code/kb-hook-preprompt.py",
-      "timeout": 15,
-      "statusMessage": "kb-app を検索中…"
-    }]
-  }]
-}
-```
+設定Modalの「完全保護を設定」が、Claude Codeのsystem-level managed settingsとCodexの
+managed requirementsへ同じUserPromptSubmitフックを登録する。フックはCLIの`kb search`や
+Vaultファイルを使わず、kb-app MCPの公開面だけを使う。検索失敗は主作業を止めないが、
+「該当なし」へ変換せず劣化コンテキストとしてクライアントへ返す。
 
-フックは `KB_BIN` 環境変数(未設定なら PATH → Application Support の導入済みCLI →
-開発ビルドの順)で kb バイナリを探す。
-前出しと Stop 安全網はどちらも同じAI利用設定と完全保護の導入状態に従う。command hook は
-Claude の sandbox 外で本人の user 権限を持つため、配布元のこの script 以外へ差し替えない。
-
-## Stop 安全網(2026-08-10 追加)
-
-[kb-hook-stop.py](kb-hook-stop.py) を settings.json の Stop へ。前出しフックが
-「関連ノートあり」を `~/.claude/state/kb-app/<session>.relevant` に記録し、
-セッションが kb-app を一度も引かずに終わろうとしたときだけ差し戻す
-(stop_hook_active では必ず通す=無限ループ防止・fail-open)。
-文章の「終了前に検索して」を機構強制に置き換えたもの(docs/contract.md 設計原則)。
+旧`~/.claude/settings.json`に残るPythonフックは、完全保護の更新時に他のフックを保ったまま
+削除する。移行前に起動されたセッション向けに、[kb-hook-preprompt.py](kb-hook-preprompt.py)は
+同じMCP自動retrievalモードへ転送する互換ラッパー、[kb-hook-stop.py](kb-hook-stop.py)は
+no-opとして残す。
 
 ## 未移植・既知の制約
 

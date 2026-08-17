@@ -68,12 +68,17 @@ impl std::error::Error for AiGuardInstallError {}
 
 pub fn status() -> Result<AiGuardStatus> {
     let policy = policy()?;
-    status_for(
+    let mut status = status_for(
         &policy,
         &codex_requirements_path(),
         &claude_settings_path(),
         true,
-    )
+    )?;
+    if legacy_claude_hooks_present_at(&claude_user_settings_path()?)? {
+        status.claude = GuardTargetState::Outdated;
+        status.ready = false;
+    }
+    Ok(status)
 }
 
 /// MCP は、対応クライアントの OS ガードを確認できたときだけ Vault を開く。
@@ -97,11 +102,37 @@ pub fn client_is_enforced(client: &str) -> bool {
 
 pub fn policy() -> Result<GuardPolicy> {
     let guarded_paths = guarded_paths()?;
+    let hook_executable = hook_executable()?;
     Ok(GuardPolicy {
-        codex_requirements: codex_requirements(&guarded_paths),
-        claude_settings: claude_settings(&guarded_paths)?,
+        codex_requirements: codex_requirements(&guarded_paths, &hook_executable)?,
+        claude_settings: claude_settings(&guarded_paths, &hook_executable)?,
         guarded_paths,
     })
+}
+
+fn hook_executable() -> Result<PathBuf> {
+    let current = std::env::current_exe()
+        .context("kb-app 実行ファイルが特定できない")
+        .map_err(CoreError::configuration)?;
+    if current
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name == "kb-app")
+    {
+        return Ok(current);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let installed = PathBuf::from("/Applications/kb-app.app/Contents/MacOS/kb-app");
+        if installed.is_file() {
+            return Ok(installed);
+        }
+    }
+
+    Err(CoreError::configuration(anyhow::anyhow!(
+        "自動retrievalを実行できる kb-app デスクトップ実行ファイルが見つからない"
+    )))
 }
 
 pub fn install() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
@@ -171,6 +202,11 @@ fn install_macos() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
         )));
     }
 
+    remove_legacy_claude_hooks_at(
+        &claude_user_settings_path().map_err(|error| AiGuardInstallError::Failed(error.into()))?,
+    )
+    .map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+
     let installed = status().map_err(|error| AiGuardInstallError::Failed(error.into()))?;
     if !installed.ready {
         return Err(AiGuardInstallError::Failed(anyhow::anyhow!(
@@ -180,9 +216,100 @@ fn install_macos() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
     Ok(installed)
 }
 
-#[cfg(target_os = "macos")]
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+fn claude_user_settings_path() -> Result<PathBuf> {
+    dirs::home_dir()
+        .context("home が特定できない")
+        .map(|home| home.join(".claude/settings.json"))
+        .map_err(CoreError::configuration)
+}
+
+fn legacy_claude_hooks_present_at(path: &Path) -> Result<bool> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(CoreError::configuration(error)),
+    };
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(CoreError::configuration)?;
+    Ok(value
+        .pointer("/hooks")
+        .into_iter()
+        .flat_map(|hooks| hooks.as_object().into_iter().flat_map(|map| map.values()))
+        .flat_map(|groups| groups.as_array().into_iter().flatten())
+        .flat_map(|group| {
+            group
+                .get("hooks")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|hook| hook.get("command").and_then(serde_json::Value::as_str))
+        .any(is_legacy_claude_hook_command))
+}
+
+fn remove_legacy_claude_hooks_at(path: &Path) -> Result<()> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(CoreError::configuration(error)),
+    };
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(CoreError::configuration)?;
+    let Some(events) = value
+        .get_mut("hooks")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    let mut removed = false;
+    for groups in events.values_mut() {
+        let Some(groups) = groups.as_array_mut() else {
+            continue;
+        };
+        for group in groups.iter_mut() {
+            if let Some(hooks) = group
+                .get_mut("hooks")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                hooks.retain(|hook| {
+                    let legacy = hook
+                        .get("command")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(is_legacy_claude_hook_command);
+                    removed |= legacy;
+                    !legacy
+                });
+            }
+        }
+        groups.retain(|group| {
+            group
+                .get("hooks")
+                .and_then(serde_json::Value::as_array)
+                .is_none_or(|hooks| !hooks.is_empty())
+        });
+    }
+    events.retain(|_, groups| groups.as_array().is_none_or(|groups| !groups.is_empty()));
+    if !removed {
+        return Ok(());
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        CoreError::configuration(anyhow::anyhow!("Claude settings has no parent"))
+    })?;
+    fs::create_dir_all(parent).map_err(CoreError::configuration)?;
+    let temp = parent.join(".settings.json.kb-app.tmp");
+    let mut updated = serde_json::to_string_pretty(&value).map_err(CoreError::configuration)?;
+    updated.push('\n');
+    fs::write(&temp, updated).map_err(CoreError::configuration)?;
+    fs::rename(&temp, path).map_err(CoreError::configuration)?;
+    Ok(())
+}
+
+fn is_legacy_claude_hook_command(command: &str) -> bool {
+    command.contains("kb-hook-preprompt.py") || command.contains("kb-hook-stop.py")
 }
 
 pub fn codex_requirements_path() -> PathBuf {
@@ -252,16 +379,37 @@ fn add_guarded_path(paths: &mut BTreeSet<String>, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn codex_requirements(paths: &[String]) -> String {
+fn codex_requirements(paths: &[String], hook_executable: &Path) -> Result<String> {
+    let managed_dir = hook_executable
+        .parent()
+        .context("kb-app 実行ファイルに親ディレクトリがない")
+        .map_err(CoreError::configuration)?;
+    let hook_command = format!(
+        "{} --hook-auto-retrieve --client codex-cli/gpt-5-codex",
+        shell_quote(hook_executable)
+    );
     let mut text = format!(
         "{CODEX_MARKER}\n\
 allowed_sandbox_modes = [\"read-only\", \"workspace-write\"]\n\
 default_permissions = \"kb_app_workspace\"\n\n\
+[features]\n\
+hooks = true\n\n\
+[hooks]\n\
+managed_dir = {}\n\n\
+[[hooks.UserPromptSubmit]]\n\n\
+[[hooks.UserPromptSubmit.hooks]]\n\
+type = \"command\"\n\
+command = {}\n\
+timeout = 30\n\
+statusMessage = \"kb-appをMCP検索中…\"\n\
+additionalContextLimit = 12000\n\n\
 [allowed_permission_profiles]\n\
 kb_app_read_only = true\n\
 kb_app_workspace = true\n\n\
 [permissions.filesystem]\n\
-deny_read = [\n"
+deny_read = [\n",
+        toml_key(&managed_dir.to_string_lossy()),
+        toml_key(&hook_command)
     );
     for path in paths {
         text.push_str(&format!("  {},\n", toml_key(path)));
@@ -285,14 +433,14 @@ extends = \":workspace\"\n\n\
     for path in paths {
         text.push_str(&format!("{} = \"deny\"\n", toml_key(path)));
     }
-    text
+    Ok(text)
 }
 
 fn toml_key(value: &str) -> String {
     serde_json::to_string(value).expect("path string is JSON serializable")
 }
 
-fn claude_settings(paths: &[String]) -> Result<String> {
+fn claude_settings(paths: &[String], hook_executable: &Path) -> Result<String> {
     let read_rules: Vec<String> = std::iter::once(CLAUDE_MARKER.to_string())
         .chain(
             paths
@@ -319,6 +467,21 @@ fn claude_settings(paths: &[String]) -> Result<String> {
                 "denyRead": paths,
                 "denyWrite": paths
             }
+        },
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": hook_executable,
+                    "args": [
+                        "--hook-auto-retrieve",
+                        "--client",
+                        "claude-code/claude"
+                    ],
+                    "timeout": 30,
+                    "statusMessage": "kb-appをMCP検索中…"
+                }]
+            }]
         }
     });
     let mut text = serde_json::to_string_pretty(&value).map_err(CoreError::configuration)?;
@@ -414,9 +577,10 @@ mod tests {
             "/Users/example/Library/Application Support/kb-app".into(),
             "/Users/example/kb".into(),
         ];
+        let hook_executable = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
         GuardPolicy {
-            codex_requirements: codex_requirements(&guarded_paths),
-            claude_settings: claude_settings(&guarded_paths).unwrap(),
+            codex_requirements: codex_requirements(&guarded_paths, hook_executable).unwrap(),
+            claude_settings: claude_settings(&guarded_paths, hook_executable).unwrap(),
             guarded_paths,
         }
     }
@@ -446,6 +610,13 @@ mod tests {
                 .contains("allowed_sandbox_modes = [\"read-only\", \"workspace-write\"]")
         );
         assert!(!policy.codex_requirements.contains(":danger-full-access"));
+        assert!(
+            policy
+                .codex_requirements
+                .contains("[[hooks.UserPromptSubmit]]")
+        );
+        assert!(policy.codex_requirements.contains("--hook-auto-retrieve"));
+        assert!(policy.codex_requirements.contains("hooks = true"));
 
         let claude: serde_json::Value = serde_json::from_str(&policy.claude_settings).unwrap();
         assert_eq!(claude["sandbox"]["enabled"], true);
@@ -461,6 +632,14 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|rule| rule == "Read(//Users/example/kb/**)")
+        );
+        assert_eq!(
+            claude["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+            "/Applications/kb-app.app/Contents/MacOS/kb-app"
+        );
+        assert_eq!(
+            claude["hooks"]["UserPromptSubmit"][0]["hooks"][0]["args"][0],
+            "--hook-auto-retrieve"
         );
     }
 
@@ -485,6 +664,41 @@ mod tests {
         fs::write(&claude, &policy.claude_settings).unwrap();
         let enforced = status_for(&policy, &codex, &claude, false).unwrap();
         assert!(enforced.ready);
+    }
+
+    #[test]
+    fn legacy_claude_hooks_are_removed_without_touching_other_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = dir.path().join("settings.json");
+        fs::write(
+            &settings,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "hooks": {
+                    "UserPromptSubmit": [{"hooks": [
+                        {"type": "command", "command": "python3 /x/kb-hook-preprompt.py"},
+                        {"type": "command", "command": "python3 /x/other.py"}
+                    ]}],
+                    "Stop": [{"hooks": [
+                        {"type": "command", "command": "python3 /x/kb-hook-stop.py"}
+                    ]}]
+                },
+                "theme": "dark"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(legacy_claude_hooks_present_at(&settings).unwrap());
+        remove_legacy_claude_hooks_at(&settings).unwrap();
+        assert!(!legacy_claude_hooks_present_at(&settings).unwrap());
+        let updated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(updated["theme"], "dark");
+        assert_eq!(
+            updated["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+            "python3 /x/other.py"
+        );
+        assert!(updated["hooks"].get("Stop").is_none());
     }
 
     #[cfg(unix)]

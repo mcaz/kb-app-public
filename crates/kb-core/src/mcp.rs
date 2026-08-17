@@ -26,8 +26,9 @@ const INSTRUCTIONS: &str = "\
 形式はアプリが管理(frontmatter を自分で書かない)。\n\
 【引く】ユーザー個人に関する話題(嗜好・決定・進行中の作業・過去に調べたこと・固有名詞)は、\
 推測で答える前に search(自然文可・意味で当たる。外したら語を変えて再検索)。ヒットは get で\
-全文を読んでから答える。本文中の /path.md リンクは必要なら辿る。「このノート」=引数なしの \
-get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
+全文を読んでから答える。`[kb-app 自動retrieval — MCP]` が届いていれば、その search → get は\
+実行済みなので、文脈が不足するときだけ追加検索する。本文中の /path.md リンクは必要なら辿る。\
+「このノート」=引数なしの get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
 から)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
 本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
@@ -175,9 +176,17 @@ fn handle(
                 .cloned()
                 .unwrap_or(json!({}));
             let vault = vault.context("Vault is unavailable")?;
-            let text = call_tool(vault, client, name, &args);
-            match text {
-                Ok(t) => Ok(Some(json!({"content": [{"type": "text", "text": t}]}))),
+            let output = call_tool(vault, client, name, &args);
+            match output {
+                Ok(output) => {
+                    let mut result = json!({
+                        "content": [{"type": "text", "text": output.text}]
+                    });
+                    if let Some(structured) = output.structured {
+                        result["structuredContent"] = structured;
+                    }
+                    Ok(Some(result))
+                }
                 // ツール内エラーはプロトコルエラーにせず isError で返す(fail-open)
                 Err(e) => Ok(Some(json!({
                     "content": [{"type": "text", "text": format!("エラー: {e}")}],
@@ -225,7 +234,8 @@ fn tool_definitions() -> Value {
             "description": "KB 検索(全文+意味+リンク近傍)。個人の話題ではまず引く。自然文可。degraded は回答に添える。",
             "inputSchema": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "検索語(自然文可)"},
-                "limit": {"type": "integer", "description": "最大件数(既定8)"}
+                "limit": {"type": "integer", "description": "最大件数(既定8)"},
+                "any": {"type": "boolean", "description": "語をOR結合する(発話全文の自動retrieval用)"}
             }, "required": ["query"]}
         },
         {
@@ -275,7 +285,21 @@ fn tool_definitions() -> Value {
     ])
 }
 
-fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<String> {
+struct ToolOutput {
+    text: String,
+    structured: Option<Value>,
+}
+
+impl ToolOutput {
+    fn text(text: String) -> Self {
+        Self {
+            text,
+            structured: None,
+        }
+    }
+}
+
+fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<ToolOutput> {
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
     // スロットリング付き・失敗は劣化情報(fail-open)
     let mut degraded: Vec<crate::degradation::Degradation> =
@@ -295,7 +319,12 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
         "search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
-            let mut out = search(&conn, query, limit);
+            let any = args.get("any").and_then(|v| v.as_bool()).unwrap_or(false);
+            let mut out = if any {
+                crate::search::search_mode(&conn, query, limit, true)
+            } else {
+                search(&conn, query, limit)
+            };
             out.degraded.extend(degraded);
             let mut text = String::new();
             if out.hits.is_empty() {
@@ -320,7 +349,10 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 text.push('\n');
             }
             text.push_str(&degradation_text(&out.degraded));
-            Ok(text)
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&out)?),
+            })
         }
         "get" => {
             let id = match args.get("note").and_then(|v| v.as_str()) {
@@ -369,11 +401,11 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                         .join(", ")
                 )
             };
-            Ok(format!(
+            Ok(ToolOutput::text(format!(
                 "(note: {id})\n{attach_line}{sim_line}{}{}",
                 degradation_text(&degraded),
                 note.to_file_string()?
-            ))
+            )))
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
@@ -390,7 +422,7 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(with_degradations(text, &degraded))
+            Ok(ToolOutput::text(with_degradations(text, &degraded)))
         }
         "propose" => {
             let title = args
@@ -434,10 +466,10 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
             } else {
                 ""
             };
-            Ok(with_degradations(
+            Ok(ToolOutput::text(with_degradations(
                 format!("起票した: {id}。{added}"),
                 &degraded,
-            ))
+            )))
         }
         "update" => {
             let id = args
@@ -465,7 +497,10 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                     client,
                 },
             )?;
-            Ok(with_degradations(format!("更新した: {id}"), &degraded))
+            Ok(ToolOutput::text(with_degradations(
+                format!("更新した: {id}"),
+                &degraded,
+            )))
         }
         "remove" => {
             let id = args
@@ -473,10 +508,10 @@ fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<St
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
             vault.agent_delete_note(id, client)?;
-            Ok(with_degradations(
+            Ok(ToolOutput::text(with_degradations(
                 format!("削除した: {id}(履歴には残る)"),
                 &degraded,
-            ))
+            )))
         }
         other => anyhow::bail!("unknown tool: {other}"),
     }
@@ -620,14 +655,52 @@ mod tests {
         let vault = Vault::create(dir.path().join("v")).unwrap();
         std::fs::write(vault.root.join("notes/broken.md"), "frontmatterではない").unwrap();
 
-        let text = call_tool(
+        let output = call_tool(
             &vault,
             "test/client",
             "search",
             &serde_json::json!({"query": "anything"}),
         )
         .unwrap();
-        assert!(text.contains("[index_parse]"), "{text}");
-        assert!(text.contains("notes/broken"), "{text}");
+        assert!(output.text.contains("[index_parse]"), "{}", output.text);
+        assert!(output.text.contains("notes/broken"), "{}", output.text);
+        assert!(output.structured.is_some());
+    }
+
+    #[test]
+    fn search_exposes_structured_hits_for_mcp_retrieval_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "認証の設計",
+                "認証と監査の設計判断。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        let result = handle(
+            Some(&vault),
+            "test/client",
+            true,
+            "tools/call",
+            Some(&serde_json::json!({
+                "name": "search",
+                "arguments": {"query": "認証 監査", "limit": 3, "any": true}
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            result["structuredContent"]["hits"][0]["title"],
+            "認証の設計"
+        );
+        assert_eq!(
+            result["structuredContent"]["hits"][0]["id"],
+            "notes/認証の設計"
+        );
     }
 }
