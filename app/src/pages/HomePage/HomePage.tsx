@@ -8,17 +8,16 @@ import { RecentNoteRow } from "@/components/molecules/RecentNoteRow";
 import { StatTile } from "@/components/molecules/StatTile";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
 import { paginate } from "@/lib/hits";
-import { useConnectState, useHomeState } from "@/lib/queries";
+import { useConnectState } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
-import type { Degradation } from "@/lib/api";
+import type { Degradation, HomeState } from "@/lib/api";
 
 const RECENT_PER_PAGE = 6;
 
 /** ホーム(健全性の要約・最近のノート)。 */
-export function HomePage() {
+export function HomePage({ home }: { home: HomeState | undefined }) {
   const { t } = useTranslation(["home", "common"]);
-  const { data: home } = useHomeState();
   const { data: connect } = useConnectState();
   const openNote = useSession((s) => s.openNote);
   const go = useSession((s) => s.go);
