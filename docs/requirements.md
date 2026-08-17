@@ -249,7 +249,11 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   permission profileとClaude Codeの管理sandboxを通じてOSレベルで読み書きを拒否する。
   ONはMCPだけを開き、OFFはMCPも閉じる。管理ポリシーの導入状態と登録Vaultのpathが一致しない
   場合は、設定switchを操作不能にしてMCPもfail-closedとする。既存の管理者ポリシーは自動で
-  上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。
+  上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。CodexとClaude Codeの
+  managed `UserPromptSubmit` hookは、モデルが自発的にtoolを選ぶ前にkb-app MCPの
+  `initialize → search(any) → get`を実行し、関連ノート全文を文脈へ注入する。OFFはtools非公開を
+  検知して注入せず、失敗・劣化は該当なしと区別してクライアントへ返す。旧Claude Python hookの
+  CLI直検索と、MCP未使用をtranscriptで推測するStop hookは廃止する。
 
 ### 将来(ステージ外)
 

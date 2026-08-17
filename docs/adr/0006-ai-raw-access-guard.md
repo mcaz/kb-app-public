@@ -13,8 +13,9 @@ MCP の `tools/list` と `tools/call` を OFF にしても、Codex と Claude Co
 
 ## 決定
 
-生ファイルの拒否は ON/OFF と分離して常時有効にする。ON/OFF が変えるのは kb-app MCP と
-Claude Code の信頼済み lifecycle hook だけで、Vault の OS sandbox deny は緩めない。
+生ファイルの拒否は ON/OFF と分離して常時有効にする。ON/OFF が変えるのは kb-app MCPだけで、
+Vault の OS sandbox deny は緩めない。自動retrievalのlifecycle hookもKB内容へ直接触れず、
+毎回kb-app MCPを子起動して現在のON/OFFをinitializeで確認する。
 
 - Codex 0.138.0 以降: `/etc/codex/requirements.toml` に管理 custom permission profile を定義し、
   `allowed_permission_profiles` を kb-app の read-only / workspace profile だけに限定する。両 profile は
@@ -25,6 +26,11 @@ Claude Code の信頼済み lifecycle hook だけで、Vault の OS sandbox deny
   `failIfUnavailable`、`allowUnsandboxedCommands: false`、`allowManagedReadPathsOnly` を置く。
   `denyRead` / `denyWrite` は shell と子 process に、管理 `permissions.deny` は組み込み Read / Edit に
   適用する。`bypassPermissions` も管理設定で無効にする。
+- Codex / Claude Code: 管理 `UserPromptSubmit` hookから同じkb-app実行ファイルの
+  `--hook-auto-retrieve`を呼ぶ。hookは同じ実行ファイルをMCP serverとして子起動し、
+  `initialize → search(any) → get`だけをJSON-RPCで実行する。これによりモデルの自発性と
+  クライアント別instructionsの差を検索開始条件から外す。OFFならinitializeがtoolsを公開しないため
+  無音で終了し、検索失敗は該当なしへ変換せず劣化コンテキストとして返す。
 - 拒否対象は登録 Vault、各 canonical path、既定の `~/kb`、kb-app の端末設定 directory とする。
 - ポリシー内容を毎回再生成して完全一致で検査する。未導入・登録 Vault 追加による古さ・競合・
   非対応のどれでも MCP は fail-closed。policy file から root までの所有者と mode も検査する。
@@ -32,6 +38,8 @@ Claude Code の信頼済み lifecycle hook だけで、Vault の OS sandbox deny
 - macOS は設定 Modal から AppleScript の標準管理者認証を出し、root 管理領域へ固定ファイルを置く。
   既存の Codex requirements が kb-app 所有でなければ上書きせず conflict とする。Claude Code は
   公式の drop-in directory に kb-app 専用ファイルを置き、他の管理設定と分離する。
+- 旧Claude Codeユーザー設定のPython前出し／Stop hookは、managed hook導入後の二重検索を避けるため
+  他のhookを温存して削除する。互換ラッパーもCLI検索をせず、新しいMCP自動retrievalへ転送する。
 
 ## 理由
 
