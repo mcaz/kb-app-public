@@ -3,6 +3,10 @@
 Claude Code で kb-app を「育つ外部記憶」として使うための配線一式。
 2026-08-10 に旧 KB の司書運用から移植。
 
+先に kb-app の設定 Modal で「完全保護」を設定する。system-level managed settings が
+Vault と kb-app の端末設定を Claude の Read / Edit / sandboxed Bash から常時隠す。
+このポリシーが未導入・古い・競合状態なら、MCP と下記 hook はどちらも fail-closed になる。
+
 ## 構成
 
 | 部品 | 役割 | 置き場 |
@@ -29,7 +33,8 @@ Claude Code で kb-app を「育つ外部記憶」として使うための配線
 
 フックは `KB_BIN` 環境変数(未設定なら PATH → Application Support の導入済みCLI →
 開発ビルドの順)で kb バイナリを探す。
-前出しと Stop 安全網はどちらも同じAI利用設定に従う。
+前出しと Stop 安全網はどちらも同じAI利用設定と完全保護の導入状態に従う。command hook は
+Claude の sandbox 外で本人の user 権限を持つため、配布元のこの script 以外へ差し替えない。
 
 ## Stop 安全網(2026-08-10 追加)
 

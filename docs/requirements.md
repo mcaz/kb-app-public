@@ -245,8 +245,11 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   tool callが来てもpull・索引更新・Vault読み書きより前に拒否する。会話へすでに渡った文脈は
   取り除けないため、比較時はAIアプリを再起動して新しい会話を使う。全体switchに加え、
   ClaudeとGPT／Codexを個別にON／OFFでき、全体OFFは個別設定より優先する。Claude Codeの
-  前出し・Stopフックも同じ設定に従う。AIの汎用shell自体はkb-appがOS上で剥奪できないため、
-  グローバル指示は「KBはMCPだけで参照し、ツール非公開時は直読みで迂回しない」を必須とする。
+  前出し・Stopフックも同じ設定に従う。生ファイルはON/OFFにかかわらず、Codexの管理
+  permission profileとClaude Codeの管理sandboxを通じてOSレベルで読み書きを拒否する。
+  ONはMCPだけを開き、OFFはMCPも閉じる。管理ポリシーの導入状態と登録Vaultのpathが一致しない
+  場合は、設定switchを操作不能にしてMCPもfail-closedとする。既存の管理者ポリシーは自動で
+  上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。
 
 ### 将来(ステージ外)
 

@@ -18,6 +18,12 @@ export const commands = {
 	settingsSetAiKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_ai_kb_enabled", { enabled })),
 	settingsSetClaudeKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_claude_kb_enabled", { enabled })),
 	settingsSetGptKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_gpt_kb_enabled", { enabled })),
+	settingsAiGuardStatus: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_ai_guard_status")),
+	/**
+	 *  macOS の管理者領域へ、Codex と Claude Code が上書きできないポリシーを置く。
+	 *  既存の Codex requirements は管理者の正本なので、kb-app 所有でなければ止める。
+	 */
+	settingsInstallAiGuard: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_install_ai_guard")),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
@@ -114,6 +120,13 @@ export type Added = {
 	delivery: DeliveryStatus,
 };
 
+export type AiGuardStatus = {
+	ready: boolean,
+	codex: GuardTargetState,
+	claude: GuardTargetState,
+	guarded_paths: string[],
+};
+
 export type AppError = 
 /**  vault を開けない(未オンボーディング・レジストリの不整合)。 */
 { code: "vault_unavailable" } | 
@@ -142,6 +155,12 @@ export type AppError =
 { code: "claude_desktop_not_found" } | 
 /**  Claude Desktop を起動できなかった。 */
 { code: "claude_desktop_launch_failed" } | 
+/**  既存の管理者ポリシーへ黙って上書きできない。 */
+{ code: "ai_guard_policy_conflict" } | 
+/**  この OS では AI の生ファイルアクセスを強制的に閉じられない。 */
+{ code: "ai_guard_unsupported" } | 
+/**  管理者ポリシーの導入または導入後検査に失敗した。 */
+{ code: "ai_guard_install_failed" } | 
 /**  バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。 */
 { code: "backup_failed"; kind: BackupFailureKind | null } | 
 /**  かしこい検索の準備に失敗。 */
@@ -295,6 +314,8 @@ export type GraphNode = {
 	status: string,
 	degree: number,
 };
+
+export type GuardTargetState = "enforced" | "missing" | "outdated" | "conflict" | "unsupported";
 
 export type Hit = Hit_Serialize | Hit_Deserialize;
 

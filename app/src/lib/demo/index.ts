@@ -2,6 +2,7 @@ import { KbError } from "@/lib/api/error";
 
 import type {
   Added,
+  AiGuardStatus,
   Availability,
   CareProposal,
   ConnectState,
@@ -240,6 +241,24 @@ let settings: Settings = {
   gpt_kb_enabled: true,
 };
 
+function aiGuard(): AiGuardStatus {
+  const phase = params().get("guard");
+  if (phase === "missing" || phase === "conflict") {
+    return {
+      ready: false,
+      codex: phase,
+      claude: phase,
+      guarded_paths: ["(demo)"],
+    };
+  }
+  return {
+    ready: true,
+    codex: "enforced",
+    claude: "enforced",
+    guarded_paths: ["(demo)"],
+  };
+}
+
 export const demoApi = {
   setupState: (): Promise<SetupState> =>
     delay({
@@ -260,6 +279,8 @@ export const demoApi = {
     settings = { ...settings, gpt_kb_enabled: enabled };
     return delay(settings);
   },
+  settingsAiGuardStatus: (): Promise<AiGuardStatus> => delay(aiGuard()),
+  settingsInstallAiGuard: (): Promise<AiGuardStatus> => delay(aiGuard()),
   onboard: (): Promise<SetupState> =>
     delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" }),
   homeState: (): Promise<HomeState> =>

@@ -43,6 +43,12 @@ pub enum AppError {
     ClaudeDesktopNotFound,
     /// Claude Desktop を起動できなかった。
     ClaudeDesktopLaunchFailed,
+    /// 既存の管理者ポリシーへ黙って上書きできない。
+    AiGuardPolicyConflict,
+    /// この OS では AI の生ファイルアクセスを強制的に閉じられない。
+    AiGuardUnsupported,
+    /// 管理者ポリシーの導入または導入後検査に失敗した。
+    AiGuardInstallFailed,
     /// バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。
     BackupFailed {
         kind: Option<kb_core::backup::BackupFailureKind>,
@@ -75,6 +81,9 @@ impl std::fmt::Display for AppError {
             Self::ClipboardImageTooLarge => write!(f, "クリップボードの画像が大きすぎる"),
             Self::ClaudeDesktopNotFound => write!(f, "Claude Desktop が見つからない"),
             Self::ClaudeDesktopLaunchFailed => write!(f, "Claude Desktop を起動できなかった"),
+            Self::AiGuardPolicyConflict => write!(f, "既存のAI管理者ポリシーと競合している"),
+            Self::AiGuardUnsupported => write!(f, "このOSではAIアクセスガードを利用できない"),
+            Self::AiGuardInstallFailed => write!(f, "AIアクセスガードを導入できなかった"),
             Self::BackupFailed { kind } => write!(f, "backup failed: {kind:?}"),
             Self::EmbedFailed => write!(f, "embedding failed"),
             Self::CoreFailed { kind } => write!(f, "core failed: {}", kind.code()),

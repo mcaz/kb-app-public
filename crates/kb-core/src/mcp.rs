@@ -7,7 +7,7 @@
 
 use std::io::{BufRead, Write};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::index::{open_db, sync_with_degradations};
@@ -45,10 +45,11 @@ kb-app はこの AI クライアントで無効です。\
 KB のデータを shell・ファイル操作・保存先の探索など別経路で参照・推測・更新しないでください。\
 過去の会話に残る KB 内容も代替経路として使わず、必要な場合は「現在は KB を参照できない」と伝えてください。";
 
-pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
+pub fn serve(client_hint: &str, mut open_vault: impl FnMut() -> Result<Vault>) -> Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    let mut vault = None;
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -68,13 +69,28 @@ pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
         // GUIとは別プロセスなので、各要求で端末設定を読み直す。既に動いている
         // MCPもOFF後の次の要求からVaultへ触れなくなる。設定破損時はfail-closed。
         let enabled = match crate::settings::load() {
-            Ok(settings) => settings.ai_kb_enabled_for(client_hint),
+            Ok(settings) => {
+                settings.ai_kb_enabled_for(client_hint)
+                    && crate::ai_guard::client_is_enforced(client_hint)
+            }
             Err(error) => {
                 eprintln!("kb mcp: settings unavailable: {}", error.detail());
                 false
             }
         };
-        let response = match handle(vault, client_hint, enabled, method, msg.get("params")) {
+        // initialize / list / OFF は Vault の場所すら開かない。ON の tool call が来た
+        // 最初の1回だけ開き、以後は同じ process 内で再利用する。
+        let needs_vault = method_needs_vault(enabled, method);
+        if needs_vault && vault.is_none() {
+            vault = Some(open_vault()?);
+        }
+        let response = match handle(
+            vault.as_ref(),
+            client_hint,
+            enabled,
+            method,
+            msg.get("params"),
+        ) {
             Ok(Some(result)) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
             Ok(None) => json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32601, "message": format!("unknown method: {method}")}}),
@@ -87,8 +103,12 @@ pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
     Ok(())
 }
 
+fn method_needs_vault(enabled: bool, method: &str) -> bool {
+    enabled && method == "tools/call"
+}
+
 fn handle(
-    vault: &Vault,
+    vault: Option<&Vault>,
     client: &str,
     enabled: bool,
     method: &str,
@@ -154,6 +174,7 @@ fn handle(
                 .and_then(|p| p.get("arguments"))
                 .cloned()
                 .unwrap_or(json!({}));
+            let vault = vault.context("Vault is unavailable")?;
             let text = call_tool(vault, client, name, &args);
             match text {
                 Ok(t) => Ok(Some(json!({"content": [{"type": "text", "text": t}]}))),
@@ -488,7 +509,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let initialized = handle(
-            &vault,
+            Some(&vault),
             "test/client",
             false,
             "initialize",
@@ -505,10 +526,10 @@ mod tests {
                 .contains("~/kb")
         );
 
-        let tools = handle(&vault, "test/client", false, "tools/list", None)
+        let tools = handle(Some(&vault), "test/client", false, "tools/list", None)
             .unwrap()
             .unwrap();
-        let prompts = handle(&vault, "test/client", false, "prompts/list", None)
+        let prompts = handle(Some(&vault), "test/client", false, "prompts/list", None)
             .unwrap()
             .unwrap();
         assert_eq!(tools, serde_json::json!({"tools": []}));
@@ -523,7 +544,7 @@ mod tests {
         assert!(!index.exists());
 
         let response = handle(
-            &vault,
+            Some(&vault),
             "test/client",
             false,
             "tools/call",
@@ -540,10 +561,19 @@ mod tests {
     }
 
     #[test]
+    fn disabled_control_plane_never_opens_the_vault() {
+        for method in ["initialize", "tools/list", "prompts/list", "tools/call"] {
+            assert!(!method_needs_vault(false, method));
+        }
+        assert!(!method_needs_vault(true, "initialize"));
+        assert!(method_needs_vault(true, "tools/call"));
+    }
+
+    #[test]
     fn enabled_initialize_keeps_the_existing_tools_and_instructions() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        let initialized = handle(&vault, "test/client", true, "initialize", None)
+        let initialized = handle(Some(&vault), "test/client", true, "initialize", None)
             .unwrap()
             .unwrap();
         assert_eq!(
