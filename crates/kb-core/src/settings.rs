@@ -17,6 +17,8 @@ use crate::error::{CoreError, Result};
 #[serde(default)]
 pub struct Settings {
     pub ai_kb_enabled: bool,
+    pub claude_kb_enabled: bool,
+    pub gpt_kb_enabled: bool,
 }
 
 impl Default for Settings {
@@ -24,6 +26,47 @@ impl Default for Settings {
         Self {
             // 設定ファイル導入前から接続済みの利用者の挙動を変えない。
             ai_kb_enabled: true,
+            claude_kb_enabled: true,
+            gpt_kb_enabled: true,
+        }
+    }
+}
+
+impl Settings {
+    /// 全体設定に加え、MCP登録時のclient hintに対応する個別設定を適用する。
+    /// 未知のclientは全体設定だけを使い、新しい連携を黙って停止しない。
+    pub fn ai_kb_enabled_for(&self, client: &str) -> bool {
+        if !self.ai_kb_enabled {
+            return false;
+        }
+
+        match ClientFamily::from_hint(client) {
+            ClientFamily::Claude => self.claude_kb_enabled,
+            ClientFamily::Gpt => self.gpt_kb_enabled,
+            ClientFamily::Other => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClientFamily {
+    Claude,
+    Gpt,
+    Other,
+}
+
+impl ClientFamily {
+    fn from_hint(client: &str) -> Self {
+        let client = client.to_ascii_lowercase();
+        if client.contains("claude") {
+            Self::Claude
+        } else if ["gpt", "codex", "chatgpt", "openai"]
+            .iter()
+            .any(|name| client.contains(name))
+        {
+            Self::Gpt
+        } else {
+            Self::Other
         }
     }
 }
@@ -33,10 +76,25 @@ pub fn load() -> Result<Settings> {
 }
 
 pub fn set_ai_kb_enabled(enabled: bool) -> Result<Settings> {
-    let settings = Settings {
-        ai_kb_enabled: enabled,
-    };
-    save_at(&settings_path()?, &settings)?;
+    update(|settings| settings.ai_kb_enabled = enabled)
+}
+
+pub fn set_claude_kb_enabled(enabled: bool) -> Result<Settings> {
+    update(|settings| settings.claude_kb_enabled = enabled)
+}
+
+pub fn set_gpt_kb_enabled(enabled: bool) -> Result<Settings> {
+    update(|settings| settings.gpt_kb_enabled = enabled)
+}
+
+fn update(change: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    update_at(&settings_path()?, change)
+}
+
+fn update_at(path: &Path, change: impl FnOnce(&mut Settings)) -> Result<Settings> {
+    let mut settings = load_at(path)?;
+    change(&mut settings);
+    save_at(path, &settings)?;
     Ok(settings)
 }
 
@@ -98,6 +156,8 @@ mod tests {
             &path,
             &Settings {
                 ai_kb_enabled: false,
+                claude_kb_enabled: false,
+                gpt_kb_enabled: true,
             },
         )
         .unwrap();
@@ -106,23 +166,58 @@ mod tests {
             load_at(&path).unwrap(),
             Settings {
                 ai_kb_enabled: false,
+                claude_kb_enabled: false,
+                gpt_kb_enabled: true,
             }
         );
 
-        save_at(
-            &path,
-            &Settings {
-                ai_kb_enabled: true,
-            },
-        )
-        .unwrap();
+        update_at(&path, |settings| settings.ai_kb_enabled = true).unwrap();
+        update_at(&path, |settings| settings.claude_kb_enabled = true).unwrap();
+        update_at(&path, |settings| settings.gpt_kb_enabled = false).unwrap();
 
         assert_eq!(
             load_at(&path).unwrap(),
             Settings {
                 ai_kb_enabled: true,
+                claude_kb_enabled: true,
+                gpt_kb_enabled: false,
             }
         );
+    }
+
+    #[test]
+    fn older_settings_default_new_client_switches_to_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"ai_kb_enabled":false}"#).unwrap();
+
+        assert_eq!(
+            load_at(&path).unwrap(),
+            Settings {
+                ai_kb_enabled: false,
+                claude_kb_enabled: true,
+                gpt_kb_enabled: true,
+            }
+        );
+    }
+
+    #[test]
+    fn master_and_client_switches_are_applied_independently() {
+        let mut settings = Settings {
+            ai_kb_enabled: true,
+            claude_kb_enabled: false,
+            gpt_kb_enabled: true,
+        };
+
+        assert!(!settings.ai_kb_enabled_for("claude-code/claude"));
+        assert!(!settings.ai_kb_enabled_for("claude-desktop/claude"));
+        assert!(settings.ai_kb_enabled_for("codex-cli/gpt-5-codex"));
+        assert!(settings.ai_kb_enabled_for("chatgpt/openai"));
+        assert!(settings.ai_kb_enabled_for("future-client/model"));
+
+        settings.ai_kb_enabled = false;
+        assert!(!settings.ai_kb_enabled_for("codex-cli/gpt-5-codex"));
+        assert!(!settings.ai_kb_enabled_for("future-client/model"));
     }
 
     #[test]

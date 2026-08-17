@@ -27,6 +27,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             setup::onboard_existing,
             settings::settings_get,
             settings::settings_set_ai_kb_enabled,
+            settings::settings_set_claude_kb_enabled,
+            settings::settings_set_gpt_kb_enabled,
             home::home_state,
             home::tag_overview,
             home::care_dismiss,

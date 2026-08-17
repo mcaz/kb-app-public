@@ -54,6 +54,14 @@ export const api = {
     IN_TAURI
       ? unwrap(commands.settingsSetAiKbEnabled(enabled))
       : (await demo()).settingsSetAiKbEnabled(enabled),
+  settingsSetClaudeKbEnabled: async (enabled: boolean): Promise<Settings> =>
+    IN_TAURI
+      ? unwrap(commands.settingsSetClaudeKbEnabled(enabled))
+      : (await demo()).settingsSetClaudeKbEnabled(enabled),
+  settingsSetGptKbEnabled: async (enabled: boolean): Promise<Settings> =>
+    IN_TAURI
+      ? unwrap(commands.settingsSetGptKbEnabled(enabled))
+      : (await demo()).settingsSetGptKbEnabled(enabled),
   onboard: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboard()) : (await demo()).onboard(),
   onboardExisting: async (url: string): Promise<SetupState> =>

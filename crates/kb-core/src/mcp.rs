@@ -61,7 +61,7 @@ pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
         // GUIとは別プロセスなので、各要求で端末設定を読み直す。既に動いている
         // MCPもOFF後の次の要求からVaultへ触れなくなる。設定破損時はfail-closed。
         let enabled = match crate::settings::load() {
-            Ok(settings) => settings.ai_kb_enabled,
+            Ok(settings) => settings.ai_kb_enabled_for(client_hint),
             Err(error) => {
                 eprintln!("kb mcp: settings unavailable: {}", error.detail());
                 false

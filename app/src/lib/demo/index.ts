@@ -234,7 +234,11 @@ let githubAuth: GitHubAuthState = {
 const delay = <T>(value: T): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), 30));
 
-let settings: Settings = { ai_kb_enabled: true };
+let settings: Settings = {
+  ai_kb_enabled: true,
+  claude_kb_enabled: true,
+  gpt_kb_enabled: true,
+};
 
 export const demoApi = {
   setupState: (): Promise<SetupState> =>
@@ -245,7 +249,15 @@ export const demoApi = {
     }),
   settingsGet: (): Promise<Settings> => delay(settings),
   settingsSetAiKbEnabled: (enabled: boolean): Promise<Settings> => {
-    settings = { ai_kb_enabled: enabled };
+    settings = { ...settings, ai_kb_enabled: enabled };
+    return delay(settings);
+  },
+  settingsSetClaudeKbEnabled: (enabled: boolean): Promise<Settings> => {
+    settings = { ...settings, claude_kb_enabled: enabled };
+    return delay(settings);
+  },
+  settingsSetGptKbEnabled: (enabled: boolean): Promise<Settings> => {
+    settings = { ...settings, gpt_kb_enabled: enabled };
     return delay(settings);
   },
   onboard: (): Promise<SetupState> =>

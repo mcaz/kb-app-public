@@ -242,7 +242,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   KBを使うかを端末単位で切り替えられる。OFFでも管理アプリと保存済みノートは利用でき、
   データを削除しない。MCPはOFF時にinstructions・tools・promptsを公開せず、既存processから
   tool callが来てもpull・索引更新・Vault読み書きより前に拒否する。会話へすでに渡った文脈は
-  取り除けないため、比較時はAIアプリを再起動して新しい会話を使う。
+  取り除けないため、比較時はAIアプリを再起動して新しい会話を使う。全体switchに加え、
+  ClaudeとGPT／Codexを個別にON／OFFでき、全体OFFは個別設定より優先する。
 
 ### 将来(ステージ外)
 

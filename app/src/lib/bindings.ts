@@ -16,6 +16,8 @@ export const commands = {
 	onboardExisting: (url: string) => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard_existing", { url })),
 	settingsGet: () => typedError<Settings, AppError>(__TAURI_INVOKE("settings_get")),
 	settingsSetAiKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_ai_kb_enabled", { enabled })),
+	settingsSetClaudeKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_claude_kb_enabled", { enabled })),
+	settingsSetGptKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_gpt_kb_enabled", { enabled })),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
@@ -443,6 +445,8 @@ export type Sensitivity = "private" | "shared";
 
 export type Settings = {
 	ai_kb_enabled?: boolean,
+	claude_kb_enabled?: boolean,
+	gpt_kb_enabled?: boolean,
 };
 
 export type SetupState = {

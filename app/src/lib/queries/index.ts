@@ -26,6 +26,26 @@ export function useSetAiKbEnabled() {
   });
 }
 
+export function useSetClaudeKbEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsSetClaudeKbEnabled,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.settings, settings);
+    },
+  });
+}
+
+export function useSetGptKbEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsSetGptKbEnabled,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.settings, settings);
+    },
+  });
+}
+
 export const useHomeState = () => useQuery({ queryKey: queryKeys.home, queryFn: api.homeState });
 
 export const useTagOverview = () =>
