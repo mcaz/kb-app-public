@@ -27,7 +27,8 @@ Claude Code の信頼済み lifecycle hook だけで、Vault の OS sandbox deny
   適用する。`bypassPermissions` も管理設定で無効にする。
 - 拒否対象は登録 Vault、各 canonical path、既定の `~/kb`、kb-app の端末設定 directory とする。
 - ポリシー内容を毎回再生成して完全一致で検査する。未導入・登録 Vault 追加による古さ・競合・
-  非対応のどれでも MCP は fail-closed。UI も保護完了まで switch を操作させない。
+  非対応のどれでも MCP は fail-closed。policy file から root までの所有者と mode も検査する。
+  UI も保護完了まで switch を操作させない。
 - macOS は設定 Modal から AppleScript の標準管理者認証を出し、root 管理領域へ固定ファイルを置く。
   既存の Codex requirements が kb-app 所有でなければ上書きせず conflict とする。Claude Code は
   公式の drop-in directory に kb-app 専用ファイルを置き、他の管理設定と分離する。

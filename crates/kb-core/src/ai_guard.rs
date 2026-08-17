@@ -388,8 +388,15 @@ fn managed_ownership_is_secure(path: &Path, required: bool) -> Result<bool> {
     }
     #[cfg(unix)]
     {
-        let metadata = fs::metadata(path).map_err(CoreError::configuration)?;
-        Ok(metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
+        // file だけが root-owned でも、途中の directory を一般 user が差し替えられる
+        // なら永続的な管理境界にならない。root までの全経路を同じ条件で検査する。
+        for component in path.ancestors() {
+            let metadata = fs::metadata(component).map_err(CoreError::configuration)?;
+            if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     #[cfg(not(unix))]
     {
@@ -478,5 +485,24 @@ mod tests {
         fs::write(&claude, &policy.claude_settings).unwrap();
         let enforced = status_for(&policy, &codex, &claude, false).unwrap();
         assert!(enforced.ready);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn matching_user_owned_files_are_not_managed_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex = dir.path().join("requirements.toml");
+        let claude = dir.path().join("managed.json");
+        let policy = example_policy();
+        fs::write(&codex, &policy.codex_requirements).unwrap();
+        fs::write(&claude, &policy.claude_settings).unwrap();
+        if fs::metadata(&codex).unwrap().uid() == 0 {
+            return;
+        }
+
+        let status = status_for(&policy, &codex, &claude, true).unwrap();
+        assert!(!status.ready);
+        assert_eq!(status.codex, GuardTargetState::Outdated);
+        assert_eq!(status.claude, GuardTargetState::Outdated);
     }
 }

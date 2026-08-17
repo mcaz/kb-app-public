@@ -40,7 +40,8 @@
   `settings.json` / `registry.json` を置く kb-app の端末設定ディレクトリを含める。AI が別名 path、
   `cat`、Python、kb CLI、設定ファイル改変のいずれを選んでも同じ OS 境界で止まる。管理アプリ、
   kb-app MCP、本人が使う通常の terminal は AI client の sandbox 外なので影響を受けない。policy は
-  root 所有かつ group / other 書き込み不可まで検査し、内容だけ同じ user 所有 file は有効と扱わない。
+  policy file と root までの全 directory が root 所有かつ group / other 書き込み不可まで検査し、
+  内容だけ同じ user 所有 file や差し替え可能な親 directory は有効と扱わない。
 - 契約の変更はこの文書の改定+コアの強制点の変更として行う(instructions だけの変更は不可)
 - **語彙の正本は設定ファイルでなく「タグ運用」ノートの `## 語彙` 節**。
   どの語を使うかは運用(会話で合意し KB のノートに記録する)であり、この文書は
