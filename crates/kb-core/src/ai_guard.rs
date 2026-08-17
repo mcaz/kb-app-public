@@ -250,6 +250,7 @@ fn legacy_claude_hooks_present_at(path: &Path) -> Result<bool> {
         .any(is_legacy_claude_hook_command))
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn remove_legacy_claude_hooks_at(path: &Path) -> Result<()> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
