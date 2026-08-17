@@ -1,4 +1,5 @@
 import type {
+  AiGuardStatus,
   ConnectState,
   Degradation,
   Favorite_Serialize,
@@ -29,6 +30,7 @@ export type SearchOutcome = SearchOutcome_Serialize;
 export type Favorite = Favorite_Serialize;
 
 export type {
+  AiGuardStatus,
   ConnectState,
   Degradation,
   GraphData,

@@ -116,6 +116,12 @@ export function useErrorText(): (e: unknown) => string {
           return t("errors.claudeDesktopNotFound");
         case "claude_desktop_launch_failed":
           return t("errors.claudeDesktopLaunchFailed");
+        case "ai_guard_policy_conflict":
+          return t("errors.aiGuardPolicyConflict");
+        case "ai_guard_unsupported":
+          return t("errors.aiGuardUnsupported");
+        case "ai_guard_install_failed":
+          return t("errors.aiGuardInstallFailed");
         case "backup_failed":
           return backupErrorText(d.kind, "");
         case "embed_failed":

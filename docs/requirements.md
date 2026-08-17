@@ -240,9 +240,16 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 - FR-A8(将来)プラグイン機構(パネル・フック・コマンド)
 - **FR-A9 AIでのKB利用ON／OFF(2026-08-17 本人決定)**: 設定Modalから、AIとの会話で
   KBを使うかを端末単位で切り替えられる。OFFでも管理アプリと保存済みノートは利用でき、
-  データを削除しない。MCPはOFF時にinstructions・tools・promptsを公開せず、既存processから
+  データを削除しない。MCPはOFF時にtools・promptsを公開せず、instructionsは
+  KBの内容・保存先を含まない迂回禁止ルールだけを返す。既存processから
   tool callが来てもpull・索引更新・Vault読み書きより前に拒否する。会話へすでに渡った文脈は
-  取り除けないため、比較時はAIアプリを再起動して新しい会話を使う。
+  取り除けないため、比較時はAIアプリを再起動して新しい会話を使う。全体switchに加え、
+  ClaudeとGPT／Codexを個別にON／OFFでき、全体OFFは個別設定より優先する。Claude Codeの
+  前出し・Stopフックも同じ設定に従う。生ファイルはON/OFFにかかわらず、Codexの管理
+  permission profileとClaude Codeの管理sandboxを通じてOSレベルで読み書きを拒否する。
+  ONはMCPだけを開き、OFFはMCPも閉じる。管理ポリシーの導入状態と登録Vaultのpathが一致しない
+  場合は、設定switchを操作不能にしてMCPもfail-closedとする。既存の管理者ポリシーは自動で
+  上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。
 
 ### 将来(ステージ外)
 

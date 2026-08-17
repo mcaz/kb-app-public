@@ -18,12 +18,11 @@ pub fn run_if_requested() -> bool {
     };
     let client = flag("--client").unwrap_or_else(|| "mcp-client/unknown".into());
 
-    let result = (|| -> anyhow::Result<()> {
+    let result = kb_core::mcp::serve(&client, || {
         let reg = kb_core::registry::Registry::load()?;
         let path = reg.resolve(flag("--vault").as_deref())?;
-        let vault = kb_core::vault::Vault::open(path)?;
-        kb_core::mcp::serve(&vault, &client)
-    })();
+        kb_core::vault::Vault::open(path)
+    });
 
     if let Err(e) = result {
         eprintln!("kb-app --mcp: {e}");

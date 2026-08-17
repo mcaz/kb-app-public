@@ -3,12 +3,16 @@
 Claude Code で kb-app を「育つ外部記憶」として使うための配線一式。
 2026-08-10 に旧 KB の司書運用から移植。
 
+先に kb-app の設定 Modal で「完全保護」を設定する。system-level managed settings が
+Vault と kb-app の端末設定を Claude の Read / Edit / sandboxed Bash から常時隠す。
+このポリシーが未導入・古い・競合状態なら、MCP と下記 hook はどちらも fail-closed になる。
+
 ## 構成
 
 | 部品 | 役割 | 置き場 |
 |---|---|---|
 | MCP サーバー | search / get / recent / propose(confirm は非公開) | `claude mcp add --scope user kb-app -- <kb バイナリ> mcp --vault <名前> --client claude-code/claude` |
-| 前出しフック | 発話のたびに `kb search --any`(OR・bm25)で関連ノートを文脈注入。fail-open・通知/スラッシュコマンドはスキップ | [kb-hook-preprompt.py](kb-hook-preprompt.py) を settings.json の UserPromptSubmit へ |
+| 前出しフック | 発話のたびに `kb search --any`(OR・bm25)で関連ノートを文脈注入。実行前に `kb settings ai-enabled --client claude-code/claude` で全体・Claude別設定を確認し、OFF・判定不能なら注入しない | [kb-hook-preprompt.py](kb-hook-preprompt.py) を settings.json の UserPromptSubmit へ |
 | kb-researcher | 検索専用サブエージェント(複数クエリ・全文読み・要点だけ返す) | `~/.claude/agents/kb-researcher.md` |
 | 規律 | まず引く・終わりに propose 提案・確定は本人指示の二経路 | `~/.claude/CLAUDE.md`(server instructions と同型) |
 
@@ -27,7 +31,10 @@ Claude Code で kb-app を「育つ外部記憶」として使うための配線
 }
 ```
 
-フックは `KB_BIN` 環境変数(未設定なら PATH → 開発ビルドの順)で kb バイナリを探す。
+フックは `KB_BIN` 環境変数(未設定なら PATH → Application Support の導入済みCLI →
+開発ビルドの順)で kb バイナリを探す。
+前出しと Stop 安全網はどちらも同じAI利用設定と完全保護の導入状態に従う。command hook は
+Claude の sandbox 外で本人の user 権限を持つため、配布元のこの script 以外へ差し替えない。
 
 ## Stop 安全網(2026-08-10 追加)
 

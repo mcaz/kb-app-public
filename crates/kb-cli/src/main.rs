@@ -102,6 +102,24 @@ enum Command {
         #[arg(long, default_value = "mcp-client/unknown")]
         client: String,
     },
+    /// AI 連携向けの端末設定を読み取る
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsCommand {
+    /// 全体とクライアント別の設定から KB 利用可否を JSON で返す
+    AiEnabled {
+        #[arg(long)]
+        client: String,
+    },
+    /// Codex / Claude Code の OS レベル保護状態を JSON で返す
+    AiGuardStatus,
+    /// macOS の管理者認証を経て OS レベル保護を導入・更新する
+    InstallAiGuard,
 }
 
 #[derive(Subcommand)]
@@ -383,9 +401,25 @@ fn main() -> Result<()> {
             }
         }
         Command::Mcp { client } => {
-            let vault = open_vault(cli.vault.as_deref())?;
-            kb_core::mcp::serve(&vault, &client)?;
+            kb_core::mcp::serve(&client, || open_vault(cli.vault.as_deref()))?;
         }
+        Command::Settings { command } => match command {
+            SettingsCommand::AiEnabled { client } => {
+                let enabled = kb_core::settings::load()?.ai_kb_enabled_for(&client)
+                    && kb_core::ai_guard::client_is_enforced(&client);
+                println!("{}", serde_json::json!({"enabled": enabled}));
+            }
+            SettingsCommand::AiGuardStatus => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&kb_core::ai_guard::status()?)?
+                );
+            }
+            SettingsCommand::InstallAiGuard => {
+                let status = kb_core::ai_guard::install().map_err(anyhow::Error::new)?;
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            }
+        },
     }
     Ok(())
 }
@@ -433,6 +467,10 @@ mod tests {
             "propose".to_string(),
             "recent".to_string(),
             "search".to_string(),
+            "settings".to_string(),
+            "settings ai-enabled".to_string(),
+            "settings ai-guard-status".to_string(),
+            "settings install-ai-guard".to_string(),
             "storage".to_string(),
             "storage export".to_string(),
             "storage verify".to_string(),

@@ -16,10 +16,43 @@ export const useSetupState = () => useQuery({ queryKey: queryKeys.setup, queryFn
 export const useSettings = () =>
   useQuery({ queryKey: queryKeys.settings, queryFn: api.settingsGet });
 
+export const useAiGuardStatus = () =>
+  useQuery({ queryKey: queryKeys.aiGuard, queryFn: api.settingsAiGuardStatus });
+
+export function useInstallAiGuard() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsInstallAiGuard,
+    onSuccess: (status) => {
+      qc.setQueryData(queryKeys.aiGuard, status);
+    },
+  });
+}
+
 export function useSetAiKbEnabled() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.settingsSetAiKbEnabled,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.settings, settings);
+    },
+  });
+}
+
+export function useSetClaudeKbEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsSetClaudeKbEnabled,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.settings, settings);
+    },
+  });
+}
+
+export function useSetGptKbEnabled() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsSetGptKbEnabled,
     onSuccess: (settings) => {
       qc.setQueryData(queryKeys.settings, settings);
     },

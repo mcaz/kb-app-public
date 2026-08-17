@@ -2,6 +2,7 @@ import { KbError } from "@/lib/api/error";
 
 import type {
   Added,
+  AiGuardStatus,
   Availability,
   CareProposal,
   ConnectState,
@@ -234,7 +235,29 @@ let githubAuth: GitHubAuthState = {
 const delay = <T>(value: T): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), 30));
 
-let settings: Settings = { ai_kb_enabled: true };
+let settings: Settings = {
+  ai_kb_enabled: true,
+  claude_kb_enabled: true,
+  gpt_kb_enabled: true,
+};
+
+function aiGuard(): AiGuardStatus {
+  const phase = params().get("guard");
+  if (phase === "missing" || phase === "conflict") {
+    return {
+      ready: false,
+      codex: phase,
+      claude: phase,
+      guarded_paths: ["(demo)"],
+    };
+  }
+  return {
+    ready: true,
+    codex: "enforced",
+    claude: "enforced",
+    guarded_paths: ["(demo)"],
+  };
+}
 
 export const demoApi = {
   setupState: (): Promise<SetupState> =>
@@ -245,9 +268,19 @@ export const demoApi = {
     }),
   settingsGet: (): Promise<Settings> => delay(settings),
   settingsSetAiKbEnabled: (enabled: boolean): Promise<Settings> => {
-    settings = { ai_kb_enabled: enabled };
+    settings = { ...settings, ai_kb_enabled: enabled };
     return delay(settings);
   },
+  settingsSetClaudeKbEnabled: (enabled: boolean): Promise<Settings> => {
+    settings = { ...settings, claude_kb_enabled: enabled };
+    return delay(settings);
+  },
+  settingsSetGptKbEnabled: (enabled: boolean): Promise<Settings> => {
+    settings = { ...settings, gpt_kb_enabled: enabled };
+    return delay(settings);
+  },
+  settingsAiGuardStatus: (): Promise<AiGuardStatus> => delay(aiGuard()),
+  settingsInstallAiGuard: (): Promise<AiGuardStatus> => delay(aiGuard()),
   onboard: (): Promise<SetupState> =>
     delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" }),
   homeState: (): Promise<HomeState> =>
