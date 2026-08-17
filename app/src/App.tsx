@@ -62,7 +62,7 @@ export function App() {
           />
         }
       >
-        {view === "home" && <HomePage />}
+        {view === "home" && <HomePage home={home} />}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
         {view === "graph" && <GraphPage />}
       </AppShell>

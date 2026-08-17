@@ -722,6 +722,10 @@ struct SyncFailure {
 #[derive(Debug, Default, Clone, Serialize, serde::Deserialize)]
 pub struct SyncState {
     pub last_pull_epoch: u64,
+    /// 成否に関係なく、最後にpullを開始した時刻。Keychain拒否やnetwork失敗でも
+    /// 短時間に再試行して認証dialogを連打しないため、成功時刻と分けて持つ。
+    #[serde(default)]
+    last_pull_attempt_epoch: u64,
     pub last_error: Option<String>,
     #[serde(default)]
     pub last_error_kind: Option<BackupFailureKind>,
@@ -788,7 +792,9 @@ fn record_upload_gate_success(vault: &Vault) {
 
 fn record_push_success(vault: &Vault) {
     let mut st = sync_state(vault);
-    st.last_pull_epoch = epoch_now();
+    let now = epoch_now();
+    st.last_pull_epoch = now;
+    st.last_pull_attempt_epoch = now;
     st.last_error = None;
     st.last_error_kind = None;
     st.privacy_latch = None;
@@ -797,7 +803,9 @@ fn record_push_success(vault: &Vault) {
 
 fn record_pull_success(vault: &Vault) {
     let mut st = sync_state(vault);
-    st.last_pull_epoch = epoch_now();
+    let now = epoch_now();
+    st.last_pull_epoch = now;
+    st.last_pull_attempt_epoch = now;
     if let Some(latch) = st.privacy_latch.clone() {
         show_failure(&mut st, &latch);
     } else if matches!(st.last_error_kind, None | Some(BackupFailureKind::GitPull)) {
@@ -814,6 +822,17 @@ fn epoch_now() -> u64 {
         .unwrap_or(0)
 }
 
+fn record_pull_attempt(vault: &Vault, now: u64) {
+    let mut st = sync_state(vault);
+    st.last_pull_attempt_epoch = now;
+    write_sync_state(vault, &st);
+}
+
+fn pull_is_throttled(st: &SyncState, now: u64) -> bool {
+    let last = st.last_pull_epoch.max(st.last_pull_attempt_epoch);
+    now.saturating_sub(last) < PULL_THROTTLE_SECS
+}
+
 /// メッセージのやり取り・画面更新の際の pull(複数デバイス同期)。
 /// 時間スロットリング付き — 全呼び出しで同期待ちしない(旧 KB のレイテンシ教訓)。
 /// 戻り値: 劣化情報(None = 正常またはスキップ)。
@@ -821,15 +840,25 @@ pub fn pull_if_stale(vault: &Vault) -> Option<crate::degradation::Degradation> {
     if !has_origin(vault) {
         return None;
     }
-    if epoch_now().saturating_sub(sync_state(vault).last_pull_epoch) < PULL_THROTTLE_SECS {
-        return sync_state(vault)
+    let now = epoch_now();
+    let current = sync_state(vault);
+    if pull_is_throttled(&current, now) {
+        return current
             .last_error
             .map(|detail| crate::degradation::Degradation::RemoteSync { detail });
     }
-    let result = pull_now(vault);
+    // Keychain拒否のようにgit起動前で失敗しても、この時刻を残して次の画面queryや
+    // MCP tool callが即座に同じ認証を要求しない。
+    record_pull_attempt(vault, now);
+    if let Err(error) = pull_now(vault) {
+        record_sync_error(
+            vault,
+            &error.to_string(),
+            failure_kind(&error).or(Some(BackupFailureKind::GitPull)),
+        );
+    }
     sync_state(vault)
         .last_error
-        .or_else(|| result.err().map(|error| error.to_string()))
         .map(|detail| crate::degradation::Degradation::RemoteSync { detail })
 }
 
@@ -904,6 +933,19 @@ mod tests {
             .unwrap()
             .target()
             .unwrap()
+    }
+
+    #[test]
+    fn failed_pull_attempt_is_throttled_without_a_success_timestamp() {
+        let state = SyncState {
+            last_pull_epoch: 0,
+            last_pull_attempt_epoch: 1_000,
+            ..Default::default()
+        };
+
+        assert!(pull_is_throttled(&state, 1_000));
+        assert!(pull_is_throttled(&state, 1_000 + PULL_THROTTLE_SECS - 1));
+        assert!(!pull_is_throttled(&state, 1_000 + PULL_THROTTLE_SECS));
     }
 
     #[test]

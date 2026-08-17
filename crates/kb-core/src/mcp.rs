@@ -15,6 +15,20 @@ use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
+const KB_DISABLED_CODE: &str = "kb_disabled";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServeOptions {
+    /// tool callの前にGitHub pullを試す。短命な自動retrieval processではfalseにし、
+    /// Keychain認証やremote I/Oを発話回数へ結び付けない。
+    pub remote_sync: bool,
+}
+
+impl Default for ServeOptions {
+    fn default() -> Self {
+        Self { remote_sync: true }
+    }
+}
 
 /// server instructions(FR-C5)。「まず引く・終わりに起票を提案」の規律を配る。
 /// 旧 KB の M1/M3 実測で「instructions だけでフック無し環境でも規律が成立」を確認済み。
@@ -42,11 +56,20 @@ update で本文に /path.md リンクを足す(ユーザーに可否を尋ね�
 /// OFF 時は KB の内容や保存先を渡さず、迂回禁止だけを制御プレーンとして配る。
 /// ツールを非公開にするだけでは、汎用 shell を持つ AI が Vault を直読みできるため。
 const DISABLED_INSTRUCTIONS: &str = "\
-kb-app はこの AI クライアントで無効です。\
+kb-app はこの AI クライアントで無効です [kb_disabled]。\
+各ツールがこのコードを返す状態は権威ある終端結果であり、再試行できません。\
 KB のデータを shell・ファイル操作・保存先の探索など別経路で参照・推測・更新しないでください。\
 過去の会話に残る KB 内容も代替経路として使わず、必要な場合は「現在は KB を参照できない」と伝えてください。";
 
-pub fn serve(client_hint: &str, mut open_vault: impl FnMut() -> Result<Vault>) -> Result<()> {
+pub fn serve(client_hint: &str, open_vault: impl FnMut() -> Result<Vault>) -> Result<()> {
+    serve_with_options(client_hint, ServeOptions::default(), open_vault)
+}
+
+pub fn serve_with_options(
+    client_hint: &str,
+    options: ServeOptions,
+    mut open_vault: impl FnMut() -> Result<Vault>,
+) -> Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -89,6 +112,7 @@ pub fn serve(client_hint: &str, mut open_vault: impl FnMut() -> Result<Vault>) -
             vault.as_ref(),
             client_hint,
             enabled,
+            options.remote_sync,
             method,
             msg.get("params"),
         ) {
@@ -112,6 +136,7 @@ fn handle(
     vault: Option<&Vault>,
     client: &str,
     enabled: bool,
+    remote_sync: bool,
     method: &str,
     params: Option<&Value>,
 ) -> Result<Option<Value>> {
@@ -123,7 +148,11 @@ fn handle(
                 .unwrap_or(PROTOCOL_FALLBACK);
             let mut initialized = json!({
                 "protocolVersion": requested,
-                "capabilities": if enabled { json!({"tools": {}, "prompts": {}}) } else { json!({}) },
+                "capabilities": if enabled {
+                    json!({"tools": {}, "prompts": {}})
+                } else {
+                    json!({"tools": {}})
+                },
                 "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
             });
             initialized["instructions"] = json!(if enabled {
@@ -134,11 +163,7 @@ fn handle(
             Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
-        "tools/list" => Ok(Some(if enabled {
-            json!({"tools": tool_definitions()})
-        } else {
-            json!({"tools": []})
-        })),
+        "tools/list" => Ok(Some(json!({"tools": tool_definitions()}))),
         // MCP prompts — 定型操作の入口(常駐コンテキストを増やさず、正しい挙動を
         // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
         "prompts/list" => Ok(Some(if enabled {
@@ -148,7 +173,7 @@ fn handle(
         })),
         "prompts/get" => {
             if !enabled {
-                anyhow::bail!("kb_disabled");
+                anyhow::bail!(KB_DISABLED_CODE);
             }
             let name = params
                 .and_then(|p| p.get("name"))
@@ -162,10 +187,7 @@ fn handle(
         }
         "tools/call" => {
             if !enabled {
-                return Ok(Some(json!({
-                    "content": [{"type": "text", "text": "KBは設定で無効です [kb_disabled]"}],
-                    "isError": true,
-                })));
+                return Ok(Some(disabled_tool_result()));
             }
             let name = params
                 .and_then(|p| p.get("name"))
@@ -176,7 +198,7 @@ fn handle(
                 .cloned()
                 .unwrap_or(json!({}));
             let vault = vault.context("Vault is unavailable")?;
-            let output = call_tool(vault, client, name, &args);
+            let output = call_tool(vault, client, name, &args, remote_sync);
             match output {
                 Ok(output) => {
                     let mut result = json!({
@@ -196,6 +218,22 @@ fn handle(
         }
         _ => Ok(None),
     }
+}
+
+fn disabled_tool_result() -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": "KBは設定で無効です。別経路を探索しないでください [kb_disabled]"
+        }],
+        "structuredContent": {
+            "code": KB_DISABLED_CODE,
+            "authoritative": true,
+            "retryable": false,
+            "data": [],
+        },
+        "isError": true,
+    })
 }
 
 fn prompt_definitions() -> Value {
@@ -299,11 +337,28 @@ impl ToolOutput {
     }
 }
 
-fn call_tool(vault: &Vault, client: &str, name: &str, args: &Value) -> Result<ToolOutput> {
+fn remote_degradations(
+    enabled: bool,
+    pull: impl FnOnce() -> Option<crate::degradation::Degradation>,
+) -> Vec<crate::degradation::Degradation> {
+    if enabled {
+        pull().into_iter().collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn call_tool(
+    vault: &Vault,
+    client: &str,
+    name: &str,
+    args: &Value,
+    remote_sync: bool,
+) -> Result<ToolOutput> {
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
-    // スロットリング付き・失敗は劣化情報(fail-open)
-    let mut degraded: Vec<crate::degradation::Degradation> =
-        crate::connect::pull_if_stale(vault).into_iter().collect();
+    // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
+    // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
+    let mut degraded = remote_degradations(remote_sync, || crate::connect::pull_if_stale(vault));
     let conn = open_db(vault)?;
     // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
     match sync_with_degradations(vault, &conn) {
@@ -540,20 +595,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabled_initialize_exposes_only_the_no_bypass_rule_and_empty_lists() {
+    fn disabled_initialize_keeps_tools_visible_with_only_the_no_bypass_rule() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let initialized = handle(
             Some(&vault),
             "test/client",
             false,
+            true,
             "initialize",
             Some(&serde_json::json!({"protocolVersion": "test"})),
         )
         .unwrap()
         .unwrap();
-        assert_eq!(initialized["capabilities"], serde_json::json!({}));
+        assert_eq!(
+            initialized["capabilities"],
+            serde_json::json!({"tools": {}})
+        );
         assert_eq!(initialized["instructions"], DISABLED_INSTRUCTIONS);
+        assert!(
+            initialized["instructions"]
+                .as_str()
+                .unwrap()
+                .contains(KB_DISABLED_CODE)
+        );
         assert!(
             !initialized["instructions"]
                 .as_str()
@@ -561,13 +626,20 @@ mod tests {
                 .contains("~/kb")
         );
 
-        let tools = handle(Some(&vault), "test/client", false, "tools/list", None)
+        let tools = handle(Some(&vault), "test/client", false, true, "tools/list", None)
             .unwrap()
             .unwrap();
-        let prompts = handle(Some(&vault), "test/client", false, "prompts/list", None)
-            .unwrap()
-            .unwrap();
-        assert_eq!(tools, serde_json::json!({"tools": []}));
+        let prompts = handle(
+            Some(&vault),
+            "test/client",
+            false,
+            true,
+            "prompts/list",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(tools, serde_json::json!({"tools": tool_definitions()}));
         assert_eq!(prompts, serde_json::json!({"prompts": []}));
     }
 
@@ -582,6 +654,7 @@ mod tests {
             Some(&vault),
             "test/client",
             false,
+            true,
             "tools/call",
             Some(&serde_json::json!({
                 "name": "search",
@@ -590,9 +663,35 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(response["isError"], true);
-        assert!(response.to_string().contains("kb_disabled"));
+        assert_eq!(response, disabled_tool_result());
+        assert_eq!(response["structuredContent"]["code"], KB_DISABLED_CODE);
+        assert_eq!(response["structuredContent"]["authoritative"], true);
+        assert_eq!(response["structuredContent"]["retryable"], false);
+        assert_eq!(response["structuredContent"]["data"], serde_json::json!([]));
         assert!(!index.exists());
+    }
+
+    #[test]
+    fn disabled_tool_calls_do_not_reveal_tool_or_argument_existence() {
+        let expected = disabled_tool_result();
+        for params in [
+            serde_json::json!({"name": "search", "arguments": {"query": "known"}}),
+            serde_json::json!({"name": "get", "arguments": {"note": "notes/secret"}}),
+            serde_json::json!({"name": "unknown", "arguments": {"anything": true}}),
+            serde_json::json!({}),
+        ] {
+            let actual = handle(
+                None,
+                "test/client",
+                false,
+                true,
+                "tools/call",
+                Some(&params),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -608,7 +707,7 @@ mod tests {
     fn enabled_initialize_keeps_the_existing_tools_and_instructions() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        let initialized = handle(Some(&vault), "test/client", true, "initialize", None)
+        let initialized = handle(Some(&vault), "test/client", true, true, "initialize", None)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -628,6 +727,21 @@ mod tests {
     }
 
     #[test]
+    fn local_only_mode_does_not_invoke_remote_pull() {
+        let called = std::cell::Cell::new(false);
+        let degraded = remote_degradations(false, || {
+            called.set(true);
+            Some(crate::degradation::Degradation::RemoteSync {
+                detail: "should not run".into(),
+            })
+        });
+
+        assert!(!called.get());
+        assert!(degraded.is_empty());
+        assert!(ServeOptions::default().remote_sync);
+    }
+
+    #[test]
     fn mcp_get_update_and_remove_cannot_escape_the_vault() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
@@ -644,7 +758,7 @@ mod tests {
             ),
             ("remove", serde_json::json!({"note": "../outside/secret"})),
         ] {
-            assert!(call_tool(&vault, "test/client", tool, &args).is_err());
+            assert!(call_tool(&vault, "test/client", tool, &args, true).is_err());
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), "TOP SECRET");
         }
     }
@@ -660,6 +774,7 @@ mod tests {
             "test/client",
             "search",
             &serde_json::json!({"query": "anything"}),
+            true,
         )
         .unwrap();
         assert!(output.text.contains("[index_parse]"), "{}", output.text);
@@ -684,6 +799,7 @@ mod tests {
         let result = handle(
             Some(&vault),
             "test/client",
+            true,
             true,
             "tools/call",
             Some(&serde_json::json!({

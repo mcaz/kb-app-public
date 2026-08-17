@@ -17,12 +17,17 @@ pub fn run_if_requested() -> bool {
             .cloned()
     };
     let client = flag("--client").unwrap_or_else(|| "mcp-client/unknown".into());
+    let remote_sync = !args.iter().any(|arg| arg == "--no-remote-sync");
 
-    let result = kb_core::mcp::serve(&client, || {
-        let reg = kb_core::registry::Registry::load()?;
-        let path = reg.resolve(flag("--vault").as_deref())?;
-        kb_core::vault::Vault::open(path)
-    });
+    let result = kb_core::mcp::serve_with_options(
+        &client,
+        kb_core::mcp::ServeOptions { remote_sync },
+        || {
+            let reg = kb_core::registry::Registry::load()?;
+            let path = reg.resolve(flag("--vault").as_deref())?;
+            kb_core::vault::Vault::open(path)
+        },
+    );
 
     if let Err(e) = result {
         eprintln!("kb-app --mcp: {e}");

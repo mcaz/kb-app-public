@@ -13,9 +13,10 @@ MCP の `tools/list` と `tools/call` を OFF にしても、Codex と Claude Co
 
 ## 決定
 
-生ファイルの拒否は ON/OFF と分離して常時有効にする。ON/OFF が変えるのは kb-app MCPだけで、
-Vault の OS sandbox deny は緩めない。自動retrievalのlifecycle hookもKB内容へ直接触れず、
-毎回kb-app MCPを子起動して現在のON/OFFをinitializeで確認する。
+生ファイルの拒否は ON/OFF と分離して常時有効にする。ON/OFF が変えるのは kb-app MCPが
+データを返すかどうかだけで、接続とtool schemaは残し、Vault の OS sandbox deny は緩めない。
+自動retrievalのlifecycle hookもKB内容へ直接触れず、毎回kb-app MCPを子起動して現在のON/OFFを
+tools/callの構造化終端結果で確認する。
 
 - Codex 0.138.0 以降: `/etc/codex/requirements.toml` に管理 custom permission profile を定義し、
   `allowed_permission_profiles` を kb-app の read-only / workspace profile だけに限定する。両 profile は
@@ -29,8 +30,9 @@ Vault の OS sandbox deny は緩めない。自動retrievalのlifecycle hookもK
 - Codex / Claude Code: 管理 `UserPromptSubmit` hookから同じkb-app実行ファイルの
   `--hook-auto-retrieve`を呼ぶ。hookは同じ実行ファイルをMCP serverとして子起動し、
   `initialize → search(any) → get`だけをJSON-RPCで実行する。これによりモデルの自発性と
-  クライアント別instructionsの差を検索開始条件から外す。OFFならinitializeがtoolsを公開しないため
-  無音で終了し、検索失敗は該当なしへ変換せず劣化コンテキストとして返す。
+  クライアント別instructionsの差を検索開始条件から外す。OFFでもinitializeは同じtoolsを公開し、
+  searchが`kb_disabled`（権威あり・再試行不可・空data）を返したときだけ無音で終了する。それ以外の
+  検索失敗は該当なしへ変換せず劣化コンテキストとして返す。
 - 拒否対象は登録 Vault、各 canonical path、既定の `~/kb`、kb-app の端末設定 directory とする。
 - ポリシー内容を毎回再生成して完全一致で検査する。未導入・登録 Vault 追加による古さ・競合・
   非対応のどれでも MCP は fail-closed。policy file から root までの所有者と mode も検査する。
@@ -48,6 +50,10 @@ Codex の permission profile は macOS Seatbelt で、spawn した command に�
 も macOS Seatbelt / Linux bubblewrap を使い、管理 settings は user / project / CLI より優先される。
 したがって `cat`、Python、別名 CLI、子 process の選択に依存せず、能力の不在として強制できる。
 
+OFF時にもtool schemaを残すのは、toolの不在を接続障害と区別し、唯一の正規取次口から権威ある
+利用不可状態を返すためである。構造化終端結果はエージェントへ再試行不可を伝える制御プレーンで、
+個人データ、件数、ID、存在判定を一切含まない。実際の迂回不能性は引き続きOS sandboxが担う。
+
 - Codex Permissions: https://learn.chatgpt.com/docs/permissions
 - Codex Managed configuration: https://learn.chatgpt.com/docs/enterprise/managed-configuration
 - Claude Code Sandboxing: https://code.claude.com/docs/en/sandboxing
@@ -56,6 +62,8 @@ Codex の permission profile は macOS Seatbelt で、spawn した command に�
 ## 却下した案
 
 - **instructions のみ**: モデルの理解と追従に依存し、今回の比較目的を満たさない。
+- **OFF時にtoolsを非公開**: 接続障害と区別できず、汎用toolから代替経路を探す誘因を残す。
+  schemaだけを公開し、全callを同一の終端結果へ収束させる方が正規取次口を明確にできる。
 - **OFF のたびに policy を差し替える**: 更新途中の窓、管理者認証の反復、ON 時の直読みを残す。
 - **Vault の Unix mode / ACL を変更する**: 管理アプリと AI client が同じ OS user なので区別できない。
 - **アプリ独自の常駐 broker user へ全 storage を移す**: client sandbox より強いが、既存の Markdown / Git

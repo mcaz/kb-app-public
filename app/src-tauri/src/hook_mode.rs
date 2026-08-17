@@ -1,8 +1,8 @@
 //! `UserPromptSubmit` から、モデル判断を挟まず kb-app MCP の search → get を実行する。
 //!
 //! フックが CLI や Vault を直に読むと契約8の取次口が二重化するため、同じ実行ファイルを
-//! MCP server として子起動し、JSON-RPC だけで取得する。OFF 判定も initialize の能力公開を
-//! 正本にするので、切り替え後の既存セッションでも次の発話から同じ境界が効く。
+//! MCP server として子起動し、JSON-RPC だけで取得する。OFF 判定も tools/call の構造化された
+//! 終端応答を正本にするので、切り替え後の既存セッションでも次の発話から同じ境界が効く。
 
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -16,6 +16,11 @@ use serde_json::{Value, json};
 const MAX_QUERY_CHARS: usize = 300;
 const MAX_HITS: usize = 3;
 const PROTOCOL_VERSION: &str = "2025-06-18";
+const KB_DISABLED_CODE: &str = "kb_disabled";
+
+fn child_mcp_args(client: &str) -> [&str; 4] {
+    ["--mcp", "--no-remote-sync", "--client", client]
+}
 
 /// 自動retrievalモードなら実行して true を返す。通常起動なら false。
 pub fn run_if_requested() -> bool {
@@ -103,6 +108,9 @@ fn retrieve(rpc: &mut impl Rpc, query: &str) -> Result<Option<String>> {
             "arguments": {"query": query, "limit": MAX_HITS, "any": true}
         }),
     )?;
+    if tool_is_authoritatively_disabled(&searched) {
+        return Ok(None);
+    }
     ensure_tool_succeeded(&searched, "search")?;
     let hits = searched
         .pointer("/result/structuredContent/hits")
@@ -143,6 +151,21 @@ fn retrieve(rpc: &mut impl Rpc, query: &str) -> Result<Option<String>> {
     Ok(Some(sections.join("\n\n")))
 }
 
+fn tool_is_authoritatively_disabled(response: &Value) -> bool {
+    response
+        .pointer("/result/structuredContent/code")
+        .and_then(Value::as_str)
+        == Some(KB_DISABLED_CODE)
+        && response
+            .pointer("/result/structuredContent/authoritative")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && response
+            .pointer("/result/structuredContent/retryable")
+            .and_then(Value::as_bool)
+            == Some(false)
+}
+
 fn ensure_tool_succeeded(response: &Value, tool: &str) -> Result<()> {
     if response.pointer("/result/isError").and_then(Value::as_bool) == Some(true) {
         anyhow::bail!("{tool} returned isError");
@@ -170,7 +193,11 @@ impl ChildMcp {
     fn start(exe: &Path, client: &str, vault: Option<&str>) -> Result<Self> {
         let mut command = Command::new(exe);
         command
-            .args(["--mcp", "--client", client])
+            // 自動retrievalは発話ごとに短命processを起動する。通常MCPと同じ
+            // message-time pullを行うと、GitHub credentialのKeychain確認まで
+            // 発話回数に比例して発生する。同期はGUI/常設MCPへ任せ、ここでは
+            // 手元の正本だけをMCP経由で読む。
+            .args(child_mcp_args(client))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -262,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_initialize_skips_search_without_exposing_context() {
+    fn legacy_disabled_initialize_skips_search_without_exposing_context() {
         let mut rpc = FakeRpc {
             responses: VecDeque::from([json!({
                 "result": {"capabilities": {}, "instructions": "disabled"}
@@ -272,6 +299,35 @@ mod tests {
 
         assert_eq!(retrieve(&mut rpc, "認証").unwrap(), None);
         assert_eq!(rpc.calls.len(), 1);
+    }
+
+    #[test]
+    fn authoritative_disabled_tool_result_skips_context_without_degradation() {
+        let mut rpc = FakeRpc {
+            responses: VecDeque::from([
+                json!({"result": {"capabilities": {"tools": {}}}}),
+                json!({"result": {
+                    "content": [{"type": "text", "text": "disabled"}],
+                    "structuredContent": {
+                        "code": KB_DISABLED_CODE,
+                        "authoritative": true,
+                        "retryable": false,
+                        "data": []
+                    },
+                    "isError": true
+                }}),
+            ]),
+            ..Default::default()
+        };
+
+        assert_eq!(retrieve(&mut rpc, "認証").unwrap(), None);
+        assert_eq!(
+            rpc.calls
+                .iter()
+                .map(|(method, _)| method.as_str())
+                .collect::<Vec<_>>(),
+            ["initialize", "tools/call"]
+        );
     }
 
     #[test]
@@ -302,5 +358,18 @@ mod tests {
         );
         assert_eq!(rpc.calls[1].1["arguments"]["any"], true);
         assert_eq!(rpc.calls[2].1["name"], "get");
+    }
+
+    #[test]
+    fn auto_retrieval_child_never_runs_remote_sync() {
+        assert_eq!(
+            child_mcp_args("codex-cli/gpt-5-codex"),
+            [
+                "--mcp",
+                "--no-remote-sync",
+                "--client",
+                "codex-cli/gpt-5-codex"
+            ]
+        );
     }
 }
