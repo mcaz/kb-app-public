@@ -17,6 +17,10 @@ const MAX_QUERY_CHARS: usize = 300;
 const MAX_HITS: usize = 3;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
+fn child_mcp_args(client: &str) -> [&str; 4] {
+    ["--mcp", "--no-remote-sync", "--client", client]
+}
+
 /// 自動retrievalモードなら実行して true を返す。通常起動なら false。
 pub fn run_if_requested() -> bool {
     let args: Vec<String> = std::env::args().collect();
@@ -170,7 +174,11 @@ impl ChildMcp {
     fn start(exe: &Path, client: &str, vault: Option<&str>) -> Result<Self> {
         let mut command = Command::new(exe);
         command
-            .args(["--mcp", "--client", client])
+            // 自動retrievalは発話ごとに短命processを起動する。通常MCPと同じ
+            // message-time pullを行うと、GitHub credentialのKeychain確認まで
+            // 発話回数に比例して発生する。同期はGUI/常設MCPへ任せ、ここでは
+            // 手元の正本だけをMCP経由で読む。
+            .args(child_mcp_args(client))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -302,5 +310,18 @@ mod tests {
         );
         assert_eq!(rpc.calls[1].1["arguments"]["any"], true);
         assert_eq!(rpc.calls[2].1["name"], "get");
+    }
+
+    #[test]
+    fn auto_retrieval_child_never_runs_remote_sync() {
+        assert_eq!(
+            child_mcp_args("codex-cli/gpt-5-codex"),
+            [
+                "--mcp",
+                "--no-remote-sync",
+                "--client",
+                "codex-cli/gpt-5-codex"
+            ]
+        );
     }
 }
