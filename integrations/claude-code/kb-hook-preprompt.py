@@ -14,11 +14,29 @@ import shutil
 import subprocess
 import sys
 
-KB_BIN = os.environ.get("KB_BIN") or shutil.which("kb") or \
-    "/path/to/kb-app/target/release/kb"
+INSTALLED_KB_BIN = os.path.expanduser("~/Library/Application Support/kb-app/bin/kb")
+KB_BIN = os.environ.get("KB_BIN") or shutil.which("kb") or (
+    INSTALLED_KB_BIN if os.path.exists(INSTALLED_KB_BIN)
+    else "/path/to/kb-app/target/release/kb"
+)
 LIMIT = 3
 MAX_QUERY_CHARS = 300
 STATE_DIR = os.path.expanduser("~/.claude/state/kb-app")
+CLIENT = "claude-code/claude"
+
+
+def kb_enabled() -> bool:
+    """アプリと同じ全体・Claude別設定を使う。判定不能は fail-closed。"""
+    try:
+        out = subprocess.run(
+            [KB_BIN, "settings", "ai-enabled", "--client", CLIENT],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        return out.returncode == 0 and json.loads(out.stdout).get("enabled") is True
+    except Exception:
+        return False
 
 
 def mark_relevant(session_id: str) -> None:
@@ -35,6 +53,8 @@ def main() -> None:
     try:
         payload = json.load(sys.stdin)
     except Exception:
+        return
+    if not kb_enabled():
         return
     prompt = (payload.get("prompt") or "").strip()
     if (

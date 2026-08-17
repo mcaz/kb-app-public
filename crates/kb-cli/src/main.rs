@@ -102,6 +102,20 @@ enum Command {
         #[arg(long, default_value = "mcp-client/unknown")]
         client: String,
     },
+    /// AI 連携向けの端末設定を読み取る
+    Settings {
+        #[command(subcommand)]
+        command: SettingsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsCommand {
+    /// 全体とクライアント別の設定から KB 利用可否を JSON で返す
+    AiEnabled {
+        #[arg(long)]
+        client: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -386,6 +400,12 @@ fn main() -> Result<()> {
             let vault = open_vault(cli.vault.as_deref())?;
             kb_core::mcp::serve(&vault, &client)?;
         }
+        Command::Settings { command } => match command {
+            SettingsCommand::AiEnabled { client } => {
+                let enabled = kb_core::settings::load()?.ai_kb_enabled_for(&client);
+                println!("{}", serde_json::json!({"enabled": enabled}));
+            }
+        },
     }
     Ok(())
 }
@@ -433,6 +453,8 @@ mod tests {
             "propose".to_string(),
             "recent".to_string(),
             "search".to_string(),
+            "settings".to_string(),
+            "settings ai-enabled".to_string(),
             "storage".to_string(),
             "storage export".to_string(),
             "storage verify".to_string(),

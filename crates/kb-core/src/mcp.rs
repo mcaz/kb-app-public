@@ -38,6 +38,13 @@ update で本文に /path.md リンクを足す(ユーザーに可否を尋ね�
 提案)は勝手に変えない。それ以外はあなたの裁量で付与・統合・整理してよい(まとめて整理したら\
 一言報告)。新語を乱発せず既存語彙に揃える。";
 
+/// OFF 時は KB の内容や保存先を渡さず、迂回禁止だけを制御プレーンとして配る。
+/// ツールを非公開にするだけでは、汎用 shell を持つ AI が Vault を直読みできるため。
+const DISABLED_INSTRUCTIONS: &str = "\
+kb-app はこの AI クライアントで無効です。\
+KB のデータを shell・ファイル操作・保存先の探索など別経路で参照・推測・更新しないでください。\
+過去の会話に残る KB 内容も代替経路として使わず、必要な場合は「現在は KB を参照できない」と伝えてください。";
+
 pub fn serve(vault: &Vault, client_hint: &str) -> Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -98,9 +105,11 @@ fn handle(
                 "capabilities": if enabled { json!({"tools": {}, "prompts": {}}) } else { json!({}) },
                 "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
             });
-            if enabled {
-                initialized["instructions"] = json!(INSTRUCTIONS);
-            }
+            initialized["instructions"] = json!(if enabled {
+                INSTRUCTIONS
+            } else {
+                DISABLED_INSTRUCTIONS
+            });
             Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
@@ -475,7 +484,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabled_initialize_and_lists_expose_no_kb_context() {
+    fn disabled_initialize_exposes_only_the_no_bypass_rule_and_empty_lists() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let initialized = handle(
@@ -488,7 +497,13 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(initialized["capabilities"], serde_json::json!({}));
-        assert!(initialized.get("instructions").is_none());
+        assert_eq!(initialized["instructions"], DISABLED_INSTRUCTIONS);
+        assert!(
+            !initialized["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("~/kb")
+        );
 
         let tools = handle(&vault, "test/client", false, "tools/list", None)
             .unwrap()
