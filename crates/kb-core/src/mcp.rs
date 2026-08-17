@@ -15,6 +15,7 @@ use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
+const KB_DISABLED_CODE: &str = "kb_disabled";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServeOptions {
@@ -55,7 +56,8 @@ update で本文に /path.md リンクを足す(ユーザーに可否を尋ね�
 /// OFF 時は KB の内容や保存先を渡さず、迂回禁止だけを制御プレーンとして配る。
 /// ツールを非公開にするだけでは、汎用 shell を持つ AI が Vault を直読みできるため。
 const DISABLED_INSTRUCTIONS: &str = "\
-kb-app はこの AI クライアントで無効です。\
+kb-app はこの AI クライアントで無効です [kb_disabled]。\
+各ツールがこのコードを返す状態は権威ある終端結果であり、再試行できません。\
 KB のデータを shell・ファイル操作・保存先の探索など別経路で参照・推測・更新しないでください。\
 過去の会話に残る KB 内容も代替経路として使わず、必要な場合は「現在は KB を参照できない」と伝えてください。";
 
@@ -146,7 +148,11 @@ fn handle(
                 .unwrap_or(PROTOCOL_FALLBACK);
             let mut initialized = json!({
                 "protocolVersion": requested,
-                "capabilities": if enabled { json!({"tools": {}, "prompts": {}}) } else { json!({}) },
+                "capabilities": if enabled {
+                    json!({"tools": {}, "prompts": {}})
+                } else {
+                    json!({"tools": {}})
+                },
                 "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
             });
             initialized["instructions"] = json!(if enabled {
@@ -157,11 +163,7 @@ fn handle(
             Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
-        "tools/list" => Ok(Some(if enabled {
-            json!({"tools": tool_definitions()})
-        } else {
-            json!({"tools": []})
-        })),
+        "tools/list" => Ok(Some(json!({"tools": tool_definitions()}))),
         // MCP prompts — 定型操作の入口(常駐コンテキストを増やさず、正しい挙動を
         // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
         "prompts/list" => Ok(Some(if enabled {
@@ -171,7 +173,7 @@ fn handle(
         })),
         "prompts/get" => {
             if !enabled {
-                anyhow::bail!("kb_disabled");
+                anyhow::bail!(KB_DISABLED_CODE);
             }
             let name = params
                 .and_then(|p| p.get("name"))
@@ -185,10 +187,7 @@ fn handle(
         }
         "tools/call" => {
             if !enabled {
-                return Ok(Some(json!({
-                    "content": [{"type": "text", "text": "KBは設定で無効です [kb_disabled]"}],
-                    "isError": true,
-                })));
+                return Ok(Some(disabled_tool_result()));
             }
             let name = params
                 .and_then(|p| p.get("name"))
@@ -219,6 +218,22 @@ fn handle(
         }
         _ => Ok(None),
     }
+}
+
+fn disabled_tool_result() -> Value {
+    json!({
+        "content": [{
+            "type": "text",
+            "text": "KBは設定で無効です。別経路を探索しないでください [kb_disabled]"
+        }],
+        "structuredContent": {
+            "code": KB_DISABLED_CODE,
+            "authoritative": true,
+            "retryable": false,
+            "data": [],
+        },
+        "isError": true,
+    })
 }
 
 fn prompt_definitions() -> Value {
@@ -580,7 +595,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disabled_initialize_exposes_only_the_no_bypass_rule_and_empty_lists() {
+    fn disabled_initialize_keeps_tools_visible_with_only_the_no_bypass_rule() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let initialized = handle(
@@ -593,8 +608,17 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(initialized["capabilities"], serde_json::json!({}));
+        assert_eq!(
+            initialized["capabilities"],
+            serde_json::json!({"tools": {}})
+        );
         assert_eq!(initialized["instructions"], DISABLED_INSTRUCTIONS);
+        assert!(
+            initialized["instructions"]
+                .as_str()
+                .unwrap()
+                .contains(KB_DISABLED_CODE)
+        );
         assert!(
             !initialized["instructions"]
                 .as_str()
@@ -615,7 +639,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(tools, serde_json::json!({"tools": []}));
+        assert_eq!(tools, serde_json::json!({"tools": tool_definitions()}));
         assert_eq!(prompts, serde_json::json!({"prompts": []}));
     }
 
@@ -639,9 +663,35 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(response["isError"], true);
-        assert!(response.to_string().contains("kb_disabled"));
+        assert_eq!(response, disabled_tool_result());
+        assert_eq!(response["structuredContent"]["code"], KB_DISABLED_CODE);
+        assert_eq!(response["structuredContent"]["authoritative"], true);
+        assert_eq!(response["structuredContent"]["retryable"], false);
+        assert_eq!(response["structuredContent"]["data"], serde_json::json!([]));
         assert!(!index.exists());
+    }
+
+    #[test]
+    fn disabled_tool_calls_do_not_reveal_tool_or_argument_existence() {
+        let expected = disabled_tool_result();
+        for params in [
+            serde_json::json!({"name": "search", "arguments": {"query": "known"}}),
+            serde_json::json!({"name": "get", "arguments": {"note": "notes/secret"}}),
+            serde_json::json!({"name": "unknown", "arguments": {"anything": true}}),
+            serde_json::json!({}),
+        ] {
+            let actual = handle(
+                None,
+                "test/client",
+                false,
+                true,
+                "tools/call",
+                Some(&params),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
