@@ -64,8 +64,12 @@ Build and local app commands:
 ```bash
 cargo build --release
 npm --prefix app run tauri dev
-npm --prefix app run install:app
+npm --prefix app run update:app
 ```
+
+`update:app` performs the release build, quits only the GUI, and safely swaps the app
+contents. It leaves `kb-app --mcp` processes running; reconnect MCP in each active AI client
+after the update. `install:app` remains as a compatibility alias.
 
 Use kb-app MCP `search` and `get` for prior product decisions before making a
 conflicting design choice. Do not use the vault files as a shortcut.

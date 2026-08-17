@@ -11,6 +11,7 @@
 //! 1. **仕事のリポジトリの中にあるか**(あれば「同期しない」に固定し、緩められなくする)
 //! 2. どの置き場へ入れるか(区分ごとに物理的に分かれている)
 
+use std::io::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -22,6 +23,13 @@ use crate::ledger::Ledger;
 use crate::note_id::NoteId;
 use crate::store::Stores;
 use crate::vault::Vault;
+
+/// MCP の content 経路で1回に受け取る実体の上限。
+///
+/// path 経路は streaming だが、JSON-RPC の Base64 は decode 前後の内容を一時的に
+/// memoryへ持つ。無制限に受けるとMCP processのmemoryを使い切れるため、画像や小さな
+/// 文書を扱える範囲へ固定する。大きなファイルはpicker/dropのpath経路を使う。
+pub const MCP_CONTENT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +65,19 @@ pub struct Request {
     pub at: String,
 }
 
+/// MCP から受け取る content-only の指定。
+///
+/// 保存先path・区分・role・media type・来歴・時刻は意図的にfieldへ置かない。
+/// 呼び出し元が安全境界を緩められない形にし、server側で固定して [`take`] へ合流する。
+#[derive(Debug, Clone)]
+pub struct ContentRequest<'a> {
+    pub note_id: &'a str,
+    pub display_name: &'a str,
+    pub content: &'a [u8],
+    pub ref_name: Option<RefName>,
+    pub client: &'a str,
+}
+
 /// 取り込んだ結果。
 #[derive(Debug, Clone)]
 pub struct Taken {
@@ -68,6 +89,74 @@ pub struct Taken {
     pub forced_local_only: bool,
     /// `full` を「同期済み」と呼べるか。失敗理由の詳細は sync state に残す。
     pub delivery: DeliveryStatus,
+}
+
+/// MCP の content-only 経路から取り込む。
+///
+/// clientからpathを一切受け取らず、server管理の一時fileだけを既存のpath経路へ渡す。
+/// これにより実体・台帳・LFS・参照・delivery確認はGUI/CLIと同じコア処理になる。
+pub fn take_content(
+    vault: &Vault,
+    stores: &Stores,
+    ledger: &Ledger,
+    workspace_id: &str,
+    req: ContentRequest<'_>,
+) -> Result<Taken> {
+    if req.content.len() > MCP_CONTENT_MAX_BYTES {
+        return Err(crate::artifact::ArtifactError::TooLarge {
+            size: req.content.len() as u64,
+            limit: MCP_CONTENT_MAX_BYTES as u64,
+        }
+        .into());
+    }
+
+    // 実体や台帳へ触れる前に、ひもづけ先の存在まで確認する。
+    NoteId::parse(req.note_id)?;
+    vault.read_note(req.note_id)?;
+    validate_content_display_name(req.display_name)?;
+
+    let mut temporary = tempfile::NamedTempFile::new().context("MCP添付の一時fileを作れない")?;
+    temporary
+        .write_all(req.content)
+        .context("MCP添付の一時fileへ書けない")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .context("MCP添付の一時fileを確定できない")?;
+
+    let at = crate::frontmatter::now_iso();
+    let origin = format!("mcp-content:{}", req.client);
+    take(
+        vault,
+        stores,
+        ledger,
+        workspace_id,
+        temporary.path(),
+        Request {
+            note_id: Some(req.note_id.to_string()),
+            display_name: req.display_name.to_string(),
+            media_type: guess_media_type(Path::new(req.display_name)),
+            role: Role::File,
+            policy: Some(Policy::default_managed()),
+            ref_name: req.ref_name,
+            supersedes: None,
+            origin,
+            by: req.client.to_string(),
+            at,
+        },
+    )
+}
+
+fn validate_content_display_name(name: &str) -> Result<()> {
+    let invalid = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.len() > 255
+        || name.chars().any(|ch| matches!(ch, '/' | '\\' | '\0'));
+    if invalid {
+        bail!("file_name は区切りを含まない1〜255 byteの名前が必要");
+    }
+    Ok(())
 }
 
 /// `src` を含む Git リポジトリを探す。保管庫自身は client repo とみなさない。
@@ -682,5 +771,134 @@ mod tests {
         let mut r = req();
         r.supersedes = Some(ArtifactId::new(1_755_000_000_000));
         assert!(take_at(&e, &src, r).is_err());
+    }
+
+    #[test]
+    fn content_route_rejects_unknown_note_before_ledger_writes() {
+        let e = env();
+        let error = take_content(
+            &e.vault,
+            &e.stores,
+            &e.ledger,
+            "ws-a",
+            ContentRequest {
+                note_id: "notes/missing",
+                display_name: "red-oni.png",
+                content: b"png",
+                ref_name: None,
+                client: "test/client",
+            },
+        )
+        .unwrap_err();
+
+        assert!(!error.to_string().is_empty());
+        assert!(e.ledger.list().is_empty());
+    }
+
+    #[test]
+    fn content_route_rejects_path_like_display_names() {
+        let e = env();
+        let note_id = e
+            .vault
+            .propose_for_test(
+                "decision",
+                "content route test",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        for display_name in ["../red.png", "folder/red.png", "folder\\red.png", ""] {
+            let error = take_content(
+                &e.vault,
+                &e.stores,
+                &e.ledger,
+                "ws-a",
+                ContentRequest {
+                    note_id: &note_id,
+                    display_name,
+                    content: b"png",
+                    ref_name: None,
+                    client: "test/client",
+                },
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("file_name"));
+        }
+        assert!(e.ledger.list().is_empty());
+    }
+
+    #[test]
+    fn content_route_has_a_hard_memory_bound() {
+        let e = env();
+        let content = vec![0; MCP_CONTENT_MAX_BYTES + 1];
+        let error = take_content(
+            &e.vault,
+            &e.stores,
+            &e.ledger,
+            "ws-a",
+            ContentRequest {
+                note_id: "notes/not-even-read",
+                display_name: "large.bin",
+                content: &content,
+                ref_name: None,
+                client: "test/client",
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<ArtifactError>(),
+            Some(&ArtifactError::TooLarge {
+                size: (MCP_CONTENT_MAX_BYTES + 1) as u64,
+                limit: MCP_CONTENT_MAX_BYTES as u64,
+            })
+        );
+        assert!(e.ledger.list().is_empty());
+    }
+
+    #[test]
+    fn content_route_fixes_policy_role_media_type_and_provenance() {
+        if !crate::external_tools::git_lfs_available() {
+            return;
+        }
+        let e = env();
+        let note_id = e
+            .vault
+            .propose_for_test(
+                "decision",
+                "content route test",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let ref_name = RefName::from_str("red-oni").unwrap();
+
+        let out = take_content(
+            &e.vault,
+            &e.stores,
+            &e.ledger,
+            "ws-a",
+            ContentRequest {
+                note_id: &note_id,
+                display_name: "red-oni.png",
+                content: b"png bytes",
+                ref_name: Some(ref_name.clone()),
+                client: "test/client",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(out.manifest.notes, vec![note_id]);
+        assert_eq!(out.manifest.display_name, "red-oni.png");
+        assert_eq!(out.manifest.created.media_type, "image/png");
+        assert_eq!(out.manifest.created.size, 9);
+        assert_eq!(out.manifest.created.origin, "mcp-content:test/client");
+        assert_eq!(out.manifest.created.by, "test/client");
+        assert_eq!(out.manifest.role, Role::File);
+        assert_eq!(out.manifest.policy, Policy::default_managed());
+        assert_eq!(out.artifact_ref.unwrap().name, ref_name);
     }
 }

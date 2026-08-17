@@ -225,8 +225,9 @@ AI 本体より広いホスト権限でファイルを開ける。path を受け
 
 allowlist や path 検証で塞ぐ設計は採らない。**能力自体を渡さなければ、検証漏れが無い。**
 
-- content 経路にはサイズ上限を置く。IPC とメモリに全量が載るため、`full` の 100MB 警告とは
-  別の、十分小さい値にする(具体値は未決)。clipboard 経路と同じ理由・別の文言で扱う
+- content 経路には **16MiB** のサイズ上限を置く。JSON-RPCのBase64とdecode後のbytesが
+  メモリに載るため、`full` の100MB警告とは別にdecode前後の両方で拒否する。生成画像や
+  小さな文書は扱え、大きなファイルはstreamingのpath経路へ残す値として固定する
 - `origin` / `by` / `at` / media type / policy は**サーバー側で固定**し、MCP 引数にしない
 - `note_id` が実在することを確認してから書く
 - 応答には、実際に適用された policy・locator・artifact ID・version・ref・警告・同期の劣化を
@@ -368,9 +369,16 @@ Git の差分がよく効き、`Ledger::put` が commit している。「この
 > - **取り込み元の追跡**(決定13) — 端末ローカル sidecar への記録、lazy な変化検知、
 >   変化の提示。**版として繋ぐ判断は人間に残す**ので、`supersedes`(14)より前に出せる
 
-**進捗(2026-08-13)**: 1〜6 完了。7 はノート内のファイル欄まで
+> **2026-08-18 追記。** 9と11を実施。MCP `get` は現行ArtifactのID・version・role・ref・
+> 実際のpolicy・availabilityを返し、`attach`はnote / file_name / content_base64 / 任意の
+> ref_nameだけを受ける。16MiB上限、note実在確認、path風のfile_name拒否を実体書き込み前に
+> コアで行い、server固定のprivate + full / file / provenanceで`intake::take`へ合流する。
+> 10のうちprocess間transaction lockとdelivery劣化応答は実施済み。path経路の同一FD snapshotは残る。
+
+**進捗(2026-08-18)**: 1〜6完了。7はノート内のファイル欄まで
 (取り込み・外す・取り寄せる・新しい版として追加、旧添付は読み取り専用で併記)。
-残りは詳細画面・取り込みダイアログ・緩和確認・検索結果・ホーム集計と、8 の移行。
+決定12の実装順9(MCP読み取り面)と11(content-only `attach`)も完了。
+残りは詳細画面・緩和確認・検索結果・ホーム集計、`detach` / 意味付けAPIと、8の移行。
 **移行が済むまで旧添付は台帳に載らない**ので、Artifact の規則(役割・取得状態・
 競合検知・検索)は旧データに効かない。
 
@@ -411,20 +419,17 @@ blobless partial clone」を採る。
   リポジトリの所在を持つ端末ローカルの台帳が要る~~ →
   **2026-08-14: 新規 `linked` を廃止して解消**(決定11)。台帳は作らない。
   既存 `Linked` record は互換読み取り専用で残す
-- **AI に読み取り面が無い**。MCP の `get` は旧 `<id>.files/` だけを返し、新 Artifact を
-  返さない(`crates/kb-core/src/mcp.rs`)。artifact ID・version・role・ref・実際の policy・
-  availability を AI が取得できないため、`detach` も意味付けも成立しない。
-  **書き込み(決定12)より先に出す**
+- ~~**AI に読み取り面が無い**。~~ → **2026-08-18解消**。MCP `get` は旧添付に加えて
+  現行Artifactのartifact ID・version・role・ref・実際のpolicy・availabilityを返す
 - **Artifact の書き込みが push されない**。`Ledger::put` は commit するが失敗を捨て、
   `auto_push` もしない。取り込みの成功が「他端末へ運ばれた」ことを意味しない。
   upload-before-ref-push と劣化応答を仕上げる必要がある
 - **`local_only` の Artifact への本文リンク**。manifest / ref は端末ローカルにしか無いのに、
   本文へ書いた参照文字列だけは Git で同期される。別端末では解決できず、名前も漏れる。
   `local_only` はファイル欄にだけ出し、同期されるノート本文へは書かない規則が要る
-- **GUI と MCP の同時書き込み**。MCP は Tauri の `AppState` mutex の外にある別プロセスで、
-  ref 衝突確認 → manifest 書き込み → ref 書き込みが一操作としてロックされていない。
-  MCP を開くと競合頻度が上がるため、保管庫単位のプロセス間ロックと ref revision の
-  実 CAS が要る
+- ~~**GUI と MCP の同時書き込み**でtransactionが割り込まれる。~~ → 保管庫単位の
+  process間lockでref衝突確認 → manifest → ref → deliveryを直列化済み。ref revisionの
+  実CASは引き続き必要
 - **ノートを消したときに Artifact 側の関係が残る**。削除済みノート ID が台帳に残るため、
   ノートの生存期間と Artifact の関係の同伴規則を決める
 - **旧 legacy ファイルの削除条件**。登録済み全端末での取得確認が理想だが、

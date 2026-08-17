@@ -146,9 +146,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 - **FR-C4 ライフサイクル API**: propose(draft 起票)/ confirm(確定)/ archive / move。
   すべてコアの API として実装し、GUI・CLI・AI ツールはこれを呼ぶだけ
 - **FR-C5 MCP サーバー**: search / get / recent / propose に加え、**update / remove
-  (origin: agent のノート限定 — 原則9 改定)**を公開。confirm は公開しない(確定は人の操作)。
+  (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
+  新規添付・16MiB上限)**を公開。confirm は公開しない(確定は人の操作)。
   所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
-  所有の領分」の規律を配る
+  所有の領分・会話で生まれたファイルはpathでなくattachへ」の規律を配る
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
   構造(モデルごとの規律最適化の器)。
   **保留(2026-08-10 本人決定)**: 器を先に作らず、現接続先の **Claude への直接最適化を
@@ -156,6 +157,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   2社目のプロバイダ接続時に、Claude 最適化で得た知見から設計する
 - **FR-C8 ファイル(2026-08-10 添付として実装 → 2026-08-12 Artifact へ改定 →
   2026-08-13 コアとノート内のファイル欄まで実装、旧経路は読み取り専用に。
+  2026-08-18 MCP content-only添付とgetのArtifact一覧を実装。
   [ADR-0003](adr/0003-artifact-storage-and-transport.md) が正本)**: ノートは画像・
   原本ファイル等を「所有」できる。UI 語彙は「ファイル」(manifest・CAS・policy といった
   内部語も、ディレクトリという言葉も見せない — 原則7)。
@@ -176,13 +178,15 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     検索対象は manifest まで(blob の中身は既定で対象外、transcript は既定で除外)
   - サイズは `local_only` に固定上限を置かず、`full` のみ 100MB 警告・
     2GB 拒否。**旧来の 10MB / 50MB は GitHub 同期の保全が根拠で、実体が Vault Git を
-    出た時点で失効する**。取り込みは path ベースの streaming(base64 IPC は廃止)
+    出た時点で失効する**。path取り込みはstreaming。MCP content取り込みだけはJSON-RPCの
+    Base64を使うため16MiBで先に拒否する
   - 出典は OKF `sources[].resource` に `kb-artifact:<artifact_id>` を書いて**版を固定**する
     (標準語彙の provenance)。本文リンクは参照名で最新版を追い、既存の `/…files/…` は
     本文を書き換えず alias で解決する
   - 画像はペーストで自動取り込み+リンク挿入、プレビューで表示。path を扱う
-    picker / drop / paste / CLI は同じコア API に合流させる。MCP へは path を渡さず、
-    将来の content 経路だけを公開する
+    picker / drop / paste / CLI は同じコア API に合流させる。MCP は `attach` のcontent経路だけを
+    公開し、path・policy・role・media type・origin・by・at・supersedesを受け取らない。
+    既存ノートの実在を確認してから、server管理の一時file経由で同じstore / ledgerへ合流する
   - ファイルの中身検索(PDF 抽出等)、dataset の複数ファイル管理、実削除を伴う GC は将来
 - **FR-C7 お手入れ(ライフサイクルの自動運転)— 最小形実装済み(2026-08-10。①意味的な近接の検知=埋め込み距離 0.45 以下で「つなげておきますか?」②リンク切れの気づき。受信箱で承諾/却下、却下は再提案しない・1回5件上限。つなげるは agent ノート側へ追記しメモの本文改変を最小化)**: 重複・リンク切れ・古い情報・未整理を検出し、
   平易な提案に変換する。最小形(重複・リンク切れ検知)はローカルで完結、提案文の生成は
@@ -240,7 +244,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 - FR-A8(将来)プラグイン機構(パネル・フック・コマンド)
 - **FR-A9 AIでのKB利用ON／OFF(2026-08-17 本人決定)**: 設定Modalから、AIとの会話で
   KBを使うかを端末単位で切り替えられる。OFFでも管理アプリと保存済みノートは利用でき、
-  データを削除しない。MCPはOFF時もtools capabilityと同じ6ツールを公開し、promptsは公開しない。
+  データを削除しない。MCPはOFF時もtools capabilityとON時と同じtool setを公開し、promptsは公開しない。
   instructionsはKBの内容・保存先を含まない迂回禁止ルールだけを返す。既存processを含む全tool
   callは、引数やtool名にかかわらずpull・索引更新・Vault読み書きより前に、同じ構造化終端結果
   `kb_disabled`（`authoritative=true` / `retryable=false` / 空data）で拒否する。会話へすでに渡った文脈は

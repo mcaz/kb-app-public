@@ -21,8 +21,19 @@ GitHub OAuth App `kb-app` (`mcaz` 所有) は Device Flow と期限付き token 
 KB_GITHUB_CLIENT_ID=Ov23li1xyWYmAMscYlj8 npm --prefix app run tauri build
 ```
 
-`npm --prefix app run install:app` は上記 Client ID を既定値として使う。fork や別の OAuth App を
-使う場合だけ `KB_GITHUB_CLIENT_ID` で上書きする。
+ローカルの macOS アプリは、次の1コマンドでビルドから安全な差し替えまで更新できる。
+
+```sh
+npm --prefix app run update:app
+```
+
+更新処理は起動中の GUI だけを終了し、AI client が子起動している MCP server は強制終了しない。
+配置に失敗した場合は旧版へ戻す。更新後、接続中の AI client で MCP を再接続すると新しい版が
+使われる。Git LFS sidecar と Lindera 辞書はローカルに再利用し、毎回の再取得を避ける。
+従来の `install:app` は互換 alias として残す。
+
+このコマンドは上記 Client ID を既定値として使う。fork や別の OAuth App を使う場合だけ
+`KB_GITHUB_CLIENT_ID` で上書きする。
 
 アプリは private repository の作成・検査・Git/Git LFS 同期に OAuth の `repo` scope を使う。
 token は OS キーチェーンへ保存し、Git 子 process には実行中だけ認証 header として渡す。

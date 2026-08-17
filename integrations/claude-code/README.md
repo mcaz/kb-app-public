@@ -11,7 +11,7 @@ Vault と kb-app の端末設定を Claude の Read / Edit / sandboxed Bash か�
 
 | 部品 | 役割 | 置き場 |
 |---|---|---|
-| MCP サーバー | search / get / recent / propose(confirm は非公開) | `claude mcp add --scope user kb-app -- <kb バイナリ> mcp --vault <名前> --client claude-code/claude` |
+| MCP サーバー | search / get / recent / propose / update / remove / attach(content-only。confirm は非公開) | `claude mcp add --scope user kb-app -- <kb バイナリ> mcp --vault <名前> --client claude-code/claude` |
 | 前出しフック | 発話ごとに同じkb-app実行ファイルをMCP serverとして子起動し、`initialize → search(any) → get`を実行。OFFならsearchの権威ある`kb_disabled`終端結果を検知して無音終了 | 完全保護のmanaged settingsがUserPromptSubmitへ登録 |
 | kb-researcher | 検索専用サブエージェント(複数クエリ・全文読み・要点だけ返す) | `~/.claude/agents/kb-researcher.md` |
 | 規律 | まず引く・終わりに propose 提案・確定は本人指示の二経路 | `~/.claude/CLAUDE.md`(server instructions と同型) |

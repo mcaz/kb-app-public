@@ -1,13 +1,15 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / recent / propose / update / remove。
+//! 公開ツールは search / get / recent / propose / update / remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
 //! 段階で公式 Rust SDK(rmcp)への載せ替えを再評価する(ADR-0001 スタック表)。
 
 use std::io::{BufRead, Write};
+use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::index::{open_db, sync_with_degradations};
@@ -46,6 +48,8 @@ const INSTRUCTIONS: &str = "\
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
 から)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
 本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
+【ファイル】会話で作成・受領した画像や文書を既存ノートの持ち物にするときは attach を使う。\
+ローカルpathではなく内容をBase64で渡す。保存先・持ち出し区分・来歴はkb-appが固定する。\n\
 【関連】ノート間の関連づけはあなたの領分。get の「近いノート」を見て、本当に関連するなら\
 update で本文に /path.md リンクを足す(ユーザーに可否を尋ねる形にはしない)。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
@@ -284,6 +288,16 @@ fn tool_definitions() -> Value {
             }}
         },
         {
+            "name": "attach",
+            "description": "会話で作成・受領した小さなファイルを既存ノートへ添付。pathではなくBase64内容だけを渡し、保存先・区分・来歴はkb-appが固定する(上限16 MiB)。",
+            "inputSchema": {"type": "object", "properties": {
+                "note": {"type": "string", "description": "ひもづけ先の既存ノート ID"},
+                "file_name": {"type": "string", "description": "表示ファイル名(区切り文字なし)"},
+                "content_base64": {"type": "string", "description": "ファイル内容の標準Base64"},
+                "ref_name": {"type": "string", "description": "本文から安定参照する任意の参照名(workspace内で一意)"}
+            }, "required": ["note", "file_name", "content_base64"]}
+        },
+        {
             "name": "recent",
             "description": "最近のノート一覧。",
             "inputSchema": {"type": "object", "properties": {
@@ -419,17 +433,50 @@ fn call_tool(
             };
             let note = vault.read_note(&id)?;
             let attachments = vault.list_attachments(&id)?;
-            let attach_line = if attachments.is_empty() {
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let stores = crate::store::Stores::open(&workspace_id)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let managed = ledger.list_for_note(&id);
+            let legacy_line = if attachments.is_empty() {
                 String::new()
             } else {
                 format!(
-                    "(添付: {} — 本文からは /{id}.files/<名前> で参照)\n",
+                    "(旧添付: {} — 本文からは /{id}.files/<名前> で参照)\n",
                     attachments
                         .iter()
                         .map(|(n, _)| n.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
+            };
+            let managed_line = if managed.is_empty() {
+                String::new()
+            } else {
+                let rows = managed
+                    .iter()
+                    .map(|manifest| {
+                        let reference = ledger
+                            .ref_for(&manifest.id)
+                            .map(|r| format!(", ref={}", r.name))
+                            .unwrap_or_default();
+                        let availability = crate::store::availability(vault, &stores, manifest);
+                        format!(
+                            "{} [artifact={}, v={}, {}, {} bytes, role={:?}, {:?}/{:?}, {:?}{}]",
+                            manifest.display_name,
+                            manifest.id,
+                            manifest.version,
+                            manifest.created.media_type,
+                            manifest.created.size,
+                            manifest.role,
+                            manifest.policy.sensitivity,
+                            manifest.policy.sync,
+                            availability,
+                            reference
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("(ファイル: {rows})\n")
             };
             // 関連を決めるのは AI(2026-08-11 方針)。判断材料として近いノートを添える
             let similar = match crate::search::similar_notes(&conn, &id, 5) {
@@ -456,11 +503,103 @@ fn call_tool(
                         .join(", ")
                 )
             };
-            Ok(ToolOutput::text(format!(
-                "(note: {id})\n{attach_line}{sim_line}{}{}",
-                degradation_text(&degraded),
-                note.to_file_string()?
-            )))
+            let artifact_rows = managed
+                .iter()
+                .map(|manifest| {
+                    let reference = ledger.ref_for(&manifest.id).map(|r| r.name.to_string());
+                    json!({
+                        "artifact_id": manifest.id,
+                        "version": manifest.version,
+                        "display_name": manifest.display_name,
+                        "media_type": manifest.created.media_type,
+                        "size": manifest.created.size,
+                        "role": manifest.role,
+                        "policy": manifest.policy,
+                        "ref_name": reference,
+                        "availability": crate::store::availability(vault, &stores, manifest),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let legacy_names = attachments
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>();
+            Ok(ToolOutput {
+                text: format!(
+                    "(note: {id})\n{legacy_line}{managed_line}{sim_line}{}{}",
+                    degradation_text(&degraded),
+                    note.to_file_string()?
+                ),
+                structured: Some(json!({
+                    "note": id,
+                    "artifacts": artifact_rows,
+                    "legacy_attachments": legacy_names,
+                    "degraded": degraded,
+                })),
+            })
+        }
+        "attach" => {
+            let note_id = args
+                .get("note")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let file_name = args
+                .get("file_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("file_name が必要"))?;
+            let content = decode_attachment_content(args)?;
+            let ref_name = args
+                .get("ref_name")
+                .and_then(|v| v.as_str())
+                .map(crate::artifact::RefName::from_str)
+                .transpose()?;
+
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let stores = crate::store::Stores::open(&workspace_id)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let taken = crate::intake::take_content(
+                vault,
+                &stores,
+                &ledger,
+                &workspace_id,
+                crate::intake::ContentRequest {
+                    note_id,
+                    display_name: file_name,
+                    content: &content,
+                    ref_name,
+                    client,
+                },
+            )?;
+            let reference = taken
+                .artifact_ref
+                .as_ref()
+                .map(|artifact_ref| artifact_ref.name.as_str());
+            let availability = crate::store::availability(vault, &stores, &taken.manifest);
+            let structured = json!({
+                "note": note_id,
+                "file_name": taken.manifest.display_name,
+                "artifact_id": taken.manifest.id,
+                "version": taken.manifest.version,
+                "media_type": taken.manifest.created.media_type,
+                "size": taken.manifest.created.size,
+                "role": taken.manifest.role,
+                "policy": taken.manifest.policy,
+                "ref_name": reference,
+                "locator": "managed",
+                "availability": availability,
+                "delivery": taken.delivery,
+                "warn_over_bytes": taken.warn_over,
+            });
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "添付した: {} → {} (artifact {})",
+                        file_name, note_id, taken.manifest.id
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
         }
         "recent" => {
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
@@ -570,6 +709,33 @@ fn call_tool(
         }
         other => anyhow::bail!("unknown tool: {other}"),
     }
+}
+
+fn decode_attachment_content(args: &Value) -> Result<Vec<u8>> {
+    let encoded = args
+        .get("content_base64")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("content_base64 が必要"))?;
+    let max_encoded = crate::intake::MCP_CONTENT_MAX_BYTES.div_ceil(3) * 4;
+    if encoded.len() > max_encoded {
+        return Err(crate::artifact::ArtifactError::TooLarge {
+            // decode前なので厳密値は未確定。上限超過を示す最小値を返す。
+            size: (crate::intake::MCP_CONTENT_MAX_BYTES + 1) as u64,
+            limit: crate::intake::MCP_CONTENT_MAX_BYTES as u64,
+        }
+        .into());
+    }
+    let content = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("content_base64 の形式が不正")?;
+    if content.len() > crate::intake::MCP_CONTENT_MAX_BYTES {
+        return Err(crate::artifact::ArtifactError::TooLarge {
+            size: content.len() as u64,
+            limit: crate::intake::MCP_CONTENT_MAX_BYTES as u64,
+        }
+        .into());
+    }
+    Ok(content)
 }
 
 fn degradation_text(degraded: &[crate::degradation::Degradation]) -> String {
@@ -818,5 +984,102 @@ mod tests {
             result["structuredContent"]["hits"][0]["id"],
             "notes/認証の設計"
         );
+    }
+
+    #[test]
+    fn attach_schema_accepts_content_but_never_a_client_path() {
+        let tools = tool_definitions();
+        let definitions = tools.as_array().unwrap();
+        assert_eq!(definitions.len(), 7);
+        let attach = definitions
+            .iter()
+            .find(|definition| definition["name"] == "attach")
+            .unwrap();
+        let properties = attach["inputSchema"]["properties"].as_object().unwrap();
+
+        assert!(properties.contains_key("content_base64"));
+        assert!(!properties.contains_key("path"));
+        assert_eq!(
+            attach["inputSchema"]["required"],
+            serde_json::json!(["note", "file_name", "content_base64"])
+        );
+    }
+
+    #[test]
+    fn attach_rejects_oversized_input_before_base64_decode() {
+        let max_encoded = crate::intake::MCP_CONTENT_MAX_BYTES.div_ceil(3) * 4;
+        let invalid_but_too_large = "!".repeat(max_encoded + 1);
+        let error = decode_attachment_content(&serde_json::json!({
+            "content_base64": invalid_but_too_large
+        }))
+        .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<crate::artifact::ArtifactError>(),
+            Some(crate::artifact::ArtifactError::TooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn mcp_attach_returns_structured_identity_and_get_lists_the_file() {
+        if !crate::external_tools::git_lfs_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let note_id = vault
+            .propose_for_test(
+                "鬼キャラクター",
+                "赤鬼ちゃんと青鬼ちゃん。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"png bytes");
+
+        let attached = handle(
+            Some(&vault),
+            "test/client",
+            true,
+            false,
+            "tools/call",
+            Some(&serde_json::json!({
+                "name": "attach",
+                "arguments": {
+                    "note": note_id,
+                    "file_name": "red-oni.png",
+                    "content_base64": encoded,
+                    "ref_name": "red-oni"
+                }
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(attached.get("isError").is_none(), "{attached}");
+        assert_eq!(attached["structuredContent"]["note"], note_id);
+        assert_eq!(attached["structuredContent"]["file_name"], "red-oni.png");
+        assert_eq!(attached["structuredContent"]["media_type"], "image/png");
+        assert_eq!(attached["structuredContent"]["size"], 9);
+        assert_eq!(attached["structuredContent"]["role"], "file");
+        assert_eq!(attached["structuredContent"]["policy"]["sync"], "full");
+        assert_eq!(attached["structuredContent"]["ref_name"], "red-oni");
+        assert_eq!(attached["structuredContent"]["locator"], "managed");
+
+        let fetched = call_tool(
+            &vault,
+            "test/client",
+            "get",
+            &serde_json::json!({"note": note_id}),
+            false,
+        )
+        .unwrap();
+        assert!(fetched.text.contains("red-oni.png"), "{}", fetched.text);
+        assert!(fetched.text.contains("ref=red-oni"), "{}", fetched.text);
+        let fetched_data = fetched.structured.unwrap();
+        assert_eq!(fetched_data["artifacts"][0]["role"], "file");
+        assert_eq!(fetched_data["artifacts"][0]["ref_name"], "red-oni");
+        assert_eq!(fetched_data["artifacts"][0]["availability"], "local");
     }
 }
