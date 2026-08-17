@@ -73,7 +73,14 @@ export const useConnectState = () =>
   useQuery({ queryKey: queryKeys.connect, queryFn: api.connectState });
 
 export const useGitHubAuthState = (enabled = true) =>
-  useQuery({ queryKey: queryKeys.githubAuth, queryFn: api.githubAuthState, enabled });
+  useQuery({
+    queryKey: queryKeys.githubAuth,
+    queryFn: api.githubAuthState,
+    enabled,
+    // ConnectPageとGitHubAuthPanelが同じ状態を購読する。既定のstaleTime=0だと
+    // 後からmountした購読者がKeychain読み出しを即座に再実行する。
+    staleTime: 30_000,
+  });
 
 export const useNote = (id: string | null) =>
   useQuery({
