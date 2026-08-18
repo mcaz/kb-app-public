@@ -6,7 +6,6 @@ import {
   Paperclip,
   Search,
   Settings,
-  Sprout,
   Waypoints,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -23,7 +22,6 @@ import { CategoryAccordion } from "./CategoryAccordion";
 import type { NoteCategory } from "@/lib/api";
 
 export interface SidebarProps {
-  vaultName: string;
   categories: NoteCategory[];
   onOpenSearch: () => void;
   settingsOpen: boolean;
@@ -31,17 +29,12 @@ export interface SidebarProps {
 }
 
 /** 左のナビ。畳むとアイコンだけになり、ホバーでラベルを吹き出す。 */
-export function Sidebar({
-  vaultName,
-  categories,
-  onOpenSearch,
-  settingsOpen,
-  onOpenSettings,
-}: SidebarProps) {
+export function Sidebar({ categories, onOpenSearch, settingsOpen, onOpenSettings }: SidebarProps) {
   const { t } = useTranslation();
   const view = useSession((s) => s.view);
   const go = useSession((s) => s.go);
   const selectedCategory = useSession((s) => s.selectedCategory);
+  const initializeCategory = useSession((s) => s.initializeCategory);
   const selectCategory = useSession((s) => s.selectCategory);
   const focusGraph = useSession((s) => s.focusGraph);
   const collapsed = usePrefs((s) => s.sideCollapsed);
@@ -57,15 +50,6 @@ export function Sidebar({
           : "w-[176px] px-2.5 py-3.5 max-[1040px]:w-[156px]"
       }`}
     >
-      <div
-        className={`flex items-center gap-2 px-2.5 py-1.5 font-bold ${
-          visuallyCollapsed ? "justify-center px-0" : ""
-        }`}
-      >
-        <Icon as={Sprout} className="text-grow" />
-        {!visuallyCollapsed && <span className="truncate">{vaultName}</span>}
-      </div>
-
       <NavButton
         icon={Search}
         label={t("nav.search")}
@@ -97,6 +81,7 @@ export function Sidebar({
           categories={categories}
           active={view === "notes" && !settingsOpen}
           selectedCategory={selectedCategory}
+          onInitializeCategory={initializeCategory}
           onActivate={() => go("notes")}
           onSelectCategory={selectCategory}
         />
