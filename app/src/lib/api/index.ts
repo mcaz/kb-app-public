@@ -9,6 +9,7 @@ import type {
   Availability,
   ConnectState,
   Favorite,
+  FilesPage,
   GraphData,
   GitHubAuthState,
   HomeState,
@@ -17,6 +18,7 @@ import type {
   NoteFiles,
   NoteListPage,
   NoteView,
+  PreviewFile,
   SearchOutcome,
   Settings,
   SetupState,
@@ -113,6 +115,8 @@ export const api = {
 
   noteFiles: async (id: string): Promise<NoteFiles> =>
     IN_TAURI ? unwrap(commands.noteFiles(id)) : (await demo()).noteFiles(id),
+  filesList: async (): Promise<FilesPage> =>
+    IN_TAURI ? unwrap(commands.filesList()) : (await demo()).filesList(),
   /** 渡すのはパスだけ(中身は運ばない — ADR-0003 決定8)。 */
   fileAdd: async (noteId: string, path: string, supersedes: string | null = null) =>
     IN_TAURI
@@ -131,6 +135,8 @@ export const api = {
   /** 中身はコアの resolver 経由でしか出てこない(画面はパスを受け取らない)。 */
   fileOpen: async (id: string): Promise<null> =>
     IN_TAURI ? unwrap(commands.fileOpen(id)) : (await demo()).fileOpen(),
+  filePreview: async (id: string): Promise<PreviewFile> =>
+    IN_TAURI ? unwrap(commands.filePreview(id)) : (await demo()).filePreview(id),
   legacyOpen: async (noteId: string, name: string): Promise<null> =>
     IN_TAURI ? unwrap(commands.legacyOpen(noteId, name)) : (await demo()).fileOpen(),
 

@@ -1,0 +1,26 @@
+{
+  "title": "ファイル",
+  "search": "ファイル名やノート名で検索",
+  "count": "{{count}}件",
+  "filter": {
+    "label": "ファイル形式で絞り込み",
+    "all": "すべての形式",
+    "pdf": "PDF",
+    "image": "画像",
+    "document": "文書",
+    "other": "その他"
+  },
+  "empty": "該当するファイルはありません",
+  "noFiles": "ファイルはまだありません",
+  "noNote": "ノートとの関連なし",
+  "added": "{{date}}に追加",
+  "localOnly": "この端末のみ",
+  "missing": "この端末にありません",
+  "unavailable": "この端末では開けません",
+  "fetch": "取り寄せる",
+  "openExternal": "別アプリで開く",
+  "openNote": "元のノート",
+  "previewLoading": "プレビューを準備中…",
+  "previewUnavailable": "この形式はアプリ内で表示できません",
+  "previewDescription": "{{name}}の内容"
+}

@@ -3,6 +3,7 @@
     "home": "ホーム",
     "search": "検索",
     "notes": "ノート",
+    "files": "ファイル",
     "notesEmpty": "ノートはまだありません",
     "rootNotes": "直下のノート",
     "categoryCount": "{{name}}、{{count}}件",

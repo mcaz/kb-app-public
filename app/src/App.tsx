@@ -12,6 +12,7 @@ import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
 import { useSettingsShortcut } from "@/hooks/useSettingsShortcut";
 import { useTheme } from "@/hooks/useTheme";
 import { GraphPage } from "@/pages/GraphPage";
+import { FilesPage } from "@/pages/FilesPage";
 import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
@@ -105,6 +106,7 @@ export function App() {
       >
         {view === "home" && <HomePage home={home} />}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
+        {view === "files" && <FilesPage />}
         {view === "graph" && <GraphPage />}
       </AppShell>
 

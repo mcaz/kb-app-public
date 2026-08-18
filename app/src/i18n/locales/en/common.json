@@ -3,6 +3,7 @@
     "home": "Home",
     "search": "Search",
     "notes": "Notes",
+    "files": "Files",
     "notesEmpty": "No notes yet",
     "rootNotes": "Root notes",
     "categoryCount": "{{name}}, {{count}} notes",

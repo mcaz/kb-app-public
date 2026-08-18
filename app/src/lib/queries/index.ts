@@ -183,6 +183,19 @@ export const useNoteFiles = (id: string | null) =>
     enabled: id !== null,
   });
 
+export const useFiles = () =>
+  useQuery({
+    queryKey: queryKeys.files,
+    queryFn: api.filesList,
+  });
+
+export const useFilePreview = (id: string | null) =>
+  useQuery({
+    queryKey: queryKeys.filePreview(id ?? ""),
+    queryFn: () => api.filePreview(id!),
+    enabled: id !== null,
+  });
+
 /**
  * ファイルの操作。ファイル欄と、添付件数を持つノート一覧を更新する。
  */
@@ -196,6 +209,7 @@ function useFileMutation<TArgs, TData>(
     onSuccess: async (_data, args) => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.noteFiles(noteId(args)) }),
+        qc.invalidateQueries({ queryKey: queryKeys.files }),
         qc.invalidateQueries({ queryKey: queryKeys.noteLists }),
       ]);
     },
@@ -230,11 +244,19 @@ export const useLegacyOpen = () =>
     mutationFn: (a: { noteId: string; name: string }) => api.legacyOpen(a.noteId, a.name),
   });
 
-export const useFileFetch = () =>
-  useFileMutation(
-    (a: { noteId: string; id: string }) => api.fileFetch(a.id),
-    (a) => a.noteId,
-  );
+export const useFileFetch = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { noteId?: string; id: string }) => api.fileFetch(a.id),
+    onSuccess: async (_data, args) => {
+      const updates = [qc.invalidateQueries({ queryKey: queryKeys.files })];
+      if (args.noteId) {
+        updates.push(qc.invalidateQueries({ queryKey: queryKeys.noteFiles(args.noteId) }));
+      }
+      await Promise.all(updates);
+    },
+  });
+};
 
 export function useConnectDesktop() {
   const qc = useQueryClient();
