@@ -30,6 +30,7 @@ use crate::state::AppState;
 const CLIPBOARD_MAX_BYTES: usize = 64 * 1024 * 1024;
 const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
 const HTML_ENCODING_SCAN_BYTES: usize = 4096;
+const TEXT_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExportPurpose {
@@ -107,6 +108,7 @@ pub struct FilesPage {
 #[derive(Serialize, specta::Type)]
 pub struct PreviewFile {
     path: String,
+    text: Option<String>,
 }
 
 /// 取り込んだ結果。警告と「区分を固定した」は拒否ではないので、行と一緒に返す。
@@ -356,11 +358,17 @@ pub fn file_preview(
     id: String,
 ) -> AppResult<PreviewFile> {
     let path = resolved_export(&state, id, ExportPurpose::Preview)?;
+    let text = if is_text_preview(&path) {
+        read_text_preview(&path)?
+    } else {
+        None
+    };
     app.asset_protocol_scope()
         .allow_file(&path)
         .map_err(AppError::unexpected)?;
     Ok(PreviewFile {
         path: path.to_string_lossy().into_owned(),
+        text,
     })
 }
 
@@ -460,6 +468,54 @@ fn html_needs_utf8_bom(src: &mut std::fs::File) -> std::io::Result<bool> {
     Ok(!has_bom && !declared)
 }
 
+fn is_text_preview(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "md" | "markdown"
+                    | "txt"
+                    | "csv"
+                    | "tsv"
+                    | "json"
+                    | "yaml"
+                    | "yml"
+                    | "xml"
+                    | "css"
+                    | "js"
+                    | "jsx"
+                    | "ts"
+                    | "tsx"
+            )
+        })
+}
+
+fn read_text_preview(path: &Path) -> AppResult<Option<String>> {
+    if std::fs::metadata(path)?.len() > TEXT_PREVIEW_MAX_BYTES {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)?;
+    Ok(Some(decode_text(&bytes)))
+}
+
+/// UTF-8を正常系にしつつ、表計算ソフト由来のCSVで多いUTF-16/Shift_JISも読む。
+fn decode_text(bytes: &[u8]) -> String {
+    if let Some(bytes) = bytes.strip_prefix(UTF8_BOM) {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        return encoding_rs::UTF_16LE.decode(bytes).0.into_owned();
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        return encoding_rs::UTF_16BE.decode(bytes).0.into_owned();
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned()
+}
+
 /// OS の既定のアプリへ渡す。**画面から直接は呼べない** — 権限を webview に与えて
 /// いないので、開く経路はこの上の2コマンドだけになる。
 fn open_with_os(app: &tauri::AppHandle, path: &Path) -> AppResult<()> {
@@ -542,5 +598,19 @@ mod tests {
 
         let mut bom = temporary_file(b"\xef\xbb\xbf<!doctype html><title>page</title>");
         assert!(!html_needs_utf8_bom(&mut bom).unwrap());
+    }
+
+    #[test]
+    fn text_preview_decodes_utf8_utf16_and_shift_jis() {
+        assert_eq!(decode_text("名前,値\n鬼,10".as_bytes()), "名前,値\n鬼,10");
+
+        let utf16: Vec<u8> = [0xff, 0xfe]
+            .into_iter()
+            .chain("名前,値".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        assert_eq!(decode_text(&utf16), "名前,値");
+
+        let shift_jis = encoding_rs::SHIFT_JIS.encode("名前,値").0;
+        assert_eq!(decode_text(&shift_jis), "名前,値");
     }
 }

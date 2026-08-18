@@ -477,6 +477,7 @@ export type NoteView = {
 /**  resolver が許可した一時コピーだけを WebView に見せる。 */
 export type PreviewFile = {
 	path: string,
+	text: string | null,
 };
 
 export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";

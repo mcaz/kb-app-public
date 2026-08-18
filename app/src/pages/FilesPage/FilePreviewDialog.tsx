@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
+import { MarkdownView } from "@/components/molecules/MarkdownView";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +37,10 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
   const fetch = useFileFetch();
   const source = file?.notes[0];
   const kind = file ? fileKind(file) : "other";
+  const isMarkdown = file ? /\.(md|markdown)$/iu.test(file.name) : false;
+  const isHtml = file
+    ? file.media_type.toLowerCase() === "text/html" || /\.html?$/iu.test(file.name)
+    : false;
   const src = preview.data?.path ? convertFileSrc(preview.data.path) : null;
 
   return (
@@ -104,7 +109,22 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                   alt={file.name}
                   className="max-h-full max-w-full rounded-md object-contain shadow-lg"
                 />
-              ) : IN_TAURI && src && (kind === "pdf" || kind === "document") ? (
+              ) : typeof preview.data?.text === "string" ? (
+                <div className="border-line bg-background h-full w-full overflow-auto rounded-md border p-6">
+                  {isMarkdown ? (
+                    <MarkdownView
+                      body={preview.data.text}
+                      vaultRoot=""
+                      inTauri={false}
+                      onOpenNote={goToNote}
+                    />
+                  ) : (
+                    <pre className="text-ink min-w-full font-mono text-[13px] leading-relaxed break-words whitespace-pre-wrap">
+                      {preview.data.text}
+                    </pre>
+                  )}
+                </div>
+              ) : IN_TAURI && src && (kind === "pdf" || isHtml) ? (
                 <iframe
                   src={src}
                   title={t("previewDescription", { name: file.name })}
