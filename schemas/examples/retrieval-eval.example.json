@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {
+      "id": "one-hop-policy",
+      "query": "認証経路を一本化した理由",
+      "required": ["notes/authentication-decision"],
+      "relevant": ["notes/github-policy"],
+      "excluded": ["notes/obsolete-token-setup"]
+    }
+  ]
+}

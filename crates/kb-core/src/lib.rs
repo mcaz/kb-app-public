@@ -30,6 +30,7 @@ pub mod note_store;
 pub mod registry;
 pub mod resolve;
 pub mod retrieval;
+pub mod retrieval_eval;
 pub mod search;
 pub mod settings;
 pub mod storage_contract;
