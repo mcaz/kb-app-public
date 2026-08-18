@@ -917,6 +917,24 @@ mod tests {
             })
         });
 
+        let retrieval_hits = super::main_search(&conn, "検索番兵オーロラ", 5, true).unwrap();
+        let retrieval_seed_ids = retrieval_hits
+            .iter()
+            .map(|hit| hit.id.clone())
+            .collect::<Vec<_>>();
+        let (retrieval, linked_context) = timed(|| {
+            repeat_last(20, || {
+                crate::retrieval::context_documents(
+                    &conn,
+                    &retrieval_seed_ids,
+                    crate::retrieval::RetrievalOptions::default(),
+                )
+                .unwrap()
+            })
+        });
+        assert!(retrieval.documents.iter().any(|note| note.id == target_id));
+        assert!(retrieval.stats.candidate_count >= 3);
+
         let measurements = [
             ("index_rebuild", rebuild, Duration::from_secs(30)),
             (
@@ -936,6 +954,7 @@ mod tests {
                 Duration::from_secs(1),
             ),
             ("note_detail_x5", note_detail, Duration::from_secs(2)),
+            ("linked_context_x20", linked_context, Duration::from_secs(2)),
         ];
         for (name, elapsed, budget) in measurements {
             eprintln!(

@@ -104,6 +104,7 @@
     "semantic_search": "かしこい検索を利用できません。全文検索の結果を表示しています: {{detail}}",
     "rescue_search": "部分一致検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
     "related_notes": "つながりを取得できませんでした。0件とは限りません: {{detail}}",
+    "context_retrieval": "関連本文を連鎖取得できませんでした。検索結果の本文だけを表示しています: {{detail}}",
     "similar_notes": "近いノートを取得できませんでした。0件とは限りません: {{detail}}",
     "current_note_context": "AIへ現在のノートを引き渡す文脈を記録できませんでした: {{detail}}",
     "care_detection": "お手入れ候補を検知できませんでした: {{detail}}",

@@ -42,7 +42,7 @@ const INSTRUCTIONS: &str = "\
 形式はアプリが管理(frontmatter を自分で書かない)。\n\
 【引く】ユーザー個人に関する話題(嗜好・決定・進行中の作業・過去に調べたこと・固有名詞)は、\
 推測で答える前に search(自然文可・意味で当たる。外したら語を変えて再検索)。ヒットは get で\
-全文を読んでから答える。`[kb-app 自動retrieval — MCP]` が届いていれば、その検索+DB本文取得は\
+全文を読んでから答える。`[kb-app 自動retrieval — MCP]` が届いていれば、その検索・リンク展開・本文取得は\
 実行済みなので、文脈が不足するときだけ追加検索する。本文中の /path.md リンクは必要なら辿る。\
 「このノート」=引数なしの get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
@@ -278,7 +278,7 @@ fn tool_definitions() -> Value {
                 "query": {"type": "string", "description": "検索語(自然文可)"},
                 "limit": {"type": "integer", "description": "最大件数(既定8)"},
                 "any": {"type": "boolean", "description": "語をOR結合する(発話全文の自動retrieval用)"},
-                "include_documents": {"type": "boolean", "description": "上位本文も同じDB検索で返す(自動retrieval用)"}
+                "include_documents": {"type": "boolean", "description": "検索seedとリンク近傍の本文を予算内で同じ検索応答に含める(自動retrieval用)"}
             }, "required": ["query"]}
         },
         {
@@ -397,8 +397,8 @@ fn call_tool(
                 .get("include_documents")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            // Rankingと本文の間で別processの更新を挟まない。include_documentsは
-            // このread transactionの同じSQLite snapshotから組み立てる。
+            // Ranking・リンク展開・本文選択の間で別processの更新を挟まない。
+            // include_documentsはこのread transactionの同じSQLite snapshotから組み立てる。
             let snapshot = conn.unchecked_transaction()?;
             let mut out = if any {
                 crate::search::search_mode(&snapshot, query, limit, true)
@@ -406,6 +406,36 @@ fn call_tool(
                 search(&snapshot, query, limit)
             };
             out.degraded.extend(degraded);
+            let retrieval = if include_documents {
+                let hit_ids = out
+                    .hits
+                    .iter()
+                    .map(|hit| hit.id.clone())
+                    .collect::<Vec<_>>();
+                let options = crate::retrieval::RetrievalOptions::default();
+                match crate::retrieval::context_documents(&snapshot, &hit_ids, options) {
+                    Ok(bundle) => Some(bundle),
+                    Err(error) => {
+                        // リンク表だけが壊れても検索seed本文は返す。正常な0リンクとは
+                        // ContextRetrieval degradationで区別する。
+                        out.degraded
+                            .push(crate::degradation::Degradation::ContextRetrieval {
+                                detail: error.to_string(),
+                            });
+                        Some(crate::retrieval::context_documents(
+                            &snapshot,
+                            &hit_ids,
+                            crate::retrieval::RetrievalOptions {
+                                max_depth: 0,
+                                include_incoming: false,
+                                ..options
+                            },
+                        )?)
+                    }
+                }
+            } else {
+                None
+            };
             let mut text = String::new();
             if out.hits.is_empty() {
                 text.push_str("該当なし。\n");
@@ -430,16 +460,10 @@ fn call_tool(
             }
             text.push_str(&degradation_text(&out.degraded));
             let mut structured = serde_json::to_value(&out)?;
-            if include_documents {
-                let documents = out
-                    .hits
-                    .iter()
-                    .map(|hit| {
-                        let note = crate::note_store::read(&snapshot, &hit.id)?;
-                        Ok(json!({"id": hit.id, "text": note.to_file_string()?}))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                structured["documents"] = json!(documents);
+            if let Some(retrieval) = retrieval {
+                structured["documents"] = serde_json::to_value(&retrieval.documents)?;
+                structured["retrieval_candidates"] = serde_json::to_value(&retrieval.candidates)?;
+                structured["retrieval"] = serde_json::to_value(&retrieval.stats)?;
             }
             snapshot.commit()?;
             Ok(ToolOutput {
@@ -1047,6 +1071,129 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("認証と監査の設計判断")
+        );
+        assert_eq!(result["structuredContent"]["retrieval"]["seed_count"], 1);
+        assert_eq!(
+            result["structuredContent"]["documents"][0]["source"],
+            "search"
+        );
+    }
+
+    #[test]
+    fn search_documents_follow_outgoing_links_for_two_hops_in_one_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let deep = vault
+            .propose_for_test(
+                "三段目",
+                "検索語を含まない深い補足。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let direct = vault
+            .propose_for_test(
+                "二段目",
+                &format!("検索語を含まない直接補足。[次](/{}.md)", deep),
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let root = vault
+            .propose_for_test(
+                "連鎖取得の起点",
+                &format!("固有番兵ネビュラ。[関連](/{}.md)", direct),
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        let result = handle(
+            Some(&vault),
+            "test/client",
+            true,
+            true,
+            "tools/call",
+            Some(&serde_json::json!({
+                "name": "search",
+                "arguments": {
+                    "query": "固有番兵ネビュラ",
+                    "limit": 5,
+                    "any": true,
+                    "include_documents": true
+                }
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        let documents = result["structuredContent"]["documents"].as_array().unwrap();
+        assert_eq!(
+            documents
+                .iter()
+                .map(|document| document["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [root.as_str(), direct.as_str(), deep.as_str()]
+        );
+        assert_eq!(documents[0]["depth"], 0);
+        assert_eq!(documents[1]["source"], "outgoing_link");
+        assert_eq!(documents[1]["depth"], 1);
+        assert_eq!(documents[2]["depth"], 2);
+        assert_eq!(
+            result["structuredContent"]["retrieval"]["candidate_count"],
+            3
+        );
+        assert_eq!(
+            result["structuredContent"]["retrieval"]["selected_count"],
+            3
+        );
+    }
+
+    #[test]
+    fn broken_link_graph_falls_back_to_search_documents_with_typed_degradation() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "検索seed",
+                "固有番兵フォールバック。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute_batch(
+            "DROP TABLE links;
+             CREATE TABLE links(dst TEXT);
+             CREATE INDEX links_dst ON links(dst);",
+        )
+        .unwrap();
+
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "search",
+            &serde_json::json!({
+                "query": "固有番兵フォールバック",
+                "limit": 5,
+                "any": true,
+                "include_documents": true
+            }),
+            false,
+        )
+        .unwrap();
+        let structured = output.structured.unwrap();
+        assert_eq!(structured["documents"].as_array().unwrap().len(), 1);
+        assert!(
+            structured["degraded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "context_retrieval")
         );
     }
 

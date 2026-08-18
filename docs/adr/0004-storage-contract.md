@@ -97,8 +97,9 @@ Git pull後だけがMarkdownからDBへ入る経路である。未commitのノ�
 いる場合、同期は上書きせず競合として止める。
 
 自動retrievalは検索後に最大3回Markdownを読む方式を廃止し、`search(include_documents)`の
-1 callで検索結果と上位本文を同じSQLite接続から返す。索引同期と埋め込み追い付きも検索時の
-1回だけで、候補本文ごとには繰り返さない。
+1 callで上位5 seed、DB有向リンク最大2ホップ、最大50候補を組み立て、推定10,000 token以内・
+最大10本文を同じSQLite snapshotから返す。索引同期と埋め込み追い付きも検索時の1回だけで、
+候補本文ごとには繰り返さない。12,000 tokenはCodex hookのspill安全上限であり、目標投入量ではない。
 
 この段階は複数端末のmerge可能な交換表現をMarkdownのまま維持する。writer別分割event log＋
 content-addressed immutable objectへの移行は、P1のkill criteriaを通した後の別判断とする。
