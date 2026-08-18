@@ -59,7 +59,18 @@ export function useSetGptKbEnabled() {
   });
 }
 
-export const useHomeState = () => useQuery({ queryKey: queryKeys.home, queryFn: api.homeState });
+export const useHomeState = (enabled = true) =>
+  useQuery({ queryKey: queryKeys.home, queryFn: api.homeState, enabled });
+
+/** Git pullやMarkdown export等はこのqueryだけがバックグラウンドで起動する。 */
+export const useMaintenanceRefresh = (enabled = true) =>
+  useQuery({
+    queryKey: queryKeys.maintenance,
+    queryFn: api.maintenanceRefresh,
+    enabled,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  });
 
 export const useTagOverview = () =>
   useQuery({ queryKey: queryKeys.tagOverview, queryFn: api.tagOverview });
@@ -89,8 +100,8 @@ export const useNote = (id: string | null) =>
     enabled: id !== null,
   });
 
-export const useNoteCategories = () =>
-  useQuery({ queryKey: queryKeys.noteCategories, queryFn: api.noteCategories });
+export const useNoteCategories = (enabled = true) =>
+  useQuery({ queryKey: queryKeys.noteCategories, queryFn: api.noteCategories, enabled });
 
 /** カテゴリを選んだ時だけ100件ずつ取得し、全ノートを初期表示へ載せない。 */
 export const useCategoryNotes = (category: string | null) =>

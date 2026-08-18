@@ -12,6 +12,7 @@ import type {
   FileRow,
   Hit,
   HomeState,
+  MaintenanceReport,
   NoteFiles,
   NoteListPage,
   NoteSummary,
@@ -303,6 +304,7 @@ export const demoApi = {
       ],
       degraded: [],
     }),
+  maintenanceRefresh: (): Promise<MaintenanceReport> => delay({ degraded: [], elapsed_ms: 1 }),
   tagOverview: (): Promise<TagOverview> =>
     delay({
       tags: [

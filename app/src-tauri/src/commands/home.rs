@@ -5,7 +5,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, Sync};
+use crate::state::AppState;
 
 #[derive(Serialize, specta::Type)]
 pub struct HomeState {
@@ -16,31 +16,17 @@ pub struct HomeState {
     degraded: Vec<kb_core::degradation::Degradation>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn home_state(state: State<'_, AppState>) -> AppResult<HomeState> {
-    // 画面更新の際に他デバイスの変化も取り込む(コア側で60秒スロットリング・fail-open)
-    let pull_degraded = state.with_vault(|vault| Ok(kb_core::connect::pull_if_stale(vault)))?;
-
-    // 一覧の鮮度が要る入口なので索引は必ず更新する
-    state.with_index(Sync::Force, |vault, conn, mut degraded| {
-        degraded.extend(pull_degraded.clone());
-        home_state_from(vault, conn, degraded)
-    })
+    state.with_db(|_, conn, degraded| home_state_from(conn, degraded))
 }
 
 fn home_state_from(
-    vault: &kb_core::vault::Vault,
     conn: &kb_core::rusqlite::Connection,
     mut degraded: Vec<kb_core::degradation::Degradation>,
 ) -> AppResult<HomeState> {
     let notes = recent(conn, 500).map_err(AppError::index)?;
-    // お手入れは補助情報なので本体を止めないが、失敗を空一覧と偽らない。
-    if let Err(error) = kb_core::care::detect(conn, vault) {
-        degraded.push(kb_core::degradation::Degradation::CareDetection {
-            detail: error.to_string(),
-        });
-    }
     let care = partial_or_default(kb_core::care::list_open(conn), &mut degraded, |error| {
         kb_core::degradation::Degradation::CareList {
             detail: error.to_string(),
@@ -60,6 +46,53 @@ fn home_state_from(
         tags,
         degraded,
     })
+}
+
+/// ネットワーク・Markdown export・埋め込み・お手入れ検知をUIの前景から分離する。
+#[derive(Serialize, specta::Type)]
+pub struct MaintenanceReport {
+    degraded: Vec<kb_core::degradation::Degradation>,
+    elapsed_ms: usize,
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn maintenance_refresh(state: State<'_, AppState>) -> AppResult<MaintenanceReport> {
+    let started = std::time::Instant::now();
+    let root = state.vault_root()?;
+    let vault = kb_core::vault::Vault::open(&root).map_err(AppError::vault)?;
+
+    // pullは内部で別DB接続へimportする。共有AppStateのロックは一切握らない。
+    let mut degraded = kb_core::connect::pull_if_stale(&vault)
+        .into_iter()
+        .collect();
+    let conn = kb_core::index::open_db(&vault).map_err(AppError::index)?;
+    run_local_maintenance(&vault, &conn, &mut degraded);
+    state.set_degraded_for(&root, degraded.clone())?;
+
+    Ok(MaintenanceReport {
+        degraded,
+        elapsed_ms: started.elapsed().as_millis() as usize,
+    })
+}
+
+fn run_local_maintenance(
+    vault: &kb_core::vault::Vault,
+    conn: &kb_core::rusqlite::Connection,
+    degraded: &mut Vec<kb_core::degradation::Degradation>,
+) {
+    match kb_core::index::sync_with_degradations(vault, conn) {
+        Ok(mut report) => degraded.append(&mut report.degraded),
+        Err(error) => degraded.push(kb_core::degradation::Degradation::IndexSync {
+            detail: error.to_string(),
+        }),
+    }
+    degraded.extend(kb_core::index::embed_step(conn));
+    if let Err(error) = kb_core::care::detect(conn, vault) {
+        degraded.push(kb_core::degradation::Degradation::CareDetection {
+            detail: error.to_string(),
+        });
+    }
 }
 
 fn partial_or_default<T: Default>(
@@ -84,10 +117,10 @@ pub struct TagOverview {
 }
 
 /// タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn tag_overview(state: State<'_, AppState>) -> AppResult<TagOverview> {
-    state.with_index(Sync::Throttled, |_, conn, degraded| {
+    state.with_db(|_, conn, degraded| {
         let (tags, glossary_note) = kb_core::search::tag_overview(conn).map_err(AppError::index)?;
         Ok(TagOverview {
             tags,
@@ -120,7 +153,7 @@ mod tests {
         ));
     }
 
-    /// careの表だけが壊れても最近のノートを返し、検知・一覧の失敗を別codeで残す。
+    /// careの表だけが壊れても、前景処理は最近のノートを返して一覧失敗だけを残す。
     #[test]
     fn broken_care_store_does_not_look_like_an_empty_inbox() {
         let dir = tempfile::tempdir().unwrap();
@@ -146,10 +179,10 @@ mod tests {
         )
         .unwrap();
 
-        let home = home_state_from(&vault, &conn, Vec::new()).unwrap();
+        let home = home_state_from(&conn, Vec::new()).unwrap();
         assert_eq!(home.notes.len(), 1);
         assert!(home.care.is_empty());
-        assert!(home.degraded.iter().any(|item| matches!(
+        assert!(!home.degraded.iter().any(|item| matches!(
             item,
             kb_core::degradation::Degradation::CareDetection { .. }
         )));
@@ -159,12 +192,43 @@ mod tests {
                 .any(|item| matches!(item, kb_core::degradation::Degradation::CareList { .. }))
         );
     }
+
+    #[test]
+    fn foreground_home_reads_db_before_background_care_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "INSERT INTO notes(id,title,status,body,tags) \
+             VALUES ('notes/a','A','stable','','')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO links(src,dst) VALUES ('notes/a','notes/missing')",
+            [],
+        )
+        .unwrap();
+
+        let before = home_state_from(&conn, Vec::new()).unwrap();
+        assert!(
+            before.care.is_empty(),
+            "前景DB readが検知まで始めてはいけない"
+        );
+
+        let mut degraded = Vec::new();
+        run_local_maintenance(&vault, &conn, &mut degraded);
+        assert!(degraded.is_empty(), "{degraded:?}");
+        let after = home_state_from(&conn, Vec::new()).unwrap();
+        assert!(
+            after.care.iter().any(|proposal| proposal.kind == "broken"),
+            "バックグラウンド保守後は検知結果をDBから読める"
+        );
+    }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn care_dismiss(state: State<'_, AppState>, key: String) -> AppResult<()> {
-    state.with_index(Sync::Throttled, |_, conn, _| {
-        kb_core::care::dismiss(conn, &key).map_err(AppError::index)
-    })
+    state.with_db(|_, conn, _| kb_core::care::dismiss(conn, &key).map_err(AppError::index))
 }

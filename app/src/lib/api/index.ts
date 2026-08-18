@@ -12,6 +12,7 @@ import type {
   GraphData,
   GitHubAuthState,
   HomeState,
+  MaintenanceReport,
   NoteCategories,
   NoteFiles,
   NoteListPage,
@@ -73,6 +74,8 @@ export const api = {
     IN_TAURI ? unwrap(commands.onboardExisting(url)) : (await demo()).onboard(),
   homeState: async (): Promise<HomeState> =>
     IN_TAURI ? unwrap(commands.homeState()) : (await demo()).homeState(),
+  maintenanceRefresh: async (): Promise<MaintenanceReport> =>
+    IN_TAURI ? unwrap(commands.maintenanceRefresh()) : (await demo()).maintenanceRefresh(),
   tagOverview: async (): Promise<TagOverview> =>
     IN_TAURI ? unwrap(commands.tagOverview()) : (await demo()).tagOverview(),
   noteGet: async (id: string): Promise<NoteView> =>

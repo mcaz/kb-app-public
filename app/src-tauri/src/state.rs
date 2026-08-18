@@ -6,11 +6,10 @@
 //!
 //! 生成は遅延。オンボーディング前は vault が存在しないため、起動時には作れない。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
-use kb_core::index::{open_db, sync_with_degradations};
+use kb_core::index::open_db;
 use kb_core::ledger::Ledger;
 use kb_core::registry::Registry;
 use kb_core::rusqlite::Connection;
@@ -38,24 +37,10 @@ pub fn allow_vault_assets(app: &tauri::AppHandle, root: &Path) -> AppResult<()> 
     Ok(())
 }
 
-/// export outboxと派生索引を確認する最小間隔。通常のノート状態はDB transactionで
-/// 即時反映され、Markdownの外部編集は明示import以外では取り込まない。
-const SYNC_INTERVAL: Duration = Duration::from_secs(3);
-
-/// 索引を更新するかどうか。
-#[derive(Clone, Copy, PartialEq)]
-pub enum Sync {
-    /// 必ず確認する(一覧の鮮度が要る画面の入口)。
-    Force,
-    /// 直近に更新していれば省く。
-    Throttled,
-}
-
 struct VaultCtx {
     vault: Vault,
     conn: Connection,
-    last_sync: Option<Instant>,
-    /// 最後に実際へ sync したときの劣化情報(間引いた回でも画面に出し続ける)。
+    /// 最後のバックグラウンド保守で得た劣化情報。
     degraded: Vec<kb_core::degradation::Degradation>,
 }
 
@@ -100,32 +85,36 @@ impl AppState {
         f(&ctx.vault, &stores, &ledger, &workspace_id)
     }
 
-    /// vault と索引を使う。`degraded` は索引更新の失敗(fail-open — 原則4)。
-    pub fn with_index<T>(
+    /// UIの前景処理から共有DBを使う。ここでは同期・export・埋め込みを起動しない。
+    /// `degraded` は最後のバックグラウンド保守の結果を画面へ引き継ぐ。
+    pub fn with_db<T>(
         &self,
-        policy: Sync,
         f: impl FnOnce(&Vault, &Connection, Vec<kb_core::degradation::Degradation>) -> AppResult<T>,
     ) -> AppResult<T> {
         let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
         let ctx = ensure(&mut guard)?;
-
-        let stale = ctx.last_sync.is_none_or(|at| at.elapsed() >= SYNC_INTERVAL);
-        if policy == Sync::Force || stale {
-            ctx.degraded = match sync_with_degradations(&ctx.vault, &ctx.conn) {
-                Ok(mut report) => {
-                    report
-                        .degraded
-                        .extend(kb_core::index::embed_step(&ctx.conn));
-                    report.degraded
-                }
-                Err(error) => vec![kb_core::degradation::Degradation::IndexSync {
-                    detail: error.to_string(),
-                }],
-            };
-            ctx.last_sync = Some(Instant::now());
-        }
-
         f(&ctx.vault, &ctx.conn, ctx.degraded.clone())
+    }
+
+    /// バックグラウンド保守用に、共有ロックを握らず開けるvaultルートを返す。
+    pub fn vault_root(&self) -> AppResult<PathBuf> {
+        let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
+        Ok(ensure(&mut guard)?.vault.root.clone())
+    }
+
+    /// 同じvaultに対する保守結果だけを共有状態へ反映する。
+    /// 保守中にオンボーディングでvaultが切り替わった場合は古い結果を捨てる。
+    pub fn set_degraded_for(
+        &self,
+        root: &Path,
+        degraded: Vec<kb_core::degradation::Degradation>,
+    ) -> AppResult<()> {
+        let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
+        let ctx = ensure(&mut guard)?;
+        if ctx.vault.root == root {
+            ctx.degraded = degraded;
+        }
+        Ok(())
     }
 
     /// 開いている vault を手放す(オンボーディング直後など、開き直しが要るとき)。
@@ -145,7 +134,6 @@ fn ensure(guard: &mut Option<VaultCtx>) -> AppResult<&mut VaultCtx> {
         *guard = Some(VaultCtx {
             vault,
             conn,
-            last_sync: None,
             degraded: Vec::new(),
         });
     }

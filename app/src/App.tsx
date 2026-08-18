@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Toaster } from "@/components/atoms/ui/sonner";
 import { TooltipProvider } from "@/components/atoms/ui/tooltip";
@@ -15,13 +16,26 @@ import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
 import { SettingsDialog } from "@/pages/SettingsDialog";
-import { useHomeState, useNoteCategories, useSetupState } from "@/lib/queries";
+import {
+  queryKeys,
+  useHomeState,
+  useMaintenanceRefresh,
+  useNoteCategories,
+  useSetupState,
+} from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
 export function App() {
   const { data: setup, isPending } = useSetupState();
-  const { data: home } = useHomeState();
-  const { data: categoryData } = useNoteCategories();
+  const ready = setup !== undefined && !setup.needs_onboarding;
+  const { data: home } = useHomeState(ready);
+  const { data: categoryData } = useNoteCategories(ready);
+  // 初回のDB表示を先に完了させてから保守を開始する(stale-while-revalidate)。
+  const maintenance = useMaintenanceRefresh(
+    ready && home !== undefined && categoryData !== undefined,
+  );
+  const queryClient = useQueryClient();
+  const handledMaintenanceAt = useRef(0);
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -43,6 +57,27 @@ export function App() {
   useGlobalSearchShortcut(openSearch, !isPending && !setup?.needs_onboarding);
   useSettingsShortcut(openSettings, !isPending && !setup?.needs_onboarding);
 
+  // 外部更新・派生情報の保守が終わった後だけ、影響するDB queryを再取得する。
+  useEffect(() => {
+    if (
+      maintenance.dataUpdatedAt === 0 ||
+      maintenance.dataUpdatedAt === handledMaintenanceAt.current
+    ) {
+      return;
+    }
+    handledMaintenanceAt.current = maintenance.dataUpdatedAt;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.home }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.tagOverview }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.noteCategories }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.noteLists }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.notes }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.searches }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.graph }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.connect }),
+    ]);
+  }, [maintenance.dataUpdatedAt, queryClient]);
+
   if (isPending) return null;
   if (setup?.needs_onboarding) return <OnboardingPage />;
 
@@ -50,7 +85,13 @@ export function App() {
     <TooltipProvider delayDuration={200}>
       <AppShell
         banner={
-          <DegradedBanner items={[...(home?.degraded ?? []), ...(categoryData?.degraded ?? [])]} />
+          <DegradedBanner
+            items={[
+              ...(maintenance.data?.degraded ?? []),
+              ...(home?.degraded ?? []),
+              ...(categoryData?.degraded ?? []),
+            ]}
+          />
         }
         sidebar={
           <Sidebar
