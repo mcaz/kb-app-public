@@ -453,6 +453,7 @@ export const demoApi = {
   fileFetch: () => delay<Availability>("local"),
   // ブラウザからは OS のアプリへ渡せない(この経路は Tauri でしか通らない)
   fileOpen: () => delay(null),
+  fileDownload: () => delay(false),
   filePreview: (_id: string): Promise<PreviewFile> => delay({ path: "", text: null }),
   // ブラウザにネイティブの選択画面は無い(この経路は Tauri でしか通らない)
   pickFiles: () => delay<string[]>([]),

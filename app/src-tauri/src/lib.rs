@@ -51,6 +51,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             files::file_detach,
             files::file_fetch,
             files::file_open,
+            files::file_download,
             files::file_preview,
             files::legacy_open,
             connect::connect_state,

@@ -135,6 +135,8 @@ export const api = {
   /** 中身はコアの resolver 経由でしか出てこない(画面はパスを受け取らない)。 */
   fileOpen: async (id: string): Promise<null> =>
     IN_TAURI ? unwrap(commands.fileOpen(id)) : (await demo()).fileOpen(),
+  fileDownload: async (id: string): Promise<boolean> =>
+    IN_TAURI ? unwrap(commands.fileDownload(id)) : (await demo()).fileDownload(),
   filePreview: async (id: string): Promise<PreviewFile> =>
     IN_TAURI ? unwrap(commands.filePreview(id)) : (await demo()).filePreview(id),
   legacyOpen: async (noteId: string, name: string): Promise<null> =>

@@ -18,6 +18,8 @@
   "missing": "Not on this device",
   "unavailable": "Unavailable on this device",
   "fetch": "Retrieve",
+  "download": "Download",
+  "downloaded": "File saved",
   "openExternal": "Open in another app",
   "openNote": "Source note",
   "previewLoading": "Preparing preview…",

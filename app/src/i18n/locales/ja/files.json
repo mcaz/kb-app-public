@@ -18,6 +18,8 @@
   "missing": "この端末にありません",
   "unavailable": "この端末では開けません",
   "fetch": "取り寄せる",
+  "download": "ダウンロード",
+  "downloaded": "ファイルを保存しました",
   "openExternal": "別アプリで開く",
   "openNote": "元のノート",
   "previewLoading": "プレビューを準備中…",

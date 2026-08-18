@@ -77,6 +77,11 @@ export const commands = {
 	 *  「手元に無いものの中身を開かない」が画面側の作法に落ちる(決定9・resolver の doc)。
 	 */
 	fileOpen: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("file_open", { id })),
+	/**
+	 *  resolver済みの内容を、ユーザーが保存ダイアログで選んだ場所へ複製する。
+	 *  保存先パスをWebViewから受け取らないため、invokeだけで任意ファイルを上書きできない。
+	 */
+	fileDownload: (id: string) => typedError<boolean, AppError>(__TAURI_INVOKE("file_download", { id })),
 	/**  アプリ内プレビュー用。元の場所ではなく、resolver 済みの一時コピーだけを返す。 */
 	filePreview: (id: string) => typedError<PreviewFile, AppError>(__TAURI_INVOKE("file_preview", { id })),
 	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */

@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { FileQuestion } from "lucide-react";
+import { Download, FileQuestion } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
@@ -14,7 +15,7 @@ import {
 } from "@/components/atoms/ui/dialog";
 import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
-import { useFileFetch, useFileOpen, useFilePreview } from "@/lib/queries";
+import { useFileDownload, useFileFetch, useFileOpen, useFilePreview } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
 import { fileKind } from "./fileKind";
@@ -34,6 +35,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
   const previewId = open && file?.availability === "local" ? file.id : null;
   const preview = useFilePreview(previewId);
   const external = useFileOpen();
+  const download = useFileDownload();
   const fetch = useFileFetch();
   const source = file?.notes[0];
   const kind = file ? fileKind(file) : "other";
@@ -72,13 +74,31 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                   </Button>
                 )}
                 {file.availability === "local" && (
-                  <Button
-                    size="sm"
-                    disabled={external.isPending}
-                    onClick={() => external.mutate(file.id)}
-                  >
-                    {t("openExternal")}
-                  </Button>
+                  <>
+                    <Button
+                      variant="quiet"
+                      size="sm"
+                      disabled={download.isPending}
+                      onClick={() =>
+                        download.mutate(file.id, {
+                          onSuccess: (saved) => {
+                            if (saved) toast(t("downloaded"));
+                          },
+                          onError: (error) => toast(errorText(error)),
+                        })
+                      }
+                    >
+                      <Download className="size-4" />
+                      {t("download")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={external.isPending}
+                      onClick={() => external.mutate(file.id)}
+                    >
+                      {t("openExternal")}
+                    </Button>
+                  </>
                 )}
               </div>
             </DialogHeader>

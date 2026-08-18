@@ -349,6 +349,30 @@ pub fn file_open(app: tauri::AppHandle, state: State<'_, AppState>, id: String) 
     open_with_os(&app, &path)
 }
 
+/// resolver済みの内容を、ユーザーが保存ダイアログで選んだ場所へ複製する。
+/// 保存先パスをWebViewから受け取らないため、invokeだけで任意ファイルを上書きできない。
+#[tauri::command]
+#[specta::specta]
+pub async fn file_download(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<bool> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let source = resolved_export(&state, id, ExportPurpose::External)?;
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let Some(selected) = app.dialog().file().set_file_name(name).blocking_save_file() else {
+        return Ok(false);
+    };
+    let destination = selected.into_path().map_err(AppError::unexpected)?;
+    std::fs::copy(source, destination)?;
+    Ok(true)
+}
+
 /// アプリ内プレビュー用。元の場所ではなく、resolver 済みの一時コピーだけを返す。
 #[tauri::command]
 #[specta::specta]
