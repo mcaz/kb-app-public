@@ -153,8 +153,11 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   新規添付・16MiB上限)**を公開。confirm は公開しない(確定は人の操作)。
   所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
   所有の領分・会話で生まれたファイルはpathでなくattachへ」の規律を配る
-  - 自動retrievalは`search(include_documents)`の1 callで、検索と上位本文を同じSQLite接続から返す。
-    候補ごとのMarkdown再読・索引同期・埋め込み追い付きを行わない
+  - 自動retrievalは`search(include_documents)`の1 callで、上位5件をseedに出リンク最大2ホップを
+    展開し、最大50候補から推定10,000 token以内・最大10本文を同じSQLite snapshotで返す。
+    被リンクは出リンクより低く扱い、重複・循環・deprecatedを除外する。選外候補はID・タイトル・
+    選外理由を構造化応答へ残し、必要な場合だけ追加のMCP `get`で取得できる。候補ごとのMarkdown再読・
+    索引同期・埋め込み追い付きを行わない
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
   構造(モデルごとの規律最適化の器)。
   **保留(2026-08-10 本人決定)**: 器を先に作らず、現接続先の **Claude への直接最適化を
@@ -262,7 +265,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   同じ終端結果でfail-closedとする。既存の管理者ポリシーは自動で
   上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。CodexとClaude Codeの
   managed `UserPromptSubmit` hookは、モデルが自発的にtoolを選ぶ前にkb-app MCPの
-  `initialize → search(any, include_documents)`を実行し、同じDB接続から関連ノート全文を文脈へ注入する。OFFはsearchの
+  `initialize → search(any, include_documents)`を実行し、同じDB snapshotで検索seed・リンク候補・
+  予算内本文を選んで文脈へ注入する。OFFはsearchの
   `kb_disabled`終端結果を検知して注入せず、失敗・劣化は該当なしと区別してクライアントへ返す。旧Claude Python hookの
   CLI直検索と、MCP未使用をtranscriptで推測するStop hookは廃止する。
 

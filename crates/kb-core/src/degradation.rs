@@ -20,6 +20,7 @@ pub enum Degradation {
     SemanticSearch { detail: String },
     RescueSearch { detail: String },
     RelatedNotes { detail: String },
+    ContextRetrieval { detail: String },
     SimilarNotes { detail: String },
     CurrentNoteContext { detail: String },
     CareDetection { detail: String },
@@ -45,6 +46,7 @@ impl Degradation {
             Self::SemanticSearch { .. } => "semantic_search",
             Self::RescueSearch { .. } => "rescue_search",
             Self::RelatedNotes { .. } => "related_notes",
+            Self::ContextRetrieval { .. } => "context_retrieval",
             Self::SimilarNotes { .. } => "similar_notes",
             Self::CurrentNoteContext { .. } => "current_note_context",
             Self::CareDetection { .. } => "care_detection",
@@ -83,6 +85,9 @@ impl std::fmt::Display for Degradation {
                 write!(f, "レスキュー索引が利用できない: {detail}")
             }
             Self::RelatedNotes { detail } => write!(f, "つながりを取得できない: {detail}"),
+            Self::ContextRetrieval { detail } => {
+                write!(f, "関連本文の連鎖取得に失敗: {detail}")
+            }
             Self::SimilarNotes { detail } => write!(f, "近いノートを取得できない: {detail}"),
             Self::CurrentNoteContext { detail } => {
                 write!(f, "現在のノートを記録できない: {detail}")
@@ -124,6 +129,7 @@ mod tests {
             Degradation::SemanticSearch { detail: "x".into() },
             Degradation::RescueSearch { detail: "x".into() },
             Degradation::RelatedNotes { detail: "x".into() },
+            Degradation::ContextRetrieval { detail: "x".into() },
             Degradation::SimilarNotes { detail: "x".into() },
             Degradation::CurrentNoteContext { detail: "x".into() },
             Degradation::CareDetection { detail: "x".into() },

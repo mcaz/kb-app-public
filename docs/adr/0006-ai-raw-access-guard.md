@@ -29,8 +29,9 @@ tools/callの構造化終端結果で確認する。
   適用する。`bypassPermissions` も管理設定で無効にする。
 - Codex / Claude Code: 管理 `UserPromptSubmit` hookから同じkb-app実行ファイルの
   `--hook-auto-retrieve`を呼ぶ。hookは同じ実行ファイルをMCP serverとして子起動し、
-  `initialize → search(any, include_documents)`だけをJSON-RPCで実行する。検索と上位本文を
-  同じSQLite接続から返すことで候補ごとの再同期・Markdown再読を行わない。これによりモデルの自発性と
+  `initialize → search(any, include_documents)`だけをJSON-RPCで実行する。検索seed、最大2ホップの
+  リンク候補、予算内本文を同じSQLite snapshotから返すことで候補ごとの再同期・Markdown再読を行わない。
+  これによりモデルの自発性と
   クライアント別instructionsの差を検索開始条件から外す。OFFでもinitializeは同じtoolsを公開し、
   searchが`kb_disabled`（権威あり・再試行不可・空data）を返したときだけ無音で終了する。それ以外の
   検索失敗は該当なしへ変換せず劣化コンテキストとして返す。
