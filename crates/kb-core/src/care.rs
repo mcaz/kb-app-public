@@ -195,7 +195,7 @@ pub fn dismiss(conn: &Connection, key: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::frontmatter::{Frontmatter, Note};
-    use crate::index::{open_db, sync};
+    use crate::index::open_db;
 
     /// 埋め込みを手挿入して検知経路をテスト(モデル不要にするため broken 経路中心)。
     #[test]
@@ -215,7 +215,8 @@ mod tests {
             )
             .unwrap();
         let conn = open_db(&vault).unwrap();
-        sync(&vault, &conn).unwrap();
+        let report = crate::index::import_markdown_snapshot(&vault, &conn).unwrap();
+        assert!(report.degraded.is_empty());
         // broken(リンク切れ)+ untagged(タグ無し=契約1違反状態)の2件
         let added = detect(&conn, &vault).unwrap();
         assert_eq!(added, 2);
@@ -273,7 +274,8 @@ mod tests {
         }
 
         let conn = open_db(&vault).unwrap();
-        sync(&vault, &conn).unwrap();
+        let report = crate::index::import_markdown_snapshot(&vault, &conn).unwrap();
+        assert!(report.degraded.is_empty());
         assert_eq!(detect(&conn, &vault).unwrap(), 3);
         let open = list_open(&conn).unwrap();
         assert_eq!(

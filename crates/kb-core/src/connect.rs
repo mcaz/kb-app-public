@@ -598,8 +598,12 @@ fn push_now_locked_with_gate(
         record_sync_error(vault, &first_error.to_string(), failure_kind(&first_error));
         return Err(first_error);
     }
+    // --autostashでObsidian等の未確定編集まで暗黙importしない。競合解消のpullへ
+    // 進むのは、表示用MarkdownがDB outboxの確定出力だけでcleanな場合に限る。
+    ensure_note_exports_clean(vault)?;
     let pull = git(vault, &["pull", "--rebase", "--autostash"])?;
     if pull.status.success() {
+        import_pulled_markdown(vault)?;
         // pull中にrepositoryのvisibilityや権限が変わり得る。retryも別uploadとして
         // 直前に同じgateを通し、最初の検査結果を使い回さない。
         check_upload_gate(vault, &mut gate)?;
@@ -865,11 +869,15 @@ pub fn pull_if_stale(vault: &Vault) -> Option<crate::degradation::Degradation> {
 /// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復
 /// (merge=ours で相手側が勝った場合や、他デバイス追加分の反映)。
 pub fn pull_now(vault: &Vault) -> Result<()> {
+    let conn = crate::index::open_db(vault)?;
+    vault.flush_note_exports(&conn)?;
+    ensure_note_exports_clean(vault)?;
     let _lock = sync_lock(vault)?;
     let _ = ensure_merge_config(vault);
     let out = git(vault, &["pull", "--rebase", "--autostash"])?;
     if out.status.success() {
         record_pull_success(vault);
+        ensure_import_succeeded(crate::index::import_markdown_snapshot(vault, &conn)?)?;
         let _ = vault.write_index_md();
         Ok(())
     } else {
@@ -877,6 +885,44 @@ pub fn pull_now(vault: &Vault) -> Result<()> {
         record_sync_error(vault, &error.to_string(), failure_kind(&error));
         Err(error)
     }
+}
+
+fn import_pulled_markdown(vault: &Vault) -> Result<()> {
+    let conn = crate::index::open_db(vault)?;
+    ensure_import_succeeded(crate::index::import_markdown_snapshot(vault, &conn)?)
+}
+
+fn ensure_import_succeeded(report: crate::index::SyncReport) -> Result<()> {
+    if !report.degraded.is_empty() {
+        anyhow::bail!(
+            "同期したMarkdownをDBへ反映できない: {}",
+            report
+                .degraded
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" / ")
+        );
+    }
+    Ok(())
+}
+
+fn ensure_note_exports_clean(vault: &Vault) -> Result<()> {
+    let repo = git2::Repository::open(&vault.root)?;
+    let statuses = repo.statuses(None)?;
+    let dirty_note = statuses.iter().find_map(|entry| {
+        let path = entry.path()?;
+        (path.ends_with(".md") && path != "index.md" && path != "log.md").then(|| path.to_string())
+    });
+    if let Some(path) = dirty_note {
+        return Err(failure(
+            BackupFailureKind::GitConflict,
+            format!(
+                "表示用Markdownが外部編集されているため同期しない: {path}。明示importか変更の破棄を選ぶ"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// 明示同期(pull → push)。「今すぐバックアップ」ボタンの実体。

@@ -112,7 +112,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 
 - **FR-C1 ストア**: vault = clone 可能な1 repository。コアは物理形式を直接公開せず、
   ノート・出典・ファイル台帳・監査痕跡という論理モデルと Storage Contract の
-  `verify` / `export` を公開する。**現行 adapter** は Markdown + 最小 frontmatter + Git。
+  `verify` / `export` を公開する。**現行 runtime** はSQLite、交換・バックアップadapterは
+  Markdown + 最小 frontmatter + Git。通常の読み書きはDB transactionを起点にし、同じtransactionの
+  durable outboxからMarkdownを生成する。Obsidianは表示用途で、外部編集は明示import以外では
+  DBへ取り込まない。DB binaryはGitへ入れず、fresh cloneではMarkdownから再構築する。
   規約はアプリが生成・検証し、人間に暗記させない
   - **形式は OKF(Open Knowledge Format)互換を基本方針とする(2026-08-09 決定)**:
     Google Cloud が 2026-06 に公開したベンダー中立仕様(Markdown+YAML・1概念=1ファイル・
@@ -150,6 +153,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   新規添付・16MiB上限)**を公開。confirm は公開しない(確定は人の操作)。
   所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
   所有の領分・会話で生まれたファイルはpathでなくattachへ」の規律を配る
+  - 自動retrievalは`search(include_documents)`の1 callで、検索と上位本文を同じSQLite接続から返す。
+    候補ごとのMarkdown再読・索引同期・埋め込み追い付きを行わない
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
   構造(モデルごとの規律最適化の器)。
   **保留(2026-08-10 本人決定)**: 器を先に作らず、現接続先の **Claude への直接最適化を
@@ -257,7 +262,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   同じ終端結果でfail-closedとする。既存の管理者ポリシーは自動で
   上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。CodexとClaude Codeの
   managed `UserPromptSubmit` hookは、モデルが自発的にtoolを選ぶ前にkb-app MCPの
-  `initialize → search(any) → get`を実行し、関連ノート全文を文脈へ注入する。OFFはsearchの
+  `initialize → search(any, include_documents)`を実行し、同じDB接続から関連ノート全文を文脈へ注入する。OFFはsearchの
   `kb_disabled`終端結果を検知して注入せず、失敗・劣化は該当なしと区別してクライアントへ返す。旧Claude Python hookの
   CLI直検索と、MCP未使用をtranscriptで推測するStop hookは廃止する。
 
@@ -271,7 +276,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 - **NFR-1 ローカルファースト**: 既定構成で外部送信ゼロ。クラウドは全てオプトイン
 - **NFR-2 3歩セットアップ**: インストール → 接続 → 利用開始まで、技術知識ゼロで 10 分以内
 - **NFR-3 スケール目標**: vault あたり 10^3〜10^4 ノートで検索が体感即時。
-  10k deterministic fixtureに対する索引再構築・カテゴリ・ページ一覧・全文検索・
+  10k deterministic fixtureに対するMarkdownからの初回DB復元・カテゴリ・ページ一覧・全文検索・
   semantic KNN・ノート詳細の時間予算をrelease CIで検査する
   ([性能回帰gate](performance-gate.md))
 - **NFR-4 検索品質**: 汎用 RAG(フォルダ丸読み型)を上回ること — リンク構造・メタデータを

@@ -220,7 +220,12 @@ fn main() -> Result<()> {
         }
         Command::Get { note } => {
             let vault = open_vault(cli.vault.as_deref())?;
-            print!("{}", vault.read_note(&note)?.to_file_string()?);
+            let conn = open_db(&vault)?;
+            sync(&vault, &conn)?;
+            print!(
+                "{}",
+                vault.read_note_from_db(&conn, &note)?.to_file_string()?
+            );
         }
         Command::Recent { limit } => {
             let vault = open_vault(cli.vault.as_deref())?;

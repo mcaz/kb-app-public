@@ -1,5 +1,5 @@
-//! 派生索引(SQLite 1ファイル)。二本立て FTS(lindera 主索引+trigram レスキュー)+
-//! リンクテーブル。mtime ベースの増分 sync で「書いてすぐ引ける」を保証する。
+//! 実行時ノートストア+派生索引(SQLite 1ファイル)。二本立て FTS(lindera 主索引+
+//! trigram レスキュー)+リンクテーブル。Markdownは明示import・復元時だけ読み込む。
 //! 接続規律(busy_timeout 必須・WAL)は docs/poc-report.md の PoC ③ 由来。
 
 use std::fs;
@@ -24,6 +24,20 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
     let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
     debug_assert_eq!(mode.to_lowercase(), "wal");
     init_schema(&conn)?;
+    if !runtime_store_is_db(&conn) {
+        let report = import_markdown_snapshot(vault, &conn)?;
+        if !report.degraded.is_empty() {
+            bail!(
+                "MarkdownバックアップからDBを復元できない: {}",
+                report
+                    .degraded
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            );
+        }
+    }
     Ok(conn)
 }
 
@@ -39,6 +53,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
         for (col, ddl) in [
             ("tags", "ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''"),
             ("created", "ALTER TABLE notes ADD COLUMN created TEXT"),
+            (
+                "document",
+                "ALTER TABLE notes ADD COLUMN document TEXT NOT NULL DEFAULT ''",
+            ),
         ] {
             if conn
                 .prepare(&format!("SELECT {col} FROM notes LIMIT 0"))
@@ -48,7 +66,19 @@ fn init_schema(conn: &Connection) -> Result<()> {
                 conn.execute_batch(&format!("{ddl}; UPDATE notes SET mtime = -1;"))?;
             }
         }
-        conn.execute_batch("CREATE INDEX IF NOT EXISTS links_dst ON links(dst);")?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
+             CREATE TABLE IF NOT EXISTS note_exports(
+                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                 op_id TEXT NOT NULL UNIQUE,
+                 note_id TEXT NOT NULL,
+                 operation TEXT NOT NULL,
+                 base_document TEXT,
+                 document TEXT,
+                 log_entry TEXT NOT NULL,
+                 commit_message TEXT NOT NULL
+             );",
+        )?;
         return Ok(());
     }
     conn.execute_batch(&format!(
@@ -62,7 +92,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE notes(
             id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
             origin TEXT, generated_by TEXT, generated_at TEXT,
-            mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT
+            mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT,
+            document TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
         CREATE INDEX links_dst ON links(dst);
@@ -70,6 +101,16 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
         CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
         CREATE VIRTUAL TABLE fts_tri  USING fts5(id UNINDEXED, text, tokenize='trigram');
+        CREATE TABLE note_exports(
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            op_id TEXT NOT NULL UNIQUE,
+            note_id TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            base_document TEXT,
+            document TEXT,
+            log_entry TEXT NOT NULL,
+            commit_message TEXT NOT NULL
+        );
         "
     ))?;
     Ok(())
@@ -101,8 +142,44 @@ pub fn sync(vault: &Vault, conn: &Connection) -> Result<usize> {
 /// 増分syncのfail-open入口。読めないノートは既存rowを残し、正常なノートだけを
 /// 同じtransactionで反映する。呼び出し元は`degraded`をデータと一緒に返すこと。
 pub fn sync_with_degradations(vault: &Vault, conn: &Connection) -> Result<SyncReport> {
+    if runtime_store_is_db(conn) {
+        let degraded = match vault.flush_note_exports(conn) {
+            Ok(_) => Vec::new(),
+            Err(error) => vec![crate::degradation::Degradation::MarkdownExport {
+                detail: error.to_string(),
+            }],
+        };
+        return Ok(SyncReport {
+            updated: 0,
+            degraded,
+        });
+    }
+    import_markdown_snapshot(vault, conn)
+}
+
+/// fresh clone・明示import・Git pullだけがMarkdownからDBへ入る入口。
+pub fn import_markdown_snapshot(vault: &Vault, conn: &Connection) -> Result<SyncReport> {
+    if crate::note_store::pending_count(conn)? != 0 {
+        bail!("未出力のDB更新があるためMarkdownをimportできない");
+    }
     let files = vault.list_note_files()?;
-    sync_files(vault, conn, files)
+    let report = sync_files(vault, conn, files)?;
+    if report.degraded.is_empty() {
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('runtime_store', 'db-v1')",
+            [],
+        )?;
+    }
+    Ok(report)
+}
+
+fn runtime_store_is_db(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT value FROM meta WHERE key = 'runtime_store'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .is_ok_and(|value| value == "db-v1")
 }
 
 fn sync_files(
@@ -207,7 +284,13 @@ pub fn embed_step(conn: &Connection) -> Option<crate::degradation::Degradation> 
     }
 }
 
-fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -> Result<()> {
+pub(crate) fn upsert(
+    conn: &Connection,
+    vault: &Vault,
+    id: &str,
+    mtime: i64,
+    note: &Note,
+) -> Result<()> {
     let f = &note.front;
     // 添付ファイル名も検索対象に(「あの PDF どこだっけ」を引けるように。FR-C8)
     let attach_names: String = vault
@@ -229,8 +312,8 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
         .query_row("SELECT body FROM notes WHERE id=?1", [id], |r| r.get(0))
         .ok();
     conn.execute(
-        "INSERT OR REPLACE INTO notes(id, title, description, status, origin, generated_by, generated_at, mtime, body, tags, created)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT OR REPLACE INTO notes(id, title, description, status, origin, generated_by, generated_at, mtime, body, tags, created, document)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         rusqlite::params![
             id,
             f.title,
@@ -243,6 +326,7 @@ fn upsert(conn: &Connection, vault: &Vault, id: &str, mtime: i64, note: &Note) -
             note.body,
             f.tags.join(" "),
             f.created_at(),
+            note.to_file_string()?,
         ],
     )?;
     conn.execute("DELETE FROM fts_main WHERE id=?1", [id])?;
@@ -326,7 +410,8 @@ mod tests {
             )
             .unwrap();
         let conn = open_db(&vault).unwrap();
-        assert_eq!(sync(&vault, &conn).unwrap(), 1);
+        // propose時点でDB transactionへ反映済み。通常syncはMarkdownを再走査しない。
+        assert_eq!(sync(&vault, &conn).unwrap(), 0);
         assert_eq!(sync(&vault, &conn).unwrap(), 0); // 変更なしなら 0
         let n: i64 = conn
             .query_row("SELECT count(*) FROM links", [], |r| r.get(0))
@@ -334,11 +419,55 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    #[test]
+    fn existing_v3_index_migrates_to_the_db_runtime_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let note = Note {
+            front: {
+                let mut front = Frontmatter::new_note("移行");
+                front.origin = Some("agent".into());
+                front.tags = vec!["test".into()];
+                front
+            },
+            body: "失わない本文".into(),
+        };
+        vault.write_note_fixture("notes/migrate", &note).unwrap();
+        std::fs::create_dir_all(vault.index_db_path().parent().unwrap()).unwrap();
+        let legacy = Connection::open(vault.index_db_path()).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+                 INSERT INTO meta(key, value) VALUES('schema', '3');
+                 CREATE TABLE notes(
+                    id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
+                    origin TEXT, generated_by TEXT, generated_at TEXT,
+                    mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT
+                 );
+                 CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
+                 CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
+                 CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
+                 CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let migrated = open_db(&vault).unwrap();
+        assert_eq!(
+            crate::note_store::read(&migrated, "notes/migrate")
+                .unwrap()
+                .body,
+            "失わない本文\n"
+        );
+        assert_eq!(crate::note_store::pending_count(&migrated).unwrap(), 0);
+    }
+
     /// 2026-08-16の10k高速化で追加したtransactionを外す退行と、半端な索引を防ぐ。
     #[test]
     fn sync_rolls_back_every_note_when_one_upsert_fails() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
         for id in ["notes/a", "notes/b"] {
             let mut front = Frontmatter::new_note(id);
             front.tags = vec!["test".into()];
@@ -352,7 +481,6 @@ mod tests {
                 )
                 .unwrap();
         }
-        let conn = open_db(&vault).unwrap();
         conn.execute_batch(
             "CREATE TRIGGER fail_second_note BEFORE INSERT ON notes
              WHEN NEW.id = 'notes/b'
@@ -360,7 +488,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(sync(&vault, &conn).is_err());
+        assert!(import_markdown_snapshot(&vault, &conn).is_err());
         let indexed: i64 = conn
             .query_row("SELECT count(*) FROM notes", [], |row| row.get(0))
             .unwrap();
@@ -385,7 +513,7 @@ mod tests {
         let (id, path) = vault.list_note_files().unwrap().remove(0);
         fs::write(&path, "frontmatterではない").unwrap();
 
-        let report = sync_with_degradations(&vault, &conn).unwrap();
+        let report = import_markdown_snapshot(&vault, &conn).unwrap();
         assert_eq!(report.updated, 0);
         assert!(report.degraded.iter().any(|item| matches!(
             item,
@@ -396,8 +524,15 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(indexed_body, "残す本文\n");
-        assert!(sync(&vault, &conn).is_err(), "strict入口は黙って続行しない");
+        assert_eq!(indexed_body, "残す本文");
+        assert!(
+            import_markdown_snapshot(&vault, &conn)
+                .unwrap()
+                .degraded
+                .iter()
+                .any(|item| matches!(item, crate::degradation::Degradation::IndexParse { .. })),
+            "明示importは壊れたMarkdownを正常扱いしない"
+        );
     }
 
     #[test]

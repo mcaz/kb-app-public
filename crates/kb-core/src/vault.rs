@@ -1,9 +1,10 @@
-//! vault = 1ディレクトリ(内部は git リポ)。現行の保存 adapter は Markdown+Git、
-//! .kb/ 以下(索引)は再構築可能な派生(Storage Contract / ADR-0004)。
+//! vault = 1ディレクトリ(内部は git リポ)。日常の読み書きはローカルSQLite、
+//! Markdown+Gitは表示・バックアップ・復元adapter(Storage Contract / ADR-0004)。
 //! 規約(frontmatter・index.md・log.md)はアプリが生成し人間に暗記させない(原則7)。
 
 use std::fs;
 use std::io::ErrorKind;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -153,7 +154,8 @@ impl Vault {
         Ok(path)
     }
 
-    pub fn read_note(&self, raw: &str) -> Result<Note> {
+    #[cfg(test)]
+    pub(crate) fn read_note(&self, raw: &str) -> Result<Note> {
         let id = NoteId::parse(raw)?;
         let path = self.checked_existing_path(&id.markdown_relative_path())?;
         let content = fs::read_to_string(&path)
@@ -161,7 +163,13 @@ impl Vault {
         Note::parse(&content).with_context(|| format!("parse 失敗: {id}"))
     }
 
+    /// AI・GUI・CLI の日常読み取りは、同じDB snapshotを共有する。
+    pub fn read_note_from_db(&self, conn: &rusqlite::Connection, raw: &str) -> Result<Note> {
+        crate::note_store::read(conn, raw)
+    }
+
     /// 新規ノートを書き込む。ID(notes/<slug>)を返す。git コミットは呼び側で。
+    #[cfg(test)]
     fn write_new_note(&self, title: &str, note: &Note) -> Result<String> {
         let slug = slugify(title);
         let mut id = format!("{NOTES_DIR}/{slug}");
@@ -177,7 +185,14 @@ impl Vault {
     fn write_note(&self, raw: &str, note: &Note) -> Result<()> {
         let id = NoteId::parse(raw)?;
         let path = self.checked_write_path(&id.markdown_relative_path())?;
-        fs::write(&path, note.to_file_string()?)?;
+        let parent = path.parent().context("ノート出力先に親がない")?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(note.to_file_string()?.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("Markdown exportを確定できない: {}", path.display()))?;
         Ok(())
     }
 
@@ -228,18 +243,39 @@ impl Vault {
             front,
             body: body.to_string(),
         };
-        let id = self.write_new_note(title, &note)?;
-        self.append_log(&format!(
-            "**Proposal**: [{title}](/{id}.md) を起票(via {client})。"
-        ))?;
-        self.write_index_md()?;
-        self.commit_note_op(&id, &format!("propose {id} (via {client})"))?;
+        let id = self.next_note_id(conn, title)?;
+        crate::note_store::put(
+            self,
+            conn,
+            &id,
+            &note,
+            &format!("**Proposal**: [{title}](/{id}.md) を起票(via {client})。"),
+            &format!("propose {id} (via {client})"),
+        )?;
+        self.flush_note_exports(conn)?;
+        Ok(id)
+    }
+
+    fn next_note_id(&self, conn: &rusqlite::Connection, title: &str) -> Result<String> {
+        let slug = slugify(title);
+        let mut id = format!("{NOTES_DIR}/{slug}");
+        let mut suffix = 1;
+        while crate::note_store::contains(conn, &id)? || self.note_path(&id)?.exists() {
+            suffix += 1;
+            id = format!("{NOTES_DIR}/{slug}-{suffix}");
+        }
         Ok(id)
     }
 
     /// 所有ガード。現行ノートは agent 所有で、旧 human ノートは互換読み取り専用。
-    fn require_origin(&self, id: &str, expected: &str, deny_msg: &str) -> Result<Note> {
-        let note = self.read_note(id)?;
+    fn require_origin(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+        expected: &str,
+        deny_msg: &str,
+    ) -> Result<Note> {
+        let note = self.read_note_from_db(conn, id)?;
         let origin = note.front.origin.as_deref().unwrap_or("human");
         if origin != expected {
             bail!("{deny_msg}");
@@ -248,13 +284,31 @@ impl Vault {
     }
 
     /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
-    pub fn agent_delete_note(&self, id: &str, client: &str) -> Result<()> {
+    pub fn agent_delete_note(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+        client: &str,
+    ) -> Result<()> {
         self.require_origin(
+            conn,
             id,
             "agent",
             "旧 human ノートは削除できない(互換読み取り専用)",
         )?;
-        self.delete_note_inner(id, &format!("note: delete {id} (via {client})"))
+        let title = self
+            .read_note_from_db(conn, id)?
+            .front
+            .title
+            .unwrap_or_else(|| id.to_string());
+        crate::note_store::delete(
+            conn,
+            id,
+            &format!("**Deletion**: 「{title}」({id})を削除。"),
+            &format!("note: delete {id} (via {client})"),
+        )?;
+        self.flush_note_exports(conn)?;
+        Ok(())
     }
 
     /// AI 自身によるノート更新(MCP)。自分のノート(origin: agent)のみ。
@@ -273,6 +327,7 @@ impl Vault {
             client,
         } = update;
         let mut note = self.require_origin(
+            conn,
             id,
             "agent",
             "旧 human ノートは編集できない(互換読み取り専用)",
@@ -294,13 +349,16 @@ impl Vault {
             by: client.into(),
             at: now_iso(),
         });
-        self.write_note(id, &note)?;
         let t = note.front.title.as_deref().unwrap_or(id);
-        self.append_log(&format!(
-            "**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"
-        ))?;
-        self.write_index_md()?;
-        self.commit_note_op(id, &format!("note: update {id} (via {client})"))?;
+        crate::note_store::put(
+            self,
+            conn,
+            id,
+            &note,
+            &format!("**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"),
+            &format!("note: update {id} (via {client})"),
+        )?;
+        self.flush_note_exports(conn)?;
         Ok(())
     }
 
@@ -335,31 +393,74 @@ impl Vault {
         self.write_note(id, note)
     }
 
-    fn delete_note_inner(&self, id: &str, message: &str) -> Result<()> {
-        let id = NoteId::parse(id)?;
-        let note_relative = id.markdown_relative_path();
-        let attachments_relative = id.attachments_relative_path();
-        let note_path = self.checked_existing_path(&note_relative)?;
-        let attachments = self.checked_optional_path(&attachments_relative)?;
-        let title = self
-            .read_note(id.as_str())
-            .ok()
-            .and_then(|n| n.front.title)
-            .unwrap_or_else(|| id.to_string());
-        let repo = Repository::open(&self.root)?;
-        let mut index = repo.index()?;
-        index.remove_path(&note_relative)?;
-        let _ = index.remove_dir(&attachments_relative, 0);
-        index.write()?;
-        fs::remove_file(note_path)?;
-        if let Some(attachments) = attachments {
-            // 旧実装と同じく、ノート本体の削除は旧添付の後始末失敗で巻き戻せない。
-            let _ = fs::remove_dir_all(attachments);
+    /// DB commitと同じtransactionで積まれたMarkdown出力を、順番どおり冪等に反映する。
+    pub fn flush_note_exports(&self, conn: &rusqlite::Connection) -> Result<usize> {
+        let pending = crate::note_store::pending(conn)?;
+        let count = pending.len();
+        for export in pending {
+            let id = NoteId::parse(&export.note_id)?;
+            match export.operation {
+                crate::note_store::ExportOperation::Upsert => {
+                    let document = export.document.context("upsert exportに本文がない")?;
+                    self.ensure_export_base(&id, export.base_document.as_deref(), Some(&document))?;
+                    let note = Note::parse(&document)?;
+                    self.write_note(id.as_str(), &note)?;
+                }
+                crate::note_store::ExportOperation::Delete => {
+                    self.ensure_export_base(&id, export.base_document.as_deref(), None)?;
+                    let relative = id.markdown_relative_path();
+                    let attachments_relative = id.attachments_relative_path();
+                    let repo = Repository::open(&self.root)?;
+                    let mut index = repo.index()?;
+                    let _ = index.remove_dir(&attachments_relative, 0);
+                    index.write()?;
+                    if let Some(path) = self.checked_optional_path(&relative)? {
+                        fs::remove_file(path)?;
+                    }
+                    if let Some(attachments) = self.checked_optional_path(&attachments_relative)? {
+                        let _ = fs::remove_dir_all(attachments);
+                    }
+                }
+            }
+            self.append_log_once(&export.op_id, &export.log_entry)?;
+            self.write_index_md()?;
+            self.commit_note_op(id.as_str(), &export.commit_message)?;
+            crate::note_store::complete(conn, export.seq)?;
         }
-        self.write_index_md()?;
-        self.append_log(&format!("**Deletion**: 「{title}」({id})を削除。"))?;
-        self.commit(&["index.md", "log.md"], message)?;
-        crate::connect::auto_push(self);
+        if count != 0 {
+            crate::connect::auto_push(self);
+        }
+        Ok(count)
+    }
+
+    fn ensure_export_base(
+        &self,
+        id: &NoteId,
+        base_document: Option<&str>,
+        target_document: Option<&str>,
+    ) -> Result<()> {
+        let relative = id.markdown_relative_path();
+        let Some(path) = self.checked_optional_path(&relative)? else {
+            return Ok(());
+        };
+        let current = fs::read_to_string(path)?;
+        if base_document.is_some_and(|base| current == base)
+            || target_document.is_some_and(|target| current == target)
+        {
+            return Ok(());
+        }
+        bail!(
+            "表示用Markdownが外部編集されているため上書きしない: {}",
+            id.as_str()
+        )
+    }
+
+    fn append_log_once(&self, operation_id: &str, entry: &str) -> Result<()> {
+        let marker = format!("<!-- kb-export:{operation_id} -->");
+        let existing = fs::read_to_string(self.root.join("log.md")).unwrap_or_default();
+        if !existing.contains(&marker) {
+            self.append_log(&format!("{entry} {marker}"))?;
+        }
         Ok(())
     }
 
@@ -502,8 +603,6 @@ impl Vault {
         let note_path = id.markdown_relative_path();
         let note_path = note_path.to_str().context("ノートIDがUTF-8ではない")?;
         self.commit(&[note_path, "index.md", "log.md"], message)?;
-        // 随時 push(FR-A6 改定)。remote 未設定なら no-op、失敗しても操作は成功のまま
-        crate::connect::auto_push(self);
         Ok(())
     }
 
@@ -526,6 +625,12 @@ impl Vault {
             .signature()
             .or_else(|_| Signature::now("kb-app", "kb-app@localhost"))?;
         let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        if parent
+            .as_ref()
+            .is_some_and(|commit| commit.tree_id() == tree.id())
+        {
+            return Ok(());
+        }
         let parents: Vec<&git2::Commit> = parent.iter().collect();
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
         Ok(())
@@ -655,7 +760,7 @@ mod tests {
                 "更新できてはいけない: {id}"
             );
             assert!(
-                vault.agent_delete_note(id, "test/client").is_err(),
+                vault.agent_delete_note(&conn, id, "test/client").is_err(),
                 "削除できてはいけない: {id}"
             );
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), original);
@@ -697,7 +802,7 @@ mod tests {
         );
         assert!(
             vault
-                .agent_delete_note("notes/linked", "test/client")
+                .agent_delete_note(&conn, "notes/linked", "test/client")
                 .is_err()
         );
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), original);
@@ -782,7 +887,7 @@ mod tests {
                 )
                 .is_err()
         );
-        assert!(vault.agent_delete_note(&legacy, "claude/x").is_err());
+        assert!(vault.agent_delete_note(&conn, &legacy, "claude/x").is_err());
 
         assert_eq!(
             vault.read_note(&ai).unwrap().front.origin.as_deref(),
@@ -809,7 +914,7 @@ mod tests {
         let ai2 = vault
             .propose_for_test("捨てる知見", "本文", None, &["dev".into()], "claude/x")
             .unwrap();
-        assert!(vault.agent_delete_note(&ai2, "claude/x").is_ok());
+        assert!(vault.agent_delete_note(&conn, &ai2, "claude/x").is_ok());
     }
 
     #[test]

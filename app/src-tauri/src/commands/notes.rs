@@ -44,7 +44,7 @@ fn note_view_from(
     let id = kb_core::note_id::NoteId::parse(id).map_err(AppError::invalid_input)?;
     let id = id.as_str();
     let note = vault
-        .read_note(id)
+        .read_note_from_db(conn, id)
         .map_err(|_| AppError::note_not_found(id))?;
     // 本文は表示できるので、現在ノート文脈や派生索引の失敗だけを型付きで添える。
     if let Err(error) = kb_core::connect::set_current_note(vault, id) {
@@ -90,7 +90,7 @@ fn note_view_from(
 #[tauri::command]
 #[specta::specta]
 pub fn note_search(state: State<'_, AppState>, query: String) -> AppResult<SearchOutcome> {
-    // 検索は鮮度が要る(書いた直後に引けること — 増分 sync の前提)
+    // DB更新は即時だが、検索入口ではexport劣化と埋め込みの追い付きも確認する。
     state.with_index(Sync::Force, |_, conn, degraded| {
         let mut out = search(conn, &query, 30);
         out.degraded.extend(degraded);
@@ -167,7 +167,7 @@ mod tests {
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let conn = open_db(&vault).unwrap();
         std::fs::write(vault.root.join("notes/broken.md"), "frontmatterではない").unwrap();
-        let report = kb_core::index::sync_with_degradations(&vault, &conn).unwrap();
+        let report = kb_core::index::import_markdown_snapshot(&vault, &conn).unwrap();
         assert!(report.degraded.iter().any(|item| matches!(
             item,
             kb_core::degradation::Degradation::IndexParse { note, .. }
