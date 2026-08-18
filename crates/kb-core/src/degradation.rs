@@ -9,6 +9,7 @@
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum Degradation {
     RemoteSync { detail: String },
+    MarkdownExport { detail: String },
     IndexSync { detail: String },
     IndexMetadata { note: String, detail: String },
     IndexRead { note: String, detail: String },
@@ -33,6 +34,7 @@ impl Degradation {
     pub fn code(&self) -> &'static str {
         match self {
             Self::RemoteSync { .. } => "remote_sync",
+            Self::MarkdownExport { .. } => "markdown_export",
             Self::IndexSync { .. } => "index_sync",
             Self::IndexMetadata { .. } => "index_metadata",
             Self::IndexRead { .. } => "index_read",
@@ -58,6 +60,9 @@ impl std::fmt::Display for Degradation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RemoteSync { detail } => write!(f, "同期に失敗: {detail}"),
+            Self::MarkdownExport { detail } => {
+                write!(f, "Markdownバックアップの更新に失敗: {detail}")
+            }
             Self::IndexSync { detail } => write!(f, "索引の更新に失敗: {detail}"),
             Self::IndexMetadata { note, detail } => {
                 write!(f, "{note} の更新日時を取得できない: {detail}")
@@ -99,6 +104,7 @@ mod tests {
     fn serialization_keeps_a_stable_code() {
         let items = [
             Degradation::RemoteSync { detail: "x".into() },
+            Degradation::MarkdownExport { detail: "x".into() },
             Degradation::IndexSync { detail: "x".into() },
             Degradation::IndexMetadata {
                 note: "notes/a".into(),

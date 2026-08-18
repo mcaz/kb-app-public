@@ -84,3 +84,21 @@ lossless round-tripを検証する。詳細数値とkill criteriaはPoCレポー
 - P0 時点では保存速度は変わらない。性能改善は計測後の backend 選定で行う
 - `local_only` を含む「cloneだけで完全復元」はできないため、完全 bundle が未完であることを
   UI/CLIで隠さない必要がある
+
+## P2 ローカル実行面をSQLiteへ移す（2026-08-18）
+
+本人決定により、SQLite単独正本をGitへ入れる案は引き続き棄却したまま、日常の実行面だけを
+DBへ移した。AI・GUI・CLIの通常読取とpropose／update／removeはSQLite transactionを境界とし、
+同じtransactionでdurable outboxを積んでMarkdownへ出力する。MarkdownはObsidian表示、Git
+バックアップ、fresh clone復元、lossless検証を担う。
+
+通常syncはMarkdownの外部編集を暗黙にDBへ取り込まない。明示importと、cleanなworktreeへの
+Git pull後だけがMarkdownからDBへ入る経路である。未commitのノートMarkdownが外部編集されて
+いる場合、同期は上書きせず競合として止める。
+
+自動retrievalは検索後に最大3回Markdownを読む方式を廃止し、`search(include_documents)`の
+1 callで検索結果と上位本文を同じSQLite接続から返す。索引同期と埋め込み追い付きも検索時の
+1回だけで、候補本文ごとには繰り返さない。
+
+この段階は複数端末のmerge可能な交換表現をMarkdownのまま維持する。writer別分割event log＋
+content-addressed immutable objectへの移行は、P1のkill criteriaを通した後の別判断とする。

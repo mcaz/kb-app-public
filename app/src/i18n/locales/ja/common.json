@@ -93,6 +93,7 @@
   },
   "degradation": {
     "remote_sync": "同期に失敗しました: {{detail}}",
+    "markdown_export": "Markdownバックアップを更新できませんでした: {{detail}}",
     "index_sync": "索引を更新できませんでした。古い結果を表示している可能性があります: {{detail}}",
     "index_metadata": "{{note}} の更新状態を確認できません。以前の索引を残しています: {{detail}}",
     "index_read": "{{note}} を読み込めません。以前の索引を残しています: {{detail}}",

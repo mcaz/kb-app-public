@@ -38,15 +38,14 @@ pub fn allow_vault_assets(app: &tauri::AppHandle, root: &Path) -> AppResult<()> 
     Ok(())
 }
 
-/// 索引 sync の最小間隔。変更が無ければ sync 自体は数十msだが、ノートを
-/// 連続で開くたびに走らせる意味はないので間引く。画面の更新は TanStack Query が
-/// 再取得するので、この窓の間に外部変更を取りこぼしても次の取得で追いつく。
+/// export outboxと派生索引を確認する最小間隔。通常のノート状態はDB transactionで
+/// 即時反映され、Markdownの外部編集は明示import以外では取り込まない。
 const SYNC_INTERVAL: Duration = Duration::from_secs(3);
 
 /// 索引を更新するかどうか。
 #[derive(Clone, Copy, PartialEq)]
 pub enum Sync {
-    /// 必ず更新する(一覧の鮮度が要る画面の入口)。
+    /// 必ず確認する(一覧の鮮度が要る画面の入口)。
     Force,
     /// 直近に更新していれば省く。
     Throttled,

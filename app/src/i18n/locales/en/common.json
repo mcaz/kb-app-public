@@ -93,6 +93,7 @@
   },
   "degradation": {
     "remote_sync": "Sync failed: {{detail}}",
+    "markdown_export": "The Markdown backup could not be updated: {{detail}}",
     "index_sync": "The index could not be updated. Results may be stale: {{detail}}",
     "index_metadata": "The update state of {{note}} could not be checked. Its previous index entry was kept: {{detail}}",
     "index_read": "{{note}} could not be read. Its previous index entry was kept: {{detail}}",

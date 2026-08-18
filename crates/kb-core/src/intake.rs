@@ -112,7 +112,8 @@ pub fn take_content(
 
     // 実体や台帳へ触れる前に、ひもづけ先の存在まで確認する。
     NoteId::parse(req.note_id)?;
-    vault.read_note(req.note_id)?;
+    let conn = crate::index::open_db(vault)?;
+    crate::note_store::read(&conn, req.note_id)?;
     validate_content_display_name(req.display_name)?;
 
     let mut temporary = tempfile::NamedTempFile::new().context("MCP添付の一時fileを作れない")?;

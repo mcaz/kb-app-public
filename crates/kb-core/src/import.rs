@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use serde_yaml::Value;
 
 use crate::frontmatter::{Frontmatter, Generated, Note};
-use crate::index::{open_db, sync};
+use crate::index::{import_markdown_snapshot, open_db, sync};
 use crate::vault::Vault;
 
 /// 取り込み元1つ。`prefix` が空なら vault 直下へ同じ相対パスで入る。
@@ -106,8 +106,20 @@ pub fn import(vault: &Vault, sources: &[Source], allow_new_tags: bool) -> Result
                     report.skipped.push(format!("{dest}({error})"));
                     continue;
                 }
-                // 次のノートも同じ語彙判定を受けるよう、成功分を派生索引へ反映する。
-                sync(vault, &conn)?;
+                // importはMarkdownをDBへ入れる明示経路。通常syncはObsidian等の外部編集を
+                // 暗黙に取り込まないため、この入口だけsnapshotを読み直す。
+                let imported = import_markdown_snapshot(vault, &conn)?;
+                if !imported.degraded.is_empty() {
+                    anyhow::bail!(
+                        "importしたMarkdownをDBへ反映できない: {}",
+                        imported
+                            .degraded
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    );
+                }
                 written.push(dest.clone());
                 report.imported.push(dest.clone());
             }

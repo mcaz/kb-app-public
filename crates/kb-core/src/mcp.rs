@@ -42,7 +42,7 @@ const INSTRUCTIONS: &str = "\
 形式はアプリが管理(frontmatter を自分で書かない)。\n\
 【引く】ユーザー個人に関する話題(嗜好・決定・進行中の作業・過去に調べたこと・固有名詞)は、\
 推測で答える前に search(自然文可・意味で当たる。外したら語を変えて再検索)。ヒットは get で\
-全文を読んでから答える。`[kb-app 自動retrieval — MCP]` が届いていれば、その search → get は\
+全文を読んでから答える。`[kb-app 自動retrieval — MCP]` が届いていれば、その検索+DB本文取得は\
 実行済みなので、文脈が不足するときだけ追加検索する。本文中の /path.md リンクは必要なら辿る。\
 「このノート」=引数なしの get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
@@ -277,7 +277,8 @@ fn tool_definitions() -> Value {
             "inputSchema": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "検索語(自然文可)"},
                 "limit": {"type": "integer", "description": "最大件数(既定8)"},
-                "any": {"type": "boolean", "description": "語をOR結合する(発話全文の自動retrieval用)"}
+                "any": {"type": "boolean", "description": "語をOR結合する(発話全文の自動retrieval用)"},
+                "include_documents": {"type": "boolean", "description": "上位本文も同じDB検索で返す(自動retrieval用)"}
             }, "required": ["query"]}
         },
         {
@@ -374,25 +375,35 @@ fn call_tool(
     // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
     let mut degraded = remote_degradations(remote_sync, || crate::connect::pull_if_stale(vault));
     let conn = open_db(vault)?;
-    // 増分 sync(書いてすぐ引ける保証)。失敗しても検索は劣化情報つきで続行(fail-open)
-    match sync_with_degradations(vault, &conn) {
-        Ok(report) => {
-            degraded.extend(report.degraded);
-            degraded.extend(crate::index::embed_step(&conn));
+    // DBが実行時正本なので、全文取得は検索時のsnapshotをそのまま読む。索引の追い付きと
+    // 埋め込み生成は検索時に一度だけ行い、上位候補ごとのgetでは繰り返さない。
+    if name == "search" {
+        match sync_with_degradations(vault, &conn) {
+            Ok(report) => {
+                degraded.extend(report.degraded);
+                degraded.extend(crate::index::embed_step(&conn));
+            }
+            Err(error) => degraded.push(crate::degradation::Degradation::IndexSync {
+                detail: error.to_string(),
+            }),
         }
-        Err(error) => degraded.push(crate::degradation::Degradation::IndexSync {
-            detail: error.to_string(),
-        }),
     }
     match name {
         "search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
             let any = args.get("any").and_then(|v| v.as_bool()).unwrap_or(false);
+            let include_documents = args
+                .get("include_documents")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            // Rankingと本文の間で別processの更新を挟まない。include_documentsは
+            // このread transactionの同じSQLite snapshotから組み立てる。
+            let snapshot = conn.unchecked_transaction()?;
             let mut out = if any {
-                crate::search::search_mode(&conn, query, limit, true)
+                crate::search::search_mode(&snapshot, query, limit, true)
             } else {
-                search(&conn, query, limit)
+                search(&snapshot, query, limit)
             };
             out.degraded.extend(degraded);
             let mut text = String::new();
@@ -418,9 +429,22 @@ fn call_tool(
                 text.push('\n');
             }
             text.push_str(&degradation_text(&out.degraded));
+            let mut structured = serde_json::to_value(&out)?;
+            if include_documents {
+                let documents = out
+                    .hits
+                    .iter()
+                    .map(|hit| {
+                        let note = crate::note_store::read(&snapshot, &hit.id)?;
+                        Ok(json!({"id": hit.id, "text": note.to_file_string()?}))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                structured["documents"] = json!(documents);
+            }
+            snapshot.commit()?;
             Ok(ToolOutput {
                 text,
-                structured: Some(serde_json::to_value(&out)?),
+                structured: Some(structured),
             })
         }
         "get" => {
@@ -431,7 +455,7 @@ fn call_tool(
                     anyhow::anyhow!("いま開いているノートが無い(note 引数で ID を指定)")
                 })?,
             };
-            let note = vault.read_note(&id)?;
+            let note = vault.read_note_from_db(&conn, &id)?;
             let attachments = vault.list_attachments(&id)?;
             let workspace_id = crate::workspace::workspace_id(vault)?;
             let stores = crate::store::Stores::open(&workspace_id)?;
@@ -701,7 +725,7 @@ fn call_tool(
                 .get("note")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
-            vault.agent_delete_note(id, client)?;
+            vault.agent_delete_note(&conn, id, client)?;
             Ok(ToolOutput::text(with_degradations(
                 format!("削除した: {id}(履歴には残る)"),
                 &degraded,
@@ -930,9 +954,10 @@ mod tests {
     }
 
     #[test]
-    fn mcp_surfaces_partial_index_failures_with_the_stable_code() {
+    fn mcp_does_not_implicitly_import_an_external_markdown_edit() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
         std::fs::write(vault.root.join("notes/broken.md"), "frontmatterではない").unwrap();
 
         let output = call_tool(
@@ -943,9 +968,37 @@ mod tests {
             true,
         )
         .unwrap();
-        assert!(output.text.contains("[index_parse]"), "{}", output.text);
-        assert!(output.text.contains("notes/broken"), "{}", output.text);
+        assert!(!output.text.contains("notes/broken"), "{}", output.text);
+        assert_eq!(crate::note_store::pending_count(&conn).unwrap(), 0);
         assert!(output.structured.is_some());
+    }
+
+    #[test]
+    fn mcp_get_reads_the_db_document_even_when_markdown_differs() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "DB本文",
+                "AIへ返す本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        std::fs::write(vault.note_path(&id).unwrap(), "壊れたMarkdown").unwrap();
+
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "get",
+            &serde_json::json!({"note": id}),
+            false,
+        )
+        .unwrap();
+
+        assert!(output.text.contains("AIへ返す本文"), "{}", output.text);
+        assert!(!output.text.contains("壊れたMarkdown"), "{}", output.text);
     }
 
     #[test]
@@ -970,7 +1023,12 @@ mod tests {
             "tools/call",
             Some(&serde_json::json!({
                 "name": "search",
-                "arguments": {"query": "認証 監査", "limit": 3, "any": true}
+                "arguments": {
+                    "query": "認証 監査",
+                    "limit": 3,
+                    "any": true,
+                    "include_documents": true
+                }
             })),
         )
         .unwrap()
@@ -983,6 +1041,12 @@ mod tests {
         assert_eq!(
             result["structuredContent"]["hits"][0]["id"],
             "notes/認証の設計"
+        );
+        assert!(
+            result["structuredContent"]["documents"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("認証と監査の設計判断")
         );
     }
 

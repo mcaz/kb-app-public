@@ -867,10 +867,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         write_performance_fixture(&vault);
-        let conn = open_db(&vault).unwrap();
-
-        let (updated, rebuild) = timed(|| sync(&vault, &conn).unwrap());
-        assert_eq!(updated, PERFORMANCE_NOTE_COUNT);
+        let (conn, rebuild) = timed(|| open_db(&vault).unwrap());
+        assert_eq!(super::stats(&conn).unwrap().total, PERFORMANCE_NOTE_COUNT);
         seed_performance_vectors(&conn);
 
         let (categories, category_list) =
@@ -910,7 +908,7 @@ mod tests {
 
         let (_, note_detail) = timed(|| {
             repeat_last(5, || {
-                let note = vault.read_note(&target_id).unwrap();
+                let note = crate::note_store::read(&conn, &target_id).unwrap();
                 let related = super::related_of(&conn, Some(&target_id)).unwrap();
                 let similar = super::similar_notes(&conn, &target_id, 6).unwrap();
                 assert!(note.body.contains("検索番兵オーロラ"));
