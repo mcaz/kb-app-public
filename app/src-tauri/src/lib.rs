@@ -33,6 +33,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             settings::settings_ai_guard_status,
             settings::settings_install_ai_guard,
             home::home_state,
+            home::maintenance_refresh,
             home::tag_overview,
             home::care_dismiss,
             notes::note_get,

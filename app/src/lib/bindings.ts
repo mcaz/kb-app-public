@@ -25,6 +25,7 @@ export const commands = {
 	 */
 	settingsInstallAiGuard: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_install_ai_guard")),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
+	maintenanceRefresh: () => typedError<MaintenanceReport, AppError>(__TAURI_INVOKE("maintenance_refresh")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
 	careDismiss: (key: string) => typedError<null, AppError>(__TAURI_INVOKE("care_dismiss", { key })),
@@ -92,9 +93,7 @@ export const commands = {
 	/**
 	 *  かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
 	 * 
-	 *  **同期コマンドにしてある**。Tauri は同期コマンドを別スレッドで動かすが、
-	 *  async コマンドは async ランタイム上で動くため、ここのようにブロッキングで
-	 *  回す処理を async にするとランタイムを止めてしまう。
+	 *  ブロッキング処理なので、同期関数のままTauriの非同期実行枠へ送る。
 	 */
 	embedEnable: () => typedError<null, AppError>(__TAURI_INVOKE("embed_enable")),
 	/**  現在ノートを記録して Claude Desktop を前面に(FR-A5 最小)。 */
@@ -377,6 +376,12 @@ export type HomeState_Serialize = {
 export type LegacyFile = {
 	name: string,
 	size: number,
+};
+
+/**  ネットワーク・Markdown export・埋め込み・お手入れ検知をUIの前景から分離する。 */
+export type MaintenanceReport = {
+	degraded: Degradation[],
+	elapsed_ms: number,
 };
 
 /**  サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。 */

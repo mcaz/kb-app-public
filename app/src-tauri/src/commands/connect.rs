@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, Sync};
+use crate::state::AppState;
 
 /// 生成される TS では "not_installed" | "downloading" | "enabled" の union になる
 /// (JSON 表現は従来の文字列のまま)。
@@ -60,14 +60,14 @@ impl From<kb_core::github_auth::DeviceAuthorization> for GitHubDeviceAuthorizati
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
     let desktop = kb_core::connect::claude_desktop_config_path()
         .map(|p| kb_core::connect::desktop_status_at(&p))
         .unwrap_or(kb_core::connect::DesktopStatus::NotFound);
 
-    state.with_index(Sync::Throttled, |vault, conn, _| {
+    state.with_db(|vault, conn, _| {
         let s = stats(conn).map_err(AppError::index)?;
         let sync = kb_core::connect::sync_state(vault);
         Ok(ConnectState {
@@ -126,17 +126,15 @@ pub fn github_open_device_page(app: AppHandle) -> AppResult<()> {
 
 /// かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
 ///
-/// **同期コマンドにしてある**。Tauri は同期コマンドを別スレッドで動かすが、
-/// async コマンドは async ランタイム上で動くため、ここのようにブロッキングで
-/// 回す処理を async にするとランタイムを止めてしまう。
-#[tauri::command]
+/// ブロッキング処理なので、同期関数のままTauriの非同期実行枠へ送る。
+#[tauri::command(async)]
 #[specta::specta]
 pub fn embed_enable(app: AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     kb_core::embed::install_model().map_err(AppError::embed)?;
 
     loop {
         // 1回あたり10本ずつ。ロックを握りっぱなしにせず、他のコマンドを通す
-        let (processed, progress) = state.with_index(Sync::Throttled, |_, conn, _| {
+        let (processed, progress) = state.with_db(|_, conn, _| {
             let processed = kb_core::embed::embed_pending(conn, 10).map_err(AppError::embed)?;
             let s = stats(conn).map_err(AppError::index)?;
             Ok((

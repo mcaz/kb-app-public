@@ -871,6 +871,21 @@ mod tests {
         assert_eq!(super::stats(&conn).unwrap().total, PERFORMANCE_NOTE_COUNT);
         seed_performance_vectors(&conn);
 
+        let ((recent_notes, care, tags, home_stats), home_read) = timed(|| {
+            repeat_last(20, || {
+                (
+                    super::recent(&conn, 500).unwrap(),
+                    crate::care::list_open(&conn).unwrap(),
+                    super::tag_counts(&conn, 30).unwrap(),
+                    super::stats(&conn).unwrap(),
+                )
+            })
+        });
+        assert_eq!(recent_notes.len(), 500);
+        assert!(care.is_empty());
+        assert_eq!(tags.len(), 11);
+        assert_eq!(home_stats.total, PERFORMANCE_NOTE_COUNT);
+
         let (categories, category_list) =
             timed(|| repeat_last(20, || super::note_categories(&conn).unwrap()));
         assert_eq!(categories.len(), PERFORMANCE_CATEGORY_COUNT + 1);
@@ -937,6 +952,7 @@ mod tests {
 
         let measurements = [
             ("index_rebuild", rebuild, Duration::from_secs(30)),
+            ("home_db_read_x20", home_read, Duration::from_secs(2)),
             (
                 "category_list_x20",
                 category_list,

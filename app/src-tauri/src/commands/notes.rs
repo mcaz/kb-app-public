@@ -8,7 +8,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
-use crate::state::{AppState, Sync};
+use crate::state::AppState;
 
 #[derive(Serialize, specta::Type)]
 pub struct NoteView {
@@ -27,12 +27,10 @@ pub struct NoteView {
     vault_root: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_get(state: State<'_, AppState>, id: String) -> AppResult<NoteView> {
-    state.with_index(Sync::Throttled, |vault, conn, degraded| {
-        note_view_from(vault, conn, &id, degraded)
-    })
+    state.with_db(|vault, conn, degraded| note_view_from(vault, conn, &id, degraded))
 }
 
 fn note_view_from(
@@ -87,11 +85,10 @@ fn note_view_from(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_search(state: State<'_, AppState>, query: String) -> AppResult<SearchOutcome> {
-    // DB更新は即時だが、検索入口ではexport劣化と埋め込みの追い付きも確認する。
-    state.with_index(Sync::Force, |_, conn, degraded| {
+    state.with_db(|_, conn, degraded| {
         let mut out = search(conn, &query, 30);
         out.degraded.extend(degraded);
         Ok(out)
@@ -234,12 +231,10 @@ pub struct NoteCategories {
     degraded: Vec<kb_core::degradation::Degradation>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_categories(state: State<'_, AppState>) -> AppResult<NoteCategories> {
-    state.with_index(Sync::Throttled, |_, conn, degraded| {
-        note_categories_from(conn, degraded)
-    })
+    state.with_db(|_, conn, degraded| note_categories_from(conn, degraded))
 }
 
 fn note_categories_from(
@@ -253,7 +248,7 @@ fn note_categories_from(
 }
 
 /// 選択ディレクトリ配下のノートをcursor pageで返す。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_list(
     state: State<'_, AppState>,
@@ -261,7 +256,7 @@ pub fn note_list(
     after: Option<String>,
     limit: usize,
 ) -> AppResult<NoteListPage> {
-    let mut page = state.with_index(Sync::Throttled, |_, conn, degraded| {
+    let mut page = state.with_db(|_, conn, degraded| {
         note_list_from(conn, &category, after.as_deref(), limit, degraded)
     })?;
     state.with_artifacts(|vault, _, ledger, _| {
@@ -307,12 +302,10 @@ pub struct GraphData {
 }
 
 /// グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn graph_data(state: State<'_, AppState>) -> AppResult<GraphData> {
-    state.with_index(Sync::Throttled, |_, conn, degraded| {
-        graph_data_from(conn, degraded)
-    })
+    state.with_db(|_, conn, degraded| graph_data_from(conn, degraded))
 }
 
 fn graph_data_from(
