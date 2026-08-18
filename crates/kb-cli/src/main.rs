@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
 use kb_core::search::recent;
@@ -96,6 +96,11 @@ enum Command {
         #[command(subcommand)]
         command: EmbedCommand,
     },
+    /// 再現可能な品質評価
+    Eval {
+        #[command(subcommand)]
+        command: EvalCommand,
+    },
     /// MCP サーバーを stdio で起動
     Mcp {
         /// generated.by に刻むクライアント actor(例: claude-desktop/claude-fable-5)
@@ -136,6 +141,27 @@ enum EmbedCommand {
     Enable,
     /// 導入状態とカバレッジ
     Status,
+}
+
+#[derive(Subcommand)]
+enum EvalCommand {
+    /// Golden Queryで旧top3とリンク連鎖retrievalを比較する
+    Retrieval {
+        /// schemas/retrieval-eval.schema.jsonに従うGolden Query JSON
+        #[arg(long)]
+        cases: PathBuf,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ReportFormat {
+    Json,
+    Markdown,
 }
 
 #[derive(Subcommand)]
@@ -405,6 +431,34 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Eval { command } => match command {
+            EvalCommand::Retrieval {
+                cases,
+                format,
+                output,
+            } => {
+                let vault = open_vault(cli.vault.as_deref())?;
+                let conn = open_db(&vault)?;
+                sync(&vault, &conn)?;
+                let input = fs::read_to_string(&cases)
+                    .with_context(|| format!("Golden Queryを読めない: {}", cases.display()))?;
+                let suite: kb_core::retrieval_eval::GoldenSuite = serde_json::from_str(&input)
+                    .with_context(|| format!("Golden Query JSONが不正: {}", cases.display()))?;
+                let report = kb_core::retrieval_eval::evaluate(&conn, &suite)?;
+                let rendered = match format {
+                    ReportFormat::Json => serde_json::to_string_pretty(&report)?,
+                    ReportFormat::Markdown => kb_core::retrieval_eval::render_markdown(&report),
+                };
+                if let Some(path) = output {
+                    fs::write(&path, format!("{}\n", rendered.trim_end())).with_context(|| {
+                        format!("retrieval評価レポートを書けない: {}", path.display())
+                    })?;
+                    println!("{}", path.display());
+                } else {
+                    println!("{}", rendered.trim_end());
+                }
+            }
+        },
         Command::Mcp { client } => {
             kb_core::mcp::serve(&client, || open_vault(cli.vault.as_deref()))?;
         }
@@ -432,10 +486,11 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
 
-    use super::Cli;
+    use super::{Cli, Command, EvalCommand, ReportFormat};
 
     fn command_paths(command: &clap::Command, prefix: Option<&str>, paths: &mut BTreeSet<String>) {
         for subcommand in command.get_subcommands() {
@@ -465,6 +520,8 @@ mod tests {
             "embed".to_string(),
             "embed enable".to_string(),
             "embed status".to_string(),
+            "eval".to_string(),
+            "eval retrieval".to_string(),
             "get".to_string(),
             "import".to_string(),
             "mcp".to_string(),
@@ -500,5 +557,33 @@ mod tests {
                 .get_arguments()
                 .any(|argument| argument.get_id() == "allow_new_tags")
         );
+    }
+
+    #[test]
+    fn retrieval_evaluation_defaults_to_markdown_and_stdout() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "--vault",
+            "work",
+            "eval",
+            "retrieval",
+            "--cases",
+            "/private/golden.json",
+        ])
+        .unwrap();
+        let Command::Eval {
+            command:
+                EvalCommand::Retrieval {
+                    cases,
+                    format,
+                    output,
+                },
+        } = cli.command
+        else {
+            panic!("eval retrievalとして解釈されなかった");
+        };
+        assert_eq!(cases, PathBuf::from("/private/golden.json"));
+        assert!(matches!(format, ReportFormat::Markdown));
+        assert!(output.is_none());
     }
 }

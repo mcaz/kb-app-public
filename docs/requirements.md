@@ -284,7 +284,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   semantic KNN・ノート詳細の時間予算をrelease CIで検査する
   ([性能回帰gate](performance-gate.md))
 - **NFR-4 検索品質**: 汎用 RAG(フォルダ丸読み型)を上回ること — リンク構造・メタデータを
-  活かした検索が製品の差別化点
+  活かした検索が製品の差別化点。本人が管理するGolden Queryを使い、評価専用の旧top3方式と
+  本番のリンク連鎖retrievalを同じDB snapshot・同じ検索順位で比較する。本文候補／選択recall、
+  precision、明示除外、hop、本文量、時間をJSON／Markdownへ記録し、実発話は自動収集しない
+  ([Retrieval効果測定](retrieval-evaluation.md))
 - **NFR-5 多言語**: 日本語第一級(検索・UI とも)
 - **NFR-6 概念の上限**: チュートリアルなしで使い始められること。ユーザーが理解すべき概念は
   「ノート・下書き・つながり・バックアップ」の4つ程度を上限とし、専門概念の理解を
