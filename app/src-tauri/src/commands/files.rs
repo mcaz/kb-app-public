@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::{io::Read, io::Seek, io::Write};
 
 use kb_core::artifact::{ArtifactId, Manifest, Role, Sensitivity, SyncPolicy};
 use kb_core::intake;
@@ -18,7 +19,7 @@ use kb_core::resolve;
 use kb_core::store::{Availability, Stores, availability};
 use kb_core::vault::Vault;
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -27,6 +28,15 @@ use crate::state::AppState;
 /// この経路だけ streaming できず、RGBA と PNG が同時にメモリへ載るため
 /// その保護。4032×3024(iPhone の写真)の RGBA が約 47MB で、そこを通す幅。
 const CLIPBOARD_MAX_BYTES: usize = 64 * 1024 * 1024;
+const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
+const HTML_ENCODING_SCAN_BYTES: usize = 4096;
+const TEXT_PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExportPurpose {
+    External,
+    Preview,
+}
 
 /// 画面が1行を描くのに要る分だけ。台帳をそのまま渡すと、画面が内部の語を
 /// 知ることになる(正本「内部語を見せない語彙」)。
@@ -62,6 +72,43 @@ pub struct NoteFiles {
     files: Vec<FileRow>,
     /// まだ台帳に載っていない旧添付。移行までは並べて見せるだけにする
     legacy: Vec<LegacyFile>,
+}
+
+#[derive(Serialize, specta::Type)]
+pub struct FileNote {
+    id: String,
+    title: String,
+}
+
+/// 横断一覧の1枚。内部の台帳用語を画面へ渡さず、カードと操作に要る値だけを返す。
+#[derive(Serialize, specta::Type)]
+pub struct FileCard {
+    id: String,
+    version: u64,
+    name: String,
+    size: u64,
+    media_type: String,
+    availability: Availability,
+    sensitivity: Sensitivity,
+    sync: SyncPolicy,
+    linked: bool,
+    client_repo: bool,
+    can_fetch: bool,
+    added_at: String,
+    notes: Vec<FileNote>,
+}
+
+#[derive(Serialize, specta::Type)]
+pub struct FilesPage {
+    files: Vec<FileCard>,
+    degraded: Vec<kb_core::degradation::Degradation>,
+}
+
+/// resolver が許可した一時コピーだけを WebView に見せる。
+#[derive(Serialize, specta::Type)]
+pub struct PreviewFile {
+    path: String,
+    text: Option<String>,
 }
 
 /// 取り込んだ結果。警告と「区分を固定した」は拒否ではないので、行と一緒に返す。
@@ -121,6 +168,67 @@ pub fn note_files(state: State<'_, AppState>, id: String) -> AppResult<NoteFiles
             .map(|(name, size)| LegacyFile { name, size })
             .collect();
         Ok(NoteFiles { files, legacy })
+    })
+}
+
+/// 全ノートを横断した現行ファイル。差し替え前の版は履歴なので一覧へ出さない。
+#[tauri::command]
+#[specta::specta]
+pub fn files_list(state: State<'_, AppState>) -> AppResult<FilesPage> {
+    state.with_db(|vault, conn, degraded| {
+        let workspace_id = kb_core::workspace::workspace_id(vault).map_err(AppError::storage)?;
+        let stores = Stores::open(&workspace_id).map_err(AppError::storage)?;
+        let ledger =
+            kb_core::ledger::Ledger::open(vault, &workspace_id).map_err(AppError::storage)?;
+        let all = ledger.list();
+        let superseded: std::collections::HashSet<ArtifactId> =
+            all.iter().filter_map(|m| m.supersedes.clone()).collect();
+
+        let mut files: Vec<FileCard> = all
+            .into_iter()
+            .filter(|manifest| !superseded.contains(&manifest.id))
+            .map(|manifest| {
+                let file = row(vault, &stores, &manifest);
+                let notes = manifest
+                    .notes
+                    .iter()
+                    .map(|id| {
+                        let title = conn
+                            .query_row(
+                                "SELECT coalesce(title, id) FROM notes WHERE id = ?1",
+                                [id],
+                                |record| record.get::<_, String>(0),
+                            )
+                            .unwrap_or_else(|_| id.clone());
+                        FileNote {
+                            id: id.clone(),
+                            title,
+                        }
+                    })
+                    .collect();
+                FileCard {
+                    id: file.id,
+                    version: file.version,
+                    name: file.name,
+                    size: file.size,
+                    media_type: file.media_type,
+                    availability: file.availability,
+                    sensitivity: file.sensitivity,
+                    sync: file.sync,
+                    linked: file.linked,
+                    client_repo: file.client_repo,
+                    can_fetch: file.can_fetch,
+                    added_at: file.added_at,
+                    notes,
+                }
+            })
+            .collect();
+        files.sort_by(|a, b| {
+            b.added_at
+                .cmp(&a.added_at)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(FilesPage { files, degraded })
     })
 }
 
@@ -237,8 +345,64 @@ fn take(
 #[tauri::command]
 #[specta::specta]
 pub fn file_open(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
+    let path = resolved_export(&state, id, ExportPurpose::External)?;
+    open_with_os(&app, &path)
+}
+
+/// resolver済みの内容を、ユーザーが保存ダイアログで選んだ場所へ複製する。
+/// 保存先パスをWebViewから受け取らないため、invokeだけで任意ファイルを上書きできない。
+#[tauri::command]
+#[specta::specta]
+pub async fn file_download(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<bool> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let source = resolved_export(&state, id, ExportPurpose::External)?;
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let Some(selected) = app.dialog().file().set_file_name(name).blocking_save_file() else {
+        return Ok(false);
+    };
+    let destination = selected.into_path().map_err(AppError::unexpected)?;
+    std::fs::copy(source, destination)?;
+    Ok(true)
+}
+
+/// アプリ内プレビュー用。元の場所ではなく、resolver 済みの一時コピーだけを返す。
+#[tauri::command]
+#[specta::specta]
+pub fn file_preview(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<PreviewFile> {
+    let path = resolved_export(&state, id, ExportPurpose::Preview)?;
+    let text = if is_text_preview(&path) {
+        read_text_preview(&path)?
+    } else {
+        None
+    };
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(AppError::unexpected)?;
+    Ok(PreviewFile {
+        path: path.to_string_lossy().into_owned(),
+        text,
+    })
+}
+
+fn resolved_export(
+    state: &State<'_, AppState>,
+    id: String,
+    purpose: ExportPurpose,
+) -> AppResult<PathBuf> {
     let id = artifact_id(&id)?;
-    let path = state.with_artifacts(|vault, stores, ledger, _| {
+    state.with_artifacts(|vault, stores, ledger, _| {
         let resolved = resolve::resolve(vault, stores, ledger, &resolve::Link::Fixed(id.clone()))
             .map_err(AppError::storage)?
             .ok_or_else(|| AppError::invalid_input(anyhow::anyhow!("台帳に無い: {id}")))?;
@@ -247,9 +411,8 @@ pub fn file_open(app: tauri::AppHandle, state: State<'_, AppState>, id: String) 
             .open(vault, stores)
             .map_err(AppError::storage)?
             .ok_or(AppError::FileNotHere)?;
-        export(&resolved.manifest, &mut file)
-    })?;
-    open_with_os(&app, &path)
+        export(&resolved.manifest, &mut file, purpose)
+    })
 }
 
 /// 移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。
@@ -274,22 +437,107 @@ pub fn legacy_open(
 }
 
 /// 表示名を付けた複製を一時領域へ。内容は不変なので、同じものがあれば使い回す。
-fn export(m: &Manifest, src: &mut std::fs::File) -> AppResult<PathBuf> {
+/// HTMLプレビューだけは、文字コード宣言がない場合にUTF-8 BOMを一時コピーへ補う。
+fn export(m: &Manifest, src: &mut std::fs::File, purpose: ExportPurpose) -> AppResult<PathBuf> {
     // 表示名は直せる field なので、パスとして解釈させない
     let name = Path::new(&m.display_name)
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("file"));
-    let dir = std::env::temp_dir()
-        .join("kb-app-open")
-        .join(&m.hash.as_str()[..12]);
+    let root = match purpose {
+        ExportPurpose::External => "kb-app-open",
+        ExportPurpose::Preview => "kb-app-preview",
+    };
+    let dir = std::env::temp_dir().join(root).join(&m.hash.as_str()[..12]);
     std::fs::create_dir_all(&dir)?;
     let dest = dir.join(name);
-    if std::fs::metadata(&dest).map(|meta| meta.len()).ok() != Some(m.created.size) {
+    let add_utf8_bom = purpose == ExportPurpose::Preview
+        && is_html(m)
+        && html_needs_utf8_bom(src).map_err(AppError::unexpected)?;
+    let expected_size = m.created.size + u64::from(add_utf8_bom) * UTF8_BOM.len() as u64;
+    if std::fs::metadata(&dest).map(|meta| meta.len()).ok() != Some(expected_size) {
         let mut out = std::fs::File::create(&dest)?;
+        if add_utf8_bom {
+            out.write_all(UTF8_BOM)?;
+        }
         // 固定サイズの塊で写す(全量をメモリに載せない — 決定8 と同じ理由)
         std::io::copy(src, &mut out)?;
     }
     Ok(dest)
+}
+
+fn is_html(m: &Manifest) -> bool {
+    m.created.media_type.eq_ignore_ascii_case("text/html")
+        || Path::new(&m.display_name)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+            })
+}
+
+/// WebViewが文字コードを誤推測しないよう、宣言のないHTMLだけをUTF-8として示す。
+/// 読み取り位置は必ず先頭へ戻し、後続のstreaming copyへ影響させない。
+fn html_needs_utf8_bom(src: &mut std::fs::File) -> std::io::Result<bool> {
+    let mut prefix = vec![0; HTML_ENCODING_SCAN_BYTES];
+    let read = src.read(&mut prefix)?;
+    src.rewind()?;
+    prefix.truncate(read);
+
+    let has_bom = prefix.starts_with(UTF8_BOM)
+        || prefix.starts_with(&[0xff, 0xfe])
+        || prefix.starts_with(&[0xfe, 0xff]);
+    let declared = String::from_utf8_lossy(&prefix)
+        .to_ascii_lowercase()
+        .contains("charset");
+    Ok(!has_bom && !declared)
+}
+
+fn is_text_preview(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "md" | "markdown"
+                    | "txt"
+                    | "csv"
+                    | "tsv"
+                    | "json"
+                    | "yaml"
+                    | "yml"
+                    | "xml"
+                    | "css"
+                    | "js"
+                    | "jsx"
+                    | "ts"
+                    | "tsx"
+            )
+        })
+}
+
+fn read_text_preview(path: &Path) -> AppResult<Option<String>> {
+    if std::fs::metadata(path)?.len() > TEXT_PREVIEW_MAX_BYTES {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(path)?;
+    Ok(Some(decode_text(&bytes)))
+}
+
+/// UTF-8を正常系にしつつ、表計算ソフト由来のCSVで多いUTF-16/Shift_JISも読む。
+fn decode_text(bytes: &[u8]) -> String {
+    if let Some(bytes) = bytes.strip_prefix(UTF8_BOM) {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        return encoding_rs::UTF_16LE.decode(bytes).0.into_owned();
+    }
+    if let Some(bytes) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        return encoding_rs::UTF_16BE.decode(bytes).0.into_owned();
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned()
 }
 
 /// OS の既定のアプリへ渡す。**画面から直接は呼べない** — 権限を webview に与えて
@@ -342,4 +590,51 @@ pub fn file_fetch(state: State<'_, AppState>, id: String) -> AppResult<Availabil
         kb_core::lfs::fetch(vault, &manifest.hash).map_err(AppError::backup)?;
         Ok(availability(vault, stores, &manifest))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temporary_file(bytes: &[u8]) -> std::fs::File {
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(bytes).unwrap();
+        file.rewind().unwrap();
+        file
+    }
+
+    #[test]
+    fn html_without_an_encoding_declaration_gets_a_utf8_hint() {
+        let bytes = "<!doctype html><title>日本語</title>".as_bytes();
+        let mut file = temporary_file(bytes);
+
+        assert!(html_needs_utf8_bom(&mut file).unwrap());
+
+        let mut untouched = Vec::new();
+        file.read_to_end(&mut untouched).unwrap();
+        assert_eq!(untouched, bytes);
+    }
+
+    #[test]
+    fn declared_or_bom_prefixed_html_keeps_its_own_encoding() {
+        let mut declared = temporary_file(b"<meta charset=\"shift_jis\"><title>page</title>");
+        assert!(!html_needs_utf8_bom(&mut declared).unwrap());
+
+        let mut bom = temporary_file(b"\xef\xbb\xbf<!doctype html><title>page</title>");
+        assert!(!html_needs_utf8_bom(&mut bom).unwrap());
+    }
+
+    #[test]
+    fn text_preview_decodes_utf8_utf16_and_shift_jis() {
+        assert_eq!(decode_text("名前,値\n鬼,10".as_bytes()), "名前,値\n鬼,10");
+
+        let utf16: Vec<u8> = [0xff, 0xfe]
+            .into_iter()
+            .chain("名前,値".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        assert_eq!(decode_text(&utf16), "名前,値");
+
+        let shift_jis = encoding_rs::SHIFT_JIS.encode("名前,値").0;
+        assert_eq!(decode_text(&shift_jis), "名前,値");
+    }
 }

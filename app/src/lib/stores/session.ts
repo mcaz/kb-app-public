@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { Favorite, Period, SortKey } from "@/lib/api";
 
-export type View = "home" | "notes" | "graph";
+export type View = "home" | "notes" | "files" | "graph";
 export type BrowsePane = "list" | "note";
 
 const categoryOf = (id: string) => {

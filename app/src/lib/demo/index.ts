@@ -7,6 +7,8 @@ import type {
   CareProposal,
   ConnectState,
   Favorite,
+  FileCard,
+  FilesPage,
   GraphData,
   GitHubAuthState,
   FileRow,
@@ -17,6 +19,7 @@ import type {
   NoteListPage,
   NoteSummary,
   NoteView,
+  PreviewFile,
   SearchOutcome,
   Settings,
   SetupState,
@@ -411,6 +414,16 @@ export const demoApi = {
       files: files[id] ?? [],
       legacy: id === "notes/引っ越し手続きメモ" ? [{ name: "旧・間取り図.png", size: 245760 }] : [],
     }),
+  filesList: (): Promise<FilesPage> => {
+    const cards: FileCard[] = Object.entries(files).flatMap(([noteId, rows]) => {
+      const note = notes.find((item) => item.id === noteId);
+      return rows.map((file) => ({
+        ...file,
+        notes: [{ id: noteId, title: note?.title ?? noteId }],
+      }));
+    });
+    return delay({ files: cards, degraded: [] });
+  },
   fileAdd: (noteId: string, path: string): Promise<Added> => {
     const file: FileRow = {
       id: `demo-${Object.values(files).flat().length + 1}`,
@@ -440,6 +453,8 @@ export const demoApi = {
   fileFetch: () => delay<Availability>("local"),
   // ブラウザからは OS のアプリへ渡せない(この経路は Tauri でしか通らない)
   fileOpen: () => delay(null),
+  fileDownload: () => delay(false),
+  filePreview: (_id: string): Promise<PreviewFile> => delay({ path: "", text: null }),
   // ブラウザにネイティブの選択画面は無い(この経路は Tauri でしか通らない)
   pickFiles: () => delay<string[]>([]),
   connectDesktop: () => {

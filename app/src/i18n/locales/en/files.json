@@ -1,0 +1,28 @@
+{
+  "title": "Files",
+  "search": "Search by file or note name",
+  "count": "{{count}} files",
+  "filter": {
+    "label": "Filter by file type",
+    "all": "All types",
+    "pdf": "PDF",
+    "image": "Images",
+    "document": "Documents",
+    "other": "Other"
+  },
+  "empty": "No files match",
+  "noFiles": "No files yet",
+  "noNote": "Not linked to a note",
+  "added": "Added {{date}}",
+  "localOnly": "This device only",
+  "missing": "Not on this device",
+  "unavailable": "Unavailable on this device",
+  "fetch": "Retrieve",
+  "download": "Download",
+  "downloaded": "File saved",
+  "openExternal": "Open in another app",
+  "openNote": "Source note",
+  "previewLoading": "Preparing preview…",
+  "previewUnavailable": "This file type can’t be previewed in the app",
+  "previewDescription": "Contents of {{name}}"
+}

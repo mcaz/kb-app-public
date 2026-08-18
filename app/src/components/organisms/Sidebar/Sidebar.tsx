@@ -3,6 +3,7 @@ import {
   ChevronRight,
   House,
   NotebookText,
+  Paperclip,
   Search,
   Settings,
   Sprout,
@@ -100,6 +101,14 @@ export function Sidebar({
           onSelectCategory={selectCategory}
         />
       )}
+
+      <NavButton
+        icon={Paperclip}
+        label={t("nav.files")}
+        collapsed={visuallyCollapsed}
+        active={view === "files"}
+        onClick={() => go("files")}
+      />
 
       <NavButton
         icon={Waypoints}

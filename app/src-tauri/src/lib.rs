@@ -45,11 +45,14 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             favorites::favorite_add,
             favorites::favorite_remove,
             files::note_files,
+            files::files_list,
             files::file_add,
             files::file_add_from_clipboard,
             files::file_detach,
             files::file_fetch,
             files::file_open,
+            files::file_download,
+            files::file_preview,
             files::legacy_open,
             connect::connect_state,
             connect::github_auth_state,
@@ -135,6 +138,7 @@ mod tests {
         assert!(csp.contains("default-src 'self'"));
         assert!(csp.contains("connect-src ipc: http://ipc.localhost"));
         assert!(csp.contains("object-src 'none'"));
+        assert!(csp.contains("frame-src asset: http://asset.localhost"));
         assert!(!csp.contains("https:"), "外部通信を既定許可しない");
         assert_eq!(security["assetProtocol"]["scope"], serde_json::json!([]));
     }

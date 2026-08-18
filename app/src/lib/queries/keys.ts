@@ -13,6 +13,8 @@ export const queryKeys = {
   notes: ["note"] as const,
   note: (id: string) => ["note", id] as const,
   noteFiles: (id: string) => ["noteFiles", id] as const,
+  files: ["files"] as const,
+  filePreview: (id: string) => ["filePreview", id] as const,
   noteCategories: ["noteCategories"] as const,
   noteLists: ["noteList"] as const,
   noteList: (category: string) => ["noteList", category] as const,

@@ -41,6 +41,8 @@ export const commands = {
 	favoriteRemove: (name: string) => typedError<null, AppError>(__TAURI_INVOKE("favorite_remove", { name })),
 	/**  そのノートのファイル(最新版だけ)と、まだ移行していない旧添付。 */
 	noteFiles: (id: string) => typedError<NoteFiles, AppError>(__TAURI_INVOKE("note_files", { id })),
+	/**  全ノートを横断した現行ファイル。差し替え前の版は履歴なので一覧へ出さない。 */
+	filesList: () => typedError<FilesPage, AppError>(__TAURI_INVOKE("files_list")),
 	/**
 	 *  パスから取り込む(選択・ドラッグ&ドロップ)。
 	 * 
@@ -75,6 +77,13 @@ export const commands = {
 	 *  「手元に無いものの中身を開かない」が画面側の作法に落ちる(決定9・resolver の doc)。
 	 */
 	fileOpen: (id: string) => typedError<null, AppError>(__TAURI_INVOKE("file_open", { id })),
+	/**
+	 *  resolver済みの内容を、ユーザーが保存ダイアログで選んだ場所へ複製する。
+	 *  保存先パスをWebViewから受け取らないため、invokeだけで任意ファイルを上書きできない。
+	 */
+	fileDownload: (id: string) => typedError<boolean, AppError>(__TAURI_INVOKE("file_download", { id })),
+	/**  アプリ内プレビュー用。元の場所ではなく、resolver 済みの一時コピーだけを返す。 */
+	filePreview: (id: string) => typedError<PreviewFile, AppError>(__TAURI_INVOKE("file_preview", { id })),
 	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */
 	legacyOpen: (noteId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("legacy_open", { noteId, name })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
@@ -262,6 +271,28 @@ export type Favorite_Serialize = {
 	sort?: string | null,
 };
 
+/**  横断一覧の1枚。内部の台帳用語を画面へ渡さず、カードと操作に要る値だけを返す。 */
+export type FileCard = {
+	id: string,
+	version: number,
+	name: string,
+	size: number,
+	media_type: string,
+	availability: Availability,
+	sensitivity: Sensitivity,
+	sync: SyncPolicy,
+	linked: boolean,
+	client_repo: boolean,
+	can_fetch: boolean,
+	added_at: string,
+	notes: FileNote[],
+};
+
+export type FileNote = {
+	id: string,
+	title: string,
+};
+
 /**
  *  画面が1行を描くのに要る分だけ。台帳をそのまま渡すと、画面が内部の語を
  *  知ることになる(正本「内部語を見せない語彙」)。
@@ -283,6 +314,11 @@ export type FileRow = {
 	/**  取り寄せを提案してよいか。**方針で閉じているものには提案しない** */
 	can_fetch: boolean,
 	added_at: string,
+};
+
+export type FilesPage = {
+	files: FileCard[],
+	degraded: Degradation[],
 };
 
 export type GitHubAuthState = {
@@ -441,6 +477,12 @@ export type NoteView = {
 	similar: ([string, string | null, number | null])[],
 	degraded: Degradation[],
 	vault_root: string,
+};
+
+/**  resolver が許可した一時コピーだけを WebView に見せる。 */
+export type PreviewFile = {
+	path: string,
+	text: string | null,
 };
 
 export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";
