@@ -15,6 +15,7 @@ export interface CategoryAccordionProps {
   categories: NoteCategory[];
   active: boolean;
   selectedCategory: string | null;
+  onInitializeCategory: (path: string) => void;
   onActivate: () => void;
   onSelectCategory: (path: string) => void;
 }
@@ -23,6 +24,7 @@ export function CategoryAccordion({
   categories,
   active,
   selectedCategory,
+  onInitializeCategory,
   onActivate,
   onSelectCategory,
 }: CategoryAccordionProps) {
@@ -35,8 +37,8 @@ export function CategoryAccordion({
   useEffect(() => {
     const first = tree[0];
     if (selectedCategory !== null || !first) return;
-    onSelectCategory(first.path);
-  }, [onSelectCategory, selectedCategory, tree]);
+    onInitializeCategory(first.path);
+  }, [onInitializeCategory, selectedCategory, tree]);
 
   useEffect(() => {
     if (selectedCategory === null) return;

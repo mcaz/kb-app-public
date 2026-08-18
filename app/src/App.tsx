@@ -9,6 +9,7 @@ import { Sidebar } from "@/components/organisms/Sidebar";
 import { AppShell } from "@/components/templates/AppShell";
 import { useNoteFileIntake } from "@/hooks/useNoteFileIntake";
 import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
+import { useNavigationHistoryShortcut } from "@/hooks/useNavigationHistoryShortcut";
 import { useSettingsShortcut } from "@/hooks/useSettingsShortcut";
 import { useTheme } from "@/hooks/useTheme";
 import { GraphPage } from "@/pages/GraphPage";
@@ -57,6 +58,7 @@ export function App() {
   useNoteFileIntake(selectedId, view === "notes");
   useGlobalSearchShortcut(openSearch, !isPending && !setup?.needs_onboarding);
   useSettingsShortcut(openSettings, !isPending && !setup?.needs_onboarding);
+  useNavigationHistoryShortcut(!isPending && !setup?.needs_onboarding);
 
   // 外部更新・派生情報の保守が終わった後だけ、影響するDB queryを再取得する。
   useEffect(() => {
@@ -96,7 +98,6 @@ export function App() {
         }
         sidebar={
           <Sidebar
-            vaultName={setup?.vault_name ?? "kb"}
             categories={categoryData?.categories ?? []}
             onOpenSearch={openSearch}
             settingsOpen={settingsOpen}
