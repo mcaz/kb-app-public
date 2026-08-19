@@ -2,6 +2,7 @@
 //! trigram レスキュー)+リンクテーブル。Markdownは明示import・復元時だけ読み込む。
 //! 接続規律(busy_timeout 必須・WAL)は docs/poc-report.md の PoC ③ 由来。
 
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::time::Duration;
 
@@ -24,6 +25,7 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
     let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
     debug_assert_eq!(mode.to_lowercase(), "wal");
     init_schema(&conn)?;
+    restore_missing_documents(vault, &conn)?;
     if !runtime_store_is_db(&conn) {
         let report = import_markdown_snapshot(vault, &conn)?;
         if !report.degraded.is_empty() {
@@ -39,6 +41,73 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
         }
     }
     Ok(conn)
+}
+
+/// 2026-08-20に、既存v3 DBへ`document`列を追加しただけでは空文字の行が残り、
+/// FTS検索には出るのに詳細取得だけ失敗する事故が起きた。通常のMarkdown importは
+/// parse失敗をfail-openで続行するため、この復旧だけは対象を先に全件読み切り、
+/// 1 transactionで全件または0件に固定する。
+fn restore_missing_documents(vault: &Vault, conn: &Connection) -> Result<usize> {
+    let transaction = conn.unchecked_transaction()?;
+    let missing = {
+        let mut statement =
+            transaction.prepare("SELECT id FROM notes WHERE document = '' ORDER BY id")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    if missing.is_empty() {
+        transaction.commit()?;
+        return Ok(0);
+    }
+    if crate::note_store::pending_count(&transaction)? != 0 {
+        bail!("未出力のDB更新があるため空のDB本文を復元できない");
+    }
+
+    let paths: HashMap<String, std::path::PathBuf> = vault.list_note_files()?.into_iter().collect();
+    let mut absent = BTreeSet::new();
+    let mut recovered = Vec::with_capacity(missing.len());
+    for id in &missing {
+        let Some(path) = paths.get(id) else {
+            absent.insert(id.clone());
+            continue;
+        };
+        let modified = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .and_then(|modified| {
+                modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(std::io::Error::other)
+            })
+            .with_context(|| format!("DB本文の復元元metadataを読めない: {id}"))?;
+        let mtime = i64::try_from(modified.as_nanos())
+            .with_context(|| format!("DB本文の復元元mtimeがSQLite INTEGERに収まらない: {id}"))?;
+        let document = fs::read_to_string(path)
+            .with_context(|| format!("DB本文の復元元Markdownを読めない: {id}"))?;
+        let note = Note::parse(&document)
+            .with_context(|| format!("DB本文の復元元Markdownをparseできない: {id}"))?;
+        recovered.push((id.clone(), mtime, note));
+    }
+    if !absent.is_empty() {
+        bail!(
+            "DB本文の復元元Markdownが見つからない: {}",
+            absent.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    for (id, mtime, note) in &recovered {
+        upsert(&transaction, vault, id, *mtime, note)?;
+    }
+    let remaining: i64 = transaction.query_row(
+        "SELECT count(*) FROM notes WHERE document = ''",
+        [],
+        |row| row.get(0),
+    )?;
+    if remaining != 0 {
+        bail!("空のDB本文が復元後も残っている: {remaining}件");
+    }
+    transaction.commit()?;
+    Ok(recovered.len())
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {
@@ -419,6 +488,8 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    /// 2026-08-20、`runtime_store=db-v1`を持つ既存v3 DBへ`document`列だけを
+    /// 追加すると、検索行は残る一方で詳細取得が空本文として失敗した。
     #[test]
     fn existing_v3_index_migrates_to_the_db_runtime_store() {
         let dir = tempfile::tempdir().unwrap();
@@ -439,6 +510,7 @@ mod tests {
             .execute_batch(
                 "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
                  INSERT INTO meta(key, value) VALUES('schema', '3');
+                 INSERT INTO meta(key, value) VALUES('runtime_store', 'db-v1');
                  CREATE TABLE notes(
                     id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
                     origin TEXT, generated_by TEXT, generated_at TEXT,
@@ -448,6 +520,13 @@ mod tests {
                  CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
                  CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
                  CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');",
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO notes(id, title, status, origin, mtime, body, tags)
+                 VALUES(?1, ?2, 'stable', 'agent', 0, ?3, 'test')",
+                rusqlite::params!["notes/migrate", "移行", "検索に残る旧本文"],
             )
             .unwrap();
         drop(legacy);
@@ -460,6 +539,122 @@ mod tests {
             "失わない本文\n"
         );
         assert_eq!(crate::note_store::pending_count(&migrated).unwrap(), 0);
+        let first_document: String = migrated
+            .query_row(
+                "SELECT document FROM notes WHERE id='notes/migrate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(migrated);
+
+        let reopened = open_db(&vault).unwrap();
+        let second_document: String = reopened
+            .query_row(
+                "SELECT document FROM notes WHERE id='notes/migrate'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_document, first_document, "再起動で再復元しない");
+    }
+
+    /// 2026-08-20、復元元が1件でも壊れていると正常行だけ直す半端な移行を残すため、
+    /// 全Markdownを読めた後にだけ同じtransactionでDBへ反映する。
+    #[test]
+    fn missing_document_recovery_rolls_back_every_note_when_one_export_is_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let first = vault
+            .propose_for_test("復元一", "本文一", None, &["test".into()], "test/client")
+            .unwrap();
+        let second = vault
+            .propose_for_test("復元二", "本文二", None, &["test".into()], "test/client")
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "UPDATE notes SET document='' WHERE id IN (?1, ?2)",
+            rusqlite::params![first, second],
+        )
+        .unwrap();
+        fs::write(vault.note_path(&second).unwrap(), "frontmatterではない").unwrap();
+        drop(conn);
+
+        assert!(open_db(&vault).is_err());
+        let unchanged = Connection::open(vault.index_db_path()).unwrap();
+        let empty: i64 = unchanged
+            .query_row("SELECT count(*) FROM notes WHERE document=''", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(empty, 2);
+    }
+
+    /// 2026-08-20、全復元元を読めた後のDB書き込みで失敗しても、先にupsertした
+    /// ノートだけが復元済みになる状態を残さない。
+    #[test]
+    fn missing_document_recovery_rolls_back_when_one_upsert_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let first = vault
+            .propose_for_test("書込一", "本文一", None, &["test".into()], "test/client")
+            .unwrap();
+        let second = vault
+            .propose_for_test("書込二", "本文二", None, &["test".into()], "test/client")
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "UPDATE notes SET document='' WHERE id IN (?1, ?2)",
+            rusqlite::params![first, second],
+        )
+        .unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER fail_recovery BEFORE INSERT ON notes
+             WHEN NEW.id = '{second}'
+             BEGIN SELECT RAISE(FAIL, 'fixture failure'); END;"
+        ))
+        .unwrap();
+        drop(conn);
+
+        assert!(open_db(&vault).is_err());
+        let unchanged = Connection::open(vault.index_db_path()).unwrap();
+        let empty: i64 = unchanged
+            .query_row("SELECT count(*) FROM notes WHERE document=''", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(empty, 2);
+    }
+
+    /// 2026-08-20、DB正本がMarkdownより新しい可能性のあるoutbox滞留中は、
+    /// 古いexportで空本文を埋めてDB更新を巻き戻さない。
+    #[test]
+    fn missing_document_recovery_stops_when_an_export_is_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test("復元待機", "本文", None, &["test".into()], "test/client")
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute("UPDATE notes SET document='' WHERE id=?1", [&id])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO note_exports(
+                op_id, note_id, operation, base_document, document, log_entry, commit_message
+             ) VALUES('pending', ?1, 'upsert', NULL, NULL, 'pending', 'pending')",
+            [&id],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert!(open_db(&vault).is_err());
+        let unchanged = Connection::open(vault.index_db_path()).unwrap();
+        let document: String = unchanged
+            .query_row("SELECT document FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(document.is_empty());
     }
 
     /// 2026-08-16の10k高速化で追加したtransactionを外す退行と、半端な索引を防ぐ。
