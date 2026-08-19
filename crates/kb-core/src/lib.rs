@@ -14,6 +14,7 @@ pub mod client_surface;
 pub mod connect;
 pub mod degradation;
 pub mod distillation;
+pub mod distillation_executor;
 pub mod embed;
 pub mod error;
 mod external_tools;

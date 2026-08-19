@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-app.local/schemas/distillation-execution-result.schema.json",
+  "title": "kb-app semantic distillation execution result v1",
+  "oneOf": [{ "$ref": "#/$defs/applied" }, { "$ref": "#/$defs/rolled_back" }],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "operation", "before_hash", "after_hash"],
+      "properties": {
+        "note": { "type": "string" },
+        "operation": { "enum": ["normalize", "revise", "extract"] },
+        "before_hash": { "$ref": "#/$defs/hash" },
+        "after_hash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "applied": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "execution_id",
+        "plan_id",
+        "before_snapshot_digest",
+        "after_snapshot_digest",
+        "after_plan_id",
+        "status",
+        "changes",
+        "pending_exports"
+      ],
+      "properties": {
+        "schema": { "const": "kb-app.distillation-execution-result/v1" },
+        "execution_id": { "$ref": "#/$defs/hash" },
+        "plan_id": { "$ref": "#/$defs/hash" },
+        "before_snapshot_digest": { "$ref": "#/$defs/hash" },
+        "after_snapshot_digest": { "$ref": "#/$defs/hash" },
+        "after_plan_id": { "$ref": "#/$defs/hash" },
+        "status": { "const": "applied" },
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/change" }
+        },
+        "pending_exports": { "type": "integer", "minimum": 0 },
+        "markdown_export_error": { "type": "string" }
+      }
+    },
+    "rolled_back": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "rollback_id",
+        "execution_id",
+        "plan_id",
+        "before_snapshot_digest",
+        "after_snapshot_digest",
+        "status",
+        "restored_notes",
+        "pending_exports"
+      ],
+      "properties": {
+        "schema": { "const": "kb-app.distillation-rollback-result/v1" },
+        "rollback_id": { "$ref": "#/$defs/hash" },
+        "execution_id": { "$ref": "#/$defs/hash" },
+        "plan_id": { "$ref": "#/$defs/hash" },
+        "before_snapshot_digest": { "$ref": "#/$defs/hash" },
+        "after_snapshot_digest": { "$ref": "#/$defs/hash" },
+        "status": { "const": "rolled_back" },
+        "restored_notes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "pending_exports": { "type": "integer", "minimum": 0 },
+        "markdown_export_error": { "type": "string" }
+      }
+    }
+  }
+}

@@ -13,7 +13,7 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "4";
+const SCHEMA_VERSION: &str = "5";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let path = vault.index_db_path();
@@ -138,7 +138,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             r.get(0)
         })
         .ok();
-    if matches!(ver.as_deref(), Some("3" | SCHEMA_VERSION)) {
+    if matches!(ver.as_deref(), Some("3" | "4" | SCHEMA_VERSION)) {
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
         // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
         for (col, ddl) in [
@@ -195,7 +195,21 @@ fn init_schema(conn: &Connection) -> Result<()> {
                  log_entry TEXT NOT NULL,
                  commit_message TEXT NOT NULL
              );
-             INSERT OR REPLACE INTO meta(key, value) VALUES('schema', '4');",
+             CREATE TABLE IF NOT EXISTS distillation_runs(
+                 execution_id TEXT PRIMARY KEY,
+                 plan_id TEXT NOT NULL,
+                 before_snapshot_digest TEXT NOT NULL,
+                 after_snapshot_digest TEXT NOT NULL,
+                 request_json TEXT NOT NULL,
+                 before_documents TEXT NOT NULL,
+                 after_documents TEXT NOT NULL,
+                 client TEXT NOT NULL,
+                 applied_at TEXT NOT NULL,
+                 status TEXT NOT NULL CHECK(status IN ('applied', 'rolled_back')),
+                 rollback_id TEXT,
+                 rolled_back_at TEXT
+             );
+             INSERT OR REPLACE INTO meta(key, value) VALUES('schema', '5');",
         )?;
         return Ok(());
     }
@@ -237,6 +251,20 @@ fn init_schema(conn: &Connection) -> Result<()> {
             document TEXT,
             log_entry TEXT NOT NULL,
             commit_message TEXT NOT NULL
+        );
+        CREATE TABLE distillation_runs(
+            execution_id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL,
+            before_snapshot_digest TEXT NOT NULL,
+            after_snapshot_digest TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            before_documents TEXT NOT NULL,
+            after_documents TEXT NOT NULL,
+            client TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('applied', 'rolled_back')),
+            rollback_id TEXT,
+            rolled_back_at TEXT
         );
         "
     ))?;
@@ -417,7 +445,7 @@ fn sync_files(
 
 /// Markdown snapshotを明示importするとき、全noteを同じtransactionへ入れた後で
 /// relationの大域条件を検査する。note単位のupsert順には依存させない。
-fn validate_authority_index(conn: &Connection) -> Result<()> {
+pub(crate) fn validate_authority_index(conn: &Connection) -> Result<()> {
     let dangling: Option<(String, String, String)> = conn
         .query_row(
             "SELECT source.id, relation.kind, relation.target_uid
@@ -772,7 +800,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "4");
+        assert_eq!(schema, "5");
         assert!(migrated.prepare("SELECT note_uid, namespace, authority_role, authority_status, authority_scope FROM notes LIMIT 0").is_ok());
         assert!(
             migrated
@@ -804,6 +832,57 @@ mod tests {
             )
             .unwrap();
         assert_eq!(second_document, first_document, "再起動で再復元しない");
+    }
+
+    /// 2026-08-20、semantic executorのruntime監査表は既存v4 DBにも非破壊で
+    /// 追加される必要があり、fresh schemaだけの作成では本番端末に届かない。
+    #[test]
+    fn existing_v4_index_adds_distillation_runs_without_rebuilding_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "v4から保持するノート",
+                "失わない本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        let document: String = conn
+            .query_row("SELECT document FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE distillation_runs;
+             UPDATE meta SET value='4' WHERE key='schema';",
+        )
+        .unwrap();
+        drop(conn);
+
+        let migrated = open_db(&vault).unwrap();
+        let schema: String = migrated
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, "5");
+        assert!(
+            migrated
+                .prepare(
+                    "SELECT execution_id, plan_id, before_documents, after_documents,
+                            status, rollback_id FROM distillation_runs LIMIT 0"
+                )
+                .is_ok()
+        );
+        let preserved: String = migrated
+            .query_row("SELECT document FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(preserved, document);
     }
 
     /// 2026-08-20、復元元が1件でも壊れていると正常行だけ直す半端な移行を残すため、

@@ -1,0 +1,28 @@
+{
+  "schema": "kb-app.distillation-execution-request/v1",
+  "plan_schema": "kb-app.distillation-plan/v1",
+  "planner_profile": "mechanical-v1",
+  "plan_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "snapshot_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "snapshot_note_count": 2,
+  "changes": [
+    {
+      "note": "notes/current-decision",
+      "input_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "operation": "revise",
+      "reason": "後続recordの検証結果を現行結論へ反映する",
+      "target": {
+        "title": "検証後の現行判断",
+        "body": "# 結論\n\n後続recordを踏まえた現行の結論。",
+        "description": "後続recordで検証した現行判断。",
+        "tags": ["kb-app", "governance"],
+        "relations": [
+          {
+            "type": "derived_from",
+            "target": "01K33KJ9H8P9Q9J5R8V0M8F1A2"
+          }
+        ]
+      }
+    }
+  ]
+}

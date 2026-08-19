@@ -210,10 +210,15 @@ struct PlanMaterial<'a> {
 /// 永続状態だけでなくcare/outbox/remoteにも一切触れない。
 pub fn plan(conn: &Connection) -> Result<DistillationPlan> {
     let transaction = conn.unchecked_transaction()?;
-    let notes = read_notes(&transaction)?;
-    let planned = build_plan(&notes)?;
+    let planned = plan_in_transaction(&transaction)?;
     transaction.rollback()?;
     Ok(planned)
+}
+
+/// executorがwrite transactionの内側でTOCTOUなしに同じplanを再計算するための入口。
+pub(crate) fn plan_in_transaction(conn: &Connection) -> Result<DistillationPlan> {
+    let notes = read_notes(conn)?;
+    build_plan(&notes)
 }
 
 fn read_notes(conn: &Connection) -> Result<Vec<IndexedNote>> {
@@ -644,7 +649,7 @@ pub fn render_markdown(plan: &DistillationPlan) -> String {
     output
 }
 
-fn sha256(bytes: &[u8]) -> String {
+pub(crate) fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 

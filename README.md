@@ -10,7 +10,7 @@
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
 - Rule Delivery評価: [docs/rule-delivery-evaluation.md](docs/rule-delivery-evaluation.md) — Codex / Claude Code共通の隔離20ケース
 - AI 間の開発引き継ぎ: [docs/development-context.md](docs/development-context.md) — Context Pack v1
-- 状態: **private backup実受入、authority付き正本判定、snapshot固定のread-only蒸留plannerまで実装(2026-08-20)** — `plan_distillation` / `kb distill plan`はDBを変更せず、入力hash・snapshot digest・決定的plan ID付きで候補を列挙する。semantic executorとatomic supersedeは次段
+- 状態: **private backup実受入、authority付き正本判定、snapshot固定planner、atomic semantic executor v1まで実装(2026-08-20)** — `apply_distillation`はplanと全inputを再照合し、既存ノートのnormalize / revise / extractを全件成功または0件で実行・rollbackする。create、merge、atomic supersede、splitは次段
 
 ## 継続蒸留plan
 
@@ -25,6 +25,13 @@ kb --vault <name> distill plan --format markdown
 入力版を再照合するための監査記録である。出力契約は
 [schemas/distillation-plan.schema.json](schemas/distillation-plan.schema.json)、設計判断は
 [ADR-0010](docs/adr/0010-read-only-distillation-planner.md)を参照。
+
+semantic waveはplan JSONのschema・profile・snapshot・各entry hashを保持し、対象全文を確認して
+`kb distill apply --input <execution.json>`またはMCP `apply_distillation`へ渡す。結果の`execution_id`は
+後続変更前なら`kb distill rollback --execution-id <id>`で一括復元できる。request／result契約は
+[execution schema](schemas/distillation-execution.schema.json)／
+[result schema](schemas/distillation-execution-result.schema.json)、設計判断は
+[ADR-0011](docs/adr/0011-snapshot-bound-semantic-executor.md)を参照。
 
 ## GitHub OAuth の build 設定
 

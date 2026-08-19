@@ -226,11 +226,14 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     公開し、path・policy・role・media type・origin・by・at・supersedesを受け取らない。
     既存ノートの実在を確認してから、server管理の一時file経由で同じstore / ledgerへ合流する
   - ファイルの中身検索(PDF 抽出等)、dataset の複数ファイル管理、実削除を伴う GC は将来
-- **FR-C7 お手入れ(ライフサイクルの自動運転)— 2026-08-20 read-only planner段まで実装**:
+- **FR-C7 お手入れ(ライフサイクルの自動運転)— 2026-08-20 semantic executor v1段まで実装**:
   authorityとtyped relationから、正本更新・記録抽出・proposal統合・legacy未解決・description正規化の
-  候補をsnapshot固定で列挙する。本文意味を推測するsemantic executor、atomic supersede、legacy backfill、
-  複数ノートwaveの自律実行は次段。planは人間の承認キューを作らない。後続executorは候補ノートを
-  全文取得してsemantic判断し、実行直前にsnapshot/input hashを再照合する。方針内のAI管理ノートは
+  候補をsnapshot固定で列挙する。executor v1は候補ノートを全文取得したAIから構造化targetを受け、
+  plan schema/profile/ID、snapshot、全input hashとoperationを同じwrite transactionで再照合する。
+  既存authority付きAIノートのnormalize、active canonical revise、record lineage extractを全件成功または0件で
+  実行し、request hashによる二重実行拒否、実行前後document監査、後続変更前のatomic rollbackを備える。
+  record本文・UID・authorityは不変とし、create、semantic merge、atomic supersede、新規extract／split、
+  legacy backfill、別端末自動rollbackは次段。planとexecutionは人間の承認キューを作らない。方針内のAI管理ノートは
   update・atomic supersede・対象固定型二段階削除で自律メンテナンスし、ユーザーへwaveごとの承認作業を
   戻さない。legacy `origin: human`は互換読み取り専用の所有境界を維持する。リンク切れ・契約違反など
   自動修復できない劣化は、該当なしへ潰さず結果とともに報告する

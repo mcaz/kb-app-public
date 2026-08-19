@@ -160,6 +160,21 @@ enum DistillCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// planと全input hashを再照合し、既存ノートのsemantic waveをatomicに適用
+    Apply {
+        /// kb-app.distillation-execution-request/v1 JSON
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = "cli/unknown")]
+        client: String,
+    },
+    /// execution直後から対象が変わっていないwaveを一括復元
+    Rollback {
+        #[arg(long)]
+        execution_id: String,
+        #[arg(long, default_value = "cli/unknown")]
+        client: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -490,15 +505,39 @@ fn main() -> Result<()> {
         }
         Command::Distill { command } => {
             let vault = open_vault(cli.vault.as_deref())?;
-            let conn = open_db_read_only(&vault)?;
             match command {
                 DistillCommand::Plan { format, output } => {
+                    let conn = open_db_read_only(&vault)?;
                     let plan = kb_core::distillation::plan(&conn)?;
                     let rendered = match format {
                         ReportFormat::Json => serde_json::to_string_pretty(&plan)?,
                         ReportFormat::Markdown => kb_core::distillation::render_markdown(&plan),
                     };
                     write_eval_output(output.as_ref(), &rendered, "Distillation plan")?;
+                }
+                DistillCommand::Apply { input, client } => {
+                    let request: kb_core::distillation_executor::DistillationExecutionRequest =
+                        serde_json::from_str(&fs::read_to_string(&input).with_context(|| {
+                            format!("Distillation executionを読めない: {}", input.display())
+                        })?)
+                        .context("Distillation execution JSONを解釈できない")?;
+                    let conn = open_db(&vault)?;
+                    let report =
+                        kb_core::distillation_executor::execute(&vault, &conn, request, &client)?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                DistillCommand::Rollback {
+                    execution_id,
+                    client,
+                } => {
+                    let conn = open_db(&vault)?;
+                    let report = kb_core::distillation_executor::rollback(
+                        &vault,
+                        &conn,
+                        &execution_id,
+                        &client,
+                    )?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
                 }
             }
         }
@@ -749,7 +788,9 @@ mod tests {
             "care dismiss".to_string(),
             "care list".to_string(),
             "distill".to_string(),
+            "distill apply".to_string(),
             "distill plan".to_string(),
+            "distill rollback".to_string(),
             "embed".to_string(),
             "embed enable".to_string(),
             "embed status".to_string(),
@@ -864,5 +905,46 @@ mod tests {
         };
         assert!(matches!(format, ReportFormat::Json));
         assert!(output.is_none());
+    }
+
+    #[test]
+    fn distillation_apply_and_rollback_require_explicit_audit_identity() {
+        let apply = Cli::try_parse_from([
+            "kb",
+            "distill",
+            "apply",
+            "--input",
+            "/private/execution.json",
+        ])
+        .unwrap();
+        let Command::Distill {
+            command: DistillCommand::Apply { input, client },
+        } = apply.command
+        else {
+            panic!("distill applyとして解釈されなかった");
+        };
+        assert_eq!(input, PathBuf::from("/private/execution.json"));
+        assert_eq!(client, "cli/unknown");
+
+        let rollback = Cli::try_parse_from([
+            "kb",
+            "distill",
+            "rollback",
+            "--execution-id",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ])
+        .unwrap();
+        let Command::Distill {
+            command:
+                DistillCommand::Rollback {
+                    execution_id,
+                    client,
+                },
+        } = rollback.command
+        else {
+            panic!("distill rollbackとして解釈されなかった");
+        };
+        assert!(execution_id.starts_with("sha256:"));
+        assert_eq!(client, "cli/unknown");
     }
 }

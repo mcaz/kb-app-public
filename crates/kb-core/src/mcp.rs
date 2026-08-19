@@ -1,6 +1,6 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / recent / plan_distillation / propose / update /
-//! prepare_remove / commit_remove / attach。
+//! 公開ツールは search / get / recent / plan_distillation / apply_distillation /
+//! rollback_distillation / propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
@@ -154,8 +154,11 @@ update のrelationsへ対象note_uidを含むtyped relationを設定する。rel
 同じ主題・適用範囲を示すscopeを必ず指定する。同じnamespace+scopeのactive canonicalを複数作らない。\
 typed relationはnote_uidを端点にし、根拠・更新・矛盾・後継をpath変更から独立して結ぶ。\n\
 【蒸留】継続メンテナンスwaveの前にplan_distillationを使う。planは同一DB snapshotへ固定した\
-read-only監査記録で、承認待ちqueueではない。候補ノートはgetで全文確認し、semantic executorが\
-公開されるまでは単一noteの通常updateと対象固定removeの安全境界を越えない。\n\
+read-only監査記録で、承認待ちqueueではない。候補ノートはgetで全文確認する。planのnormalize /\
+revise / extractを複数ノートへ反映するときはapply_distillationを使い、plan schema・profile・\
+snapshot・input hashをそのまま渡す。executorは全対象を1 transactionで更新し、古いplan・二重実行・\
+record本文改変を拒否する。失敗したwaveは対象が変わる前にrollback_distillationで一括復元する。\
+create・delete・merge・supersede・splitはexecutor v1へ混ぜず、削除は既存の二段階removeを使う。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
@@ -554,6 +557,87 @@ fn prompt_text(name: &str) -> Option<&'static str> {
     }
 }
 
+fn semantic_tool_definitions() -> [Value; 2] {
+    let relation = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "type": {"type": "string", "enum": ["derived_from", "supports", "updates", "contradicts", "supersedes", "mentions"]},
+            "target": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "参照先note_uid(ULID)"}
+        },
+        "required": ["type", "target"]
+    });
+    let target = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "title": {"type": ["string", "null"]},
+            "body": {"type": "string"},
+            "description": {"type": ["string", "null"]},
+            "tags": {"type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 20, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"}},
+            "relations": {"type": "array", "uniqueItems": true, "items": relation}
+        },
+        "required": ["title", "body", "description", "tags", "relations"]
+    });
+    let change = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "note": {"type": "string", "description": "plan entryのnote ID"},
+            "input_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "operation": {"type": "string", "enum": ["normalize", "revise", "extract"]},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$", "description": "semantic変更の根拠(一行)"},
+            "target": target
+        },
+        "required": ["note", "input_hash", "operation", "reason", "target"]
+    });
+    let apply = json!({
+        "name": "apply_distillation",
+        "description": "plan_distillationの同一snapshotを再照合し、既存AIノートのnormalize / revise / extractを1 transactionで反映する。create・delete・merge・supersede・split・authority変更は受け付けない。",
+        "annotations": {
+            "title": "蒸留waveを実行",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "schema": {"type": "string", "const": "kb-app.distillation-execution-request/v1"},
+                "plan_schema": {"type": "string", "const": "kb-app.distillation-plan/v1"},
+                "planner_profile": {"type": "string", "const": "mechanical-v1"},
+                "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "snapshot_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "snapshot_note_count": {"type": "integer", "minimum": 0},
+                "changes": {"type": "array", "minItems": 1, "maxItems": 100, "items": change}
+            },
+            "required": ["schema", "plan_schema", "planner_profile", "plan_id", "snapshot_digest", "snapshot_note_count", "changes"]
+        }
+    });
+    let rollback = json!({
+        "name": "rollback_distillation",
+        "description": "適用済みsemantic executionの全対象が直後snapshotのままなら、同じtransactionで実行前documentへ復元する。二重rollbackと後続変更後のrollbackは拒否する。",
+        "annotations": {
+            "title": "蒸留waveをrollback",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "execution_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            },
+            "required": ["execution_id"]
+        }
+    });
+    [apply, rollback]
+}
+
 fn tool_definitions(client: &str) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
@@ -675,6 +759,15 @@ fn tool_definitions(client: &str) -> Value {
             }, "required": ["note", "removal_token"]}
         }
     ]);
+    let tools = definitions
+        .as_array_mut()
+        .expect("tool definitions are array");
+    let insert_at = tools
+        .iter()
+        .position(|tool| tool["name"] == "plan_distillation")
+        .expect("plan_distillation tool definition exists")
+        + 1;
+    tools.splice(insert_at..insert_at, semantic_tool_definitions());
     if !capabilities.current_note_argument_optional {
         let get = definitions
             .as_array_mut()
@@ -869,6 +962,80 @@ fn call_tool_with_search_options(
             Ok(ToolOutput {
                 text,
                 structured: Some(serde_json::to_value(&plan)?),
+            })
+        }
+        "apply_distillation" => {
+            let request: crate::distillation_executor::DistillationExecutionRequest =
+                serde_json::from_value(args.clone())
+                    .context("apply_distillation引数を解釈できない")?;
+            let report = crate::distillation_executor::execute(vault, &conn, request, client)?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "distillation_applied",
+                    "event": "distillation_applied",
+                    "required": true,
+                    "execution_id": &report.execution_id,
+                    "plan_id": &report.plan_id,
+                    "changed_notes": report.changes.len(),
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "蒸留waveを適用した: {}件 / execution {} / after snapshot {}",
+                        report.changes.len(),
+                        report.execution_id,
+                        report.after_snapshot_digest
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "rollback_distillation" => {
+            let execution_id = args
+                .get("execution_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("execution_id が必要"))?;
+            let report =
+                crate::distillation_executor::rollback(vault, &conn, execution_id, client)?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "distillation_rolled_back",
+                    "event": "distillation_rolled_back",
+                    "required": true,
+                    "execution_id": &report.execution_id,
+                    "rollback_id": &report.rollback_id,
+                    "restored_notes": report.restored_notes.len(),
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "蒸留waveをrollbackした: {}件 / execution {} / snapshot {}",
+                        report.restored_notes.len(),
+                        report.execution_id,
+                        report.after_snapshot_digest
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
             })
         }
         "search" => {
@@ -1074,7 +1241,7 @@ fn call_tool_with_search_options(
                     note_text
                 ),
                 structured: Some(json!({
-                    "note": id,
+                    "note": &id,
                     "note_id": identity["note_id"],
                     "title": identity["title"],
                     "description": note_description,
@@ -2006,7 +2173,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 9);
+        assert_eq!(definitions.len(), 11);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -2075,6 +2242,134 @@ mod tests {
         )
         .unwrap_err();
         assert!(rejected.to_string().contains("引数を受け取らない"));
+    }
+
+    #[test]
+    fn semantic_execution_tools_apply_and_rollback_the_exact_plan_snapshot() {
+        use crate::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace};
+
+        let tools = tool_definitions("test/client");
+        let apply = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "apply_distillation")
+            .unwrap();
+        let rollback = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "rollback_distillation")
+            .unwrap();
+        for definition in [apply, rollback] {
+            assert_eq!(definition["annotations"]["readOnlyHint"], false);
+            assert_eq!(definition["annotations"]["destructiveHint"], true);
+            assert_eq!(definition["annotations"]["idempotentHint"], false);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let tags = vec!["test".to_string()];
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "MCP semantic target",
+                    body: "本文",
+                    description: None,
+                    tags: &tags,
+                    authority: Authority {
+                        namespace: NoteNamespace::Knowledge,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "test/mcp-semantic".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let planned = call_tool(
+            &vault,
+            "test/client",
+            "plan_distillation",
+            &serde_json::json!({}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let entry = planned["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["note"] == id)
+            .unwrap();
+        assert_eq!(entry["operation"], "normalize");
+        let note = vault.read_note_from_db(&conn, &id).unwrap();
+        let applied = call_tool(
+            &vault,
+            "test/client",
+            "apply_distillation",
+            &serde_json::json!({
+                "schema": "kb-app.distillation-execution-request/v1",
+                "plan_schema": planned["schema"],
+                "planner_profile": planned["planner_profile"],
+                "plan_id": planned["plan_id"],
+                "snapshot_digest": planned["snapshot"]["digest"],
+                "snapshot_note_count": planned["snapshot"]["note_count"],
+                "changes": [{
+                    "note": id,
+                    "input_hash": entry["input_hash"],
+                    "operation": "normalize",
+                    "reason": "検索結果に用途を表示する",
+                    "target": {
+                        "title": &note.front.title,
+                        "body": &note.body,
+                        "description": "MCP経由で追加した一文要約",
+                        "tags": &note.front.tags,
+                        "relations": &note.front.relations,
+                    }
+                }]
+            }),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(applied["status"], "applied");
+        assert_eq!(applied["conversation_events"][0]["required"], true);
+        assert_eq!(
+            vault
+                .read_note_from_db(&open_db(&vault).unwrap(), &id)
+                .unwrap()
+                .front
+                .description
+                .as_deref(),
+            Some("MCP経由で追加した一文要約")
+        );
+
+        let rolled_back = call_tool(
+            &vault,
+            "test/client",
+            "rollback_distillation",
+            &serde_json::json!({"execution_id": applied["execution_id"]}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(rolled_back["status"], "rolled_back");
+        assert!(
+            vault
+                .read_note_from_db(&open_db(&vault).unwrap(), &id)
+                .unwrap()
+                .front
+                .description
+                .is_none()
+        );
     }
 
     #[test]
@@ -2251,7 +2546,7 @@ mod tests {
     }
 
     #[test]
-    fn destructive_annotation_is_attached_only_to_commit_remove() {
+    fn destructive_annotations_cover_commit_remove_and_semantic_writes() {
         let tools = tool_definitions("chatgpt/openai");
         let definitions = tools.as_array().unwrap();
         assert!(definitions.iter().all(|tool| tool["name"] != "remove"));
@@ -2265,6 +2560,13 @@ mod tests {
             .unwrap();
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(commit["annotations"]["destructiveHint"], true);
+        for name in ["apply_distillation", "rollback_distillation"] {
+            let semantic = definitions
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap();
+            assert_eq!(semantic["annotations"]["destructiveHint"], true);
+        }
         assert_eq!(
             commit["inputSchema"]["required"],
             serde_json::json!(["note", "removal_token"])

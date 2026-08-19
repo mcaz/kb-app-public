@@ -1,6 +1,6 @@
 # OKF 適合設計 v0(spec 精読の結果)
 
-2026-08-09 起草、2026-08-20 authority拡張とread-only蒸留plannerを追記。[requirements.md](requirements.md)
+2026-08-09 起草、2026-08-20 authority拡張と蒸留planner／executorを追記。[requirements.md](requirements.md)
 FR-C1「OKF 互換基本方針」の実行 —
 技術設計の最初のタスクと位置づけた spec 精読と適合設計。
 spec 原本: https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf (SPEC.md)
@@ -75,6 +75,10 @@ consumerはOKF §4.1どおり未知キーを保持できる。
 継続蒸留のplan identityやinput hashはノートfrontmatterへ書かず、
 [ADR-0010](adr/0010-read-only-distillation-planner.md)の派生監査出力として扱う。したがってplan previewは
 OKF documentやGit exportを変更せず、同じDB snapshotから決定的に再生成できる。
+
+semantic executionのplan／execution／rollback IDもfrontmatterへ制御状態として埋め込まない。
+[ADR-0011](adr/0011-snapshot-bound-semantic-executor.md)に従い、SQLite runtime記録、`log.md`、Git履歴へ
+監査を分離する。ノート自体は通常のOKF documentであり、rollbackは保存済みdocumentをcore APIから復元する。
 
 ### 適合宣言と予約ファイル
 

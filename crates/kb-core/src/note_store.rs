@@ -67,21 +67,46 @@ pub(crate) fn put(
     log_entry: &str,
     commit_message: &str,
 ) -> Result<()> {
-    let id = NoteId::parse(raw)?;
     let transaction = conn.unchecked_transaction()?;
-    let base_document = transaction
+    let op_id = crate::authority::NoteUid::new().to_string();
+    queue_put(
+        vault,
+        &transaction,
+        raw,
+        note,
+        &op_id,
+        log_entry,
+        commit_message,
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// 複数ノートを同じtransactionへ積むexecutor専用口。commitとexport flushは呼び出し側が行う。
+pub(crate) fn queue_put(
+    vault: &Vault,
+    conn: &Connection,
+    raw: &str,
+    note: &Note,
+    op_id: &str,
+    log_entry: &str,
+    commit_message: &str,
+) -> Result<()> {
+    let id = NoteId::parse(raw)?;
+    let base_document = conn
         .query_row(
             "SELECT document FROM notes WHERE id = ?1",
             [id.as_str()],
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    crate::index::upsert(&transaction, vault, id.as_str(), now_nanos()?, note)?;
-    validate_authority_write(&transaction, id.as_str(), note)?;
-    transaction.execute(
+    crate::index::upsert(conn, vault, id.as_str(), now_nanos()?, note)?;
+    validate_authority_write(conn, id.as_str(), note)?;
+    conn.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
-         VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
+            op_id,
             id.as_str(),
             UPSERT,
             base_document,
@@ -90,7 +115,6 @@ pub(crate) fn put(
             commit_message
         ],
     )?;
-    transaction.commit()?;
     Ok(())
 }
 
