@@ -1,6 +1,6 @@
 # OKF 適合設計 v0(spec 精読の結果)
 
-2026-08-09 起草、2026-08-20 authority拡張を追記。[requirements.md](requirements.md)
+2026-08-09 起草、2026-08-20 authority拡張とread-only蒸留plannerを追記。[requirements.md](requirements.md)
 FR-C1「OKF 互換基本方針」の実行 —
 技術設計の最初のタスクと位置づけた spec 精読と適合設計。
 spec 原本: https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf (SPEC.md)
@@ -71,6 +71,10 @@ OKF上の概念 ID = パス(`.md` 抜き)を互換表示用に維持し、kb-app
 さらにOKFのpath IDだけではrenameをまたぐlineageと現行正本の一意性を表せないため、
 [ADR-0009](adr/0009-canonical-authority.md)で`note_uid` / `authority` / `relations`を追加した。
 consumerはOKF §4.1どおり未知キーを保持できる。
+
+継続蒸留のplan identityやinput hashはノートfrontmatterへ書かず、
+[ADR-0010](adr/0010-read-only-distillation-planner.md)の派生監査出力として扱う。したがってplan previewは
+OKF documentやGit exportを変更せず、同じDB snapshotから決定的に再生成できる。
 
 ### 適合宣言と予約ファイル
 

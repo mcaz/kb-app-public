@@ -1,6 +1,6 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / recent / propose / update / prepare_remove /
-//! commit_remove / attach。
+//! 公開ツールは search / get / recent / plan_distillation / propose / update /
+//! prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::client_surface::ClientSurface;
-use crate::index::{open_db, sync_with_degradations};
+use crate::index::{open_db, open_db_read_only, sync_with_degradations};
 use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
@@ -153,6 +153,9 @@ update のrelationsへ対象note_uidを含むtyped relationを設定する。rel
 【authority】proposeでは共通6namespace、canonical/record/proposal role、authority status、\
 同じ主題・適用範囲を示すscopeを必ず指定する。同じnamespace+scopeのactive canonicalを複数作らない。\
 typed relationはnote_uidを端点にし、根拠・更新・矛盾・後継をpath変更から独立して結ぶ。\n\
+【蒸留】継続メンテナンスwaveの前にplan_distillationを使う。planは同一DB snapshotへ固定した\
+read-only監査記録で、承認待ちqueueではない。候補ノートはgetで全文確認し、semantic executorが\
+公開されるまでは単一noteの通常updateと対象固定removeの安全境界を越えない。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
@@ -589,6 +592,18 @@ fn tool_definitions(client: &str) -> Value {
             }}
         },
         {
+            "name": "plan_distillation",
+            "description": "DBの同一read snapshotから、input hash・snapshot digest・決定的plan ID付きの蒸留候補を列挙する。KB、remote、索引、careを変更しない。",
+            "annotations": {
+                "title": "継続蒸留を計画",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}}
+        },
+        {
             "name": "propose",
             "description": "知見をauthority付きノートとして起票。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
             "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
@@ -759,6 +774,9 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
             "allow_new_tags はAI用MCPでは利用できない。既存語彙を使うか、trusted UI / CLIの別承認を案内する"
         );
     }
+    if name == "plan_distillation" && args.as_object().is_none_or(|args| !args.is_empty()) {
+        anyhow::bail!("plan_distillation は引数を受け取らない");
+    }
     Ok(())
 }
 
@@ -802,11 +820,18 @@ fn call_tool_with_search_options(
     removal_plans: &mut RemovalPlans,
 ) -> Result<ToolOutput> {
     reject_unavailable_mcp_capabilities(client, name, args)?;
+    let distillation_plan = name == "plan_distillation";
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
     // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
     // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
-    let mut degraded = remote_degradations(remote_sync, || crate::connect::pull_if_stale(vault));
-    let conn = open_db(vault)?;
+    let mut degraded = remote_degradations(remote_sync && !distillation_plan, || {
+        crate::connect::pull_if_stale(vault)
+    });
+    let conn = if distillation_plan {
+        open_db_read_only(vault)?
+    } else {
+        open_db(vault)?
+    };
     // DBが実行時正本なので、全文取得は検索時のsnapshotをそのまま読む。索引の追い付きと
     // 埋め込み生成は検索時に一度だけ行い、上位候補ごとのgetでは繰り返さない。
     if name == "search" {
@@ -823,6 +848,29 @@ fn call_tool_with_search_options(
         }
     }
     match name {
+        "plan_distillation" => {
+            let plan = crate::distillation::plan(&conn)?;
+            let counts = &plan.summary.operations;
+            let text = format!(
+                "蒸留plan(read-only): {} notes / {} actionable\nplan: {}\nsnapshot: {}\nkeep {} / normalize {} / revise {} / extract {} / split候補 {} / merge候補 {} / supersede候補 {} / unresolved {}\n",
+                plan.snapshot.note_count,
+                plan.summary.actionable,
+                plan.plan_id,
+                plan.snapshot.digest,
+                counts.keep,
+                counts.normalize,
+                counts.revise,
+                counts.extract,
+                counts.split_canonical,
+                counts.merge_candidate,
+                counts.supersede_candidate,
+                counts.unresolved,
+            );
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&plan)?),
+            })
+        }
         "search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
@@ -1958,7 +2006,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 8);
+        assert_eq!(definitions.len(), 9);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -1971,6 +2019,62 @@ mod tests {
             attach["inputSchema"]["required"],
             serde_json::json!(["note", "file_name", "content_base64"])
         );
+    }
+
+    #[test]
+    fn distillation_plan_is_exposed_as_an_idempotent_read_only_snapshot() {
+        let tools = tool_definitions("test/client");
+        let definition = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["name"] == "plan_distillation")
+            .unwrap();
+        assert_eq!(definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(definition["annotations"]["destructiveHint"], false);
+        assert_eq!(definition["annotations"]["idempotentHint"], true);
+        assert_eq!(definition["inputSchema"]["additionalProperties"], false);
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        drop(open_db(&vault).unwrap());
+        let before = std::fs::metadata(vault.index_db_path())
+            .unwrap()
+            .modified()
+            .unwrap();
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "plan_distillation",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+
+        assert_eq!(output["schema"], crate::distillation::PLAN_SCHEMA);
+        assert_eq!(output["read_only"], true);
+        assert_eq!(output["snapshot"]["note_count"], 0);
+        assert!(output.get("degraded").is_none());
+        assert!(output.get("conversation_events").is_none());
+        assert_eq!(
+            std::fs::metadata(vault.index_db_path())
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
+
+        let rejected = call_tool(
+            &vault,
+            "test/client",
+            "plan_distillation",
+            &serde_json::json!({"limit": 1}),
+            false,
+        )
+        .unwrap_err();
+        assert!(rejected.to_string().contains("引数を受け取らない"));
     }
 
     #[test]

@@ -33,6 +33,7 @@ jobs:
   rust:
     name: コア(fmt・clippy・テスト・型生成の追従)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       KB_GIT_LFS_BIN: ${{ github.workspace }}/app/src-tauri/binaries/git-lfs
     steps:
@@ -56,9 +57,13 @@ jobs:
         run: python3 scripts/check-contract-cochange.py "$BASE_SHA" "$HEAD_SHA"
       # Tauri(kb-app)のビルドに必要な GTK/WebKit まわり
       - name: システム依存を入れる
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
             libappindicator3-dev librsvg2-dev libxdo-dev patchelf
       # 同期のテストは `git pull --rebase` を通る(rebase はコミットを作るので
@@ -107,9 +112,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: 配布buildの依存を入れる
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 update
+          sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
+            apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 \
+            -o Acquire::https::Timeout=30 install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
             libappindicator3-dev librsvg2-dev libxdo-dev patchelf
       - run: npm --prefix app ci

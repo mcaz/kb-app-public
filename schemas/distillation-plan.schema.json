@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/distillation-plan.schema.json",
+  "title": "kb-app deterministic read-only distillation plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "planner_profile", "plan_id", "read_only", "snapshot", "summary", "entries"],
+  "properties": {
+    "schema": {"const": "kb-app.distillation-plan/v1"},
+    "planner_profile": {"const": "mechanical-v1"},
+    "plan_id": {"$ref": "#/$defs/hash"},
+    "read_only": {"const": true},
+    "snapshot": {"$ref": "#/$defs/snapshot"},
+    "summary": {"$ref": "#/$defs/summary"},
+    "entries": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "digest", "note_count"],
+      "properties": {
+        "schema": {"const": "kb-app.distillation-snapshot/v1"},
+        "digest": {"$ref": "#/$defs/hash"},
+        "note_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operations", "risks", "actionable"],
+      "properties": {
+        "operations": {"$ref": "#/$defs/operation_counts"},
+        "risks": {"$ref": "#/$defs/risk_counts"},
+        "actionable": {"type": "integer", "minimum": 0}
+      }
+    },
+    "operation_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keep", "normalize", "revise", "extract", "split_canonical", "merge_candidate", "supersede_candidate", "unresolved"],
+      "properties": {
+        "keep": {"type": "integer", "minimum": 0},
+        "normalize": {"type": "integer", "minimum": 0},
+        "revise": {"type": "integer", "minimum": 0},
+        "extract": {"type": "integer", "minimum": 0},
+        "split_canonical": {"type": "integer", "minimum": 0},
+        "merge_candidate": {"type": "integer", "minimum": 0},
+        "supersede_candidate": {"type": "integer", "minimum": 0},
+        "unresolved": {"type": "integer", "minimum": 0}
+      }
+    },
+    "risk_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["none", "low", "medium", "high", "blocked"],
+      "properties": {
+        "none": {"type": "integer", "minimum": 0},
+        "low": {"type": "integer", "minimum": 0},
+        "medium": {"type": "integer", "minimum": 0},
+        "high": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "title", "note_uid", "authority", "input_hash", "operation", "risk", "signals", "reason", "depends_on"],
+      "properties": {
+        "note": {"type": "string", "minLength": 1},
+        "title": {"type": ["string", "null"]},
+        "note_uid": {
+          "anyOf": [
+            {"$ref": "#/$defs/note_uid"},
+            {"type": "null"}
+          ]
+        },
+        "authority": {
+          "anyOf": [
+            {"$ref": "#/$defs/authority"},
+            {"type": "null"}
+          ]
+        },
+        "input_hash": {"$ref": "#/$defs/hash"},
+        "operation": {"enum": ["keep", "normalize", "revise", "extract", "split_canonical", "merge_candidate", "supersede_candidate", "unresolved"]},
+        "risk": {"enum": ["none", "low", "medium", "high", "blocked"]},
+        "signals": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["legacy_authority_missing", "missing_description", "proposal_matches_active_canonical", "proposal_needs_canonical_decision", "record_without_canonical_lineage", "record_updates_canonical", "record_contradicts_canonical", "canonical_has_pending_update", "canonical_has_contradiction", "historical_canonical_has_active_successor"]
+          }
+        },
+        "reason": {"type": "string", "minLength": 1},
+        "depends_on": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "note_uid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "role", "status", "scope"],
+      "properties": {
+        "namespace": {"enum": ["entities", "initiatives", "decisions", "procedures", "records", "knowledge"]},
+        "role": {"enum": ["canonical", "record", "proposal"]},
+        "status": {"enum": ["active", "historical", "superseded"]},
+        "scope": {"type": "string", "minLength": 1, "maxLength": 160}
+      }
+    }
+  }
+}

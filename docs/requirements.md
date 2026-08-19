@@ -99,6 +99,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     安定scopeを持つ。同じnamespace+scopeのactive canonicalは1件だけにし、根拠・更新・矛盾・後継は
     `note_uid`を端点にするtyped relationで表す。`proposal`は下書きや人間承認待ちを意味せず、
     AIが正本候補を区別する内部分類である。legacyノートは明示移行までenvelope不在で読める。
+11. **継続蒸留は固定snapshotから再現可能に始める**。read-only plannerは同一SQLite read transactionの
+    全documentへ入力hashを付け、snapshot digestと決定的plan IDを返す。previewはpull・sync・migration・
+    care・outbox・KB本文を変更せず、承認キューにも実行権限にもならない。意味判断と複数ノートの変更は、
+    stale-plan拒否とatomic操作を備える後続semantic executorへ分離する。
 
 ## システム構成(3層)
 
@@ -157,7 +161,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `note_uid`は作成後に変更できず、同じnamespace+scopeのactive canonical重複、参照切れrelation、
   typed relationで参照中の削除をcoreで拒否する。複数ノートを一括遷移するatomic supersedeと
   path移動は次のsemantic executor段で実装し、それまでは半端なsuperseded状態を作らない
-- **FR-C5 MCP サーバー**: search / get / recent / propose に加え、**update / prepare_remove /
+- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / propose に加え、**update / prepare_remove /
   commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
   新規添付・16MiB上限)**を公開。confirm / draft状態は持たない。
@@ -180,6 +184,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     `removal_prepared` eventを返す。`commit_remove`はdestructive annotationを持ち、同じnoteと未使用token
     だけを受理する。AIは蒸留・メンテナンス方針の範囲内で個別の人間承認なしに両toolを続けて実行できる。
     期限切れ、対象差し替え、準備後変更、二重実行は削除前に拒否し、対象・理由・履歴を報告する
+  - `plan_distillation`は準備済みDBをread-onlyで開き、同一snapshotの全ノートへinput hashを付けた
+    mechanical-v1候補planを返す。remote pull、索引同期、schema migration、care/outbox更新を行わず、
+    MCP annotationもread-only / idempotentに固定する。同じsnapshotのJSONはbyte-identicalとする
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
   構造(2026-08-19実装)。`ClientSurface`はClaude Code / Codex CLI / Claude Desktop /
   ChatGPT / 評価harness / unknownをactor先頭segmentから厳密に判定し、同じmodel familyでも
@@ -219,11 +226,14 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     公開し、path・policy・role・media type・origin・by・at・supersedesを受け取らない。
     既存ノートの実在を確認してから、server管理の一時file経由で同じstore / ledgerへ合流する
   - ファイルの中身検索(PDF 抽出等)、dataset の複数ファイル管理、実削除を伴う GC は将来
-- **FR-C7 お手入れ(ライフサイクルの自動運転)— 最小形実装済み(2026-08-10。①意味的な近接の検知=埋め込み距離 0.45 以下で「つなげておきますか?」②リンク切れの気づき。受信箱で承諾/却下、却下は再提案しない・1回5件上限。つなげるは agent ノート側へ追記しメモの本文改変を最小化)**: 重複・リンク切れ・古い情報・未整理を検出し、
-  平易な提案に変換する。最小形(重複・リンク切れ検知)はローカルで完結、提案文の生成は
-  段2(AI 接続)で強化。**原則9 に従う**: 手書きノートへは非破壊提案のみ
-  (「同じ話題に見えます。つなげておきますか?」)。統合・書き換えの提案は AI 由来ノート
-  同士に限定。ユーザーは承諾 / 却下のみで、維持作業を自分で計画しない
+- **FR-C7 お手入れ(ライフサイクルの自動運転)— 2026-08-20 read-only planner段まで実装**:
+  authorityとtyped relationから、正本更新・記録抽出・proposal統合・legacy未解決・description正規化の
+  候補をsnapshot固定で列挙する。本文意味を推測するsemantic executor、atomic supersede、legacy backfill、
+  複数ノートwaveの自律実行は次段。planは人間の承認キューを作らない。後続executorは候補ノートを
+  全文取得してsemantic判断し、実行直前にsnapshot/input hashを再照合する。方針内のAI管理ノートは
+  update・atomic supersede・対象固定型二段階削除で自律メンテナンスし、ユーザーへwaveごとの承認作業を
+  戻さない。legacy `origin: human`は互換読み取り専用の所有境界を維持する。リンク切れ・契約違反など
+  自動修復できない劣化は、該当なしへ潰さず結果とともに報告する
 
 ### 管理アプリ(Tauri)
 

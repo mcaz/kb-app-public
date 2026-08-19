@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use kb_core::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace};
-use kb_core::index::{open_db, sync};
+use kb_core::index::{open_db, open_db_read_only, sync};
 use kb_core::registry::Registry;
 use kb_core::search::recent;
 use kb_core::vault::{NoteProposal, Vault};
@@ -88,6 +88,11 @@ enum Command {
         #[command(subcommand)]
         command: CareCommand,
     },
+    /// snapshot固定・read-onlyの継続蒸留plan
+    Distill {
+        #[command(subcommand)]
+        command: DistillCommand,
+    },
     /// 旧添付(<ノート ID>.files/)を台帳に載せる(既定は棚卸しだけ)
     MigrateFiles {
         /// 実際に書き込む。付けなければ何も書かない
@@ -143,6 +148,18 @@ enum CareCommand {
     List,
     /// 「このまま」(同じ提案は出なくなる)
     Dismiss { key: String },
+}
+
+#[derive(Subcommand)]
+enum DistillCommand {
+    /// DBの同一snapshotから決定的な候補planを作る(書き込み・pull・syncなし)
+    Plan {
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -471,6 +488,20 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Command::Distill { command } => {
+            let vault = open_vault(cli.vault.as_deref())?;
+            let conn = open_db_read_only(&vault)?;
+            match command {
+                DistillCommand::Plan { format, output } => {
+                    let plan = kb_core::distillation::plan(&conn)?;
+                    let rendered = match format {
+                        ReportFormat::Json => serde_json::to_string_pretty(&plan)?,
+                        ReportFormat::Markdown => kb_core::distillation::render_markdown(&plan),
+                    };
+                    write_eval_output(output.as_ref(), &rendered, "Distillation plan")?;
+                }
+            }
+        }
         Command::MigrateFiles { apply } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let workspace_id = kb_core::workspace::workspace_id(&vault)?;
@@ -690,7 +721,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{Cli, Command, EvalCommand, ReportFormat, RuleDeliveryModeArg};
+    use super::{Cli, Command, DistillCommand, EvalCommand, ReportFormat, RuleDeliveryModeArg};
 
     fn command_paths(command: &clap::Command, prefix: Option<&str>, paths: &mut BTreeSet<String>) {
         for subcommand in command.get_subcommands() {
@@ -717,6 +748,8 @@ mod tests {
             "care".to_string(),
             "care dismiss".to_string(),
             "care list".to_string(),
+            "distill".to_string(),
+            "distill plan".to_string(),
             "embed".to_string(),
             "embed enable".to_string(),
             "embed status".to_string(),
@@ -816,6 +849,19 @@ mod tests {
         };
         assert_eq!(suite, PathBuf::from("/private/rules.json"));
         assert!(matches!(mode, RuleDeliveryModeArg::AlwaysTopicEvent));
+        assert!(matches!(format, ReportFormat::Json));
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn distillation_plan_defaults_to_deterministic_json_and_stdout() {
+        let cli = Cli::try_parse_from(["kb", "--vault", "work", "distill", "plan"]).unwrap();
+        let Command::Distill {
+            command: DistillCommand::Plan { format, output },
+        } = cli.command
+        else {
+            panic!("distill planとして解釈されなかった");
+        };
         assert!(matches!(format, ReportFormat::Json));
         assert!(output.is_none());
     }

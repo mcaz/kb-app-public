@@ -7,7 +7,7 @@ use std::fs;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::frontmatter::Note;
 use crate::tokenize::wakati;
@@ -39,6 +39,28 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
                     .join(" / ")
             );
         }
+    }
+    Ok(conn)
+}
+
+/// plannerなど「観測だけ」の操作向け。schema作成・migration・Markdown復元・WAL設定を
+/// 行わず、既存DBをSQLiteのread-only + query_onlyで開く。
+pub fn open_db_read_only(vault: &Vault) -> Result<Connection> {
+    let path = vault.index_db_path();
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("read-only index.dbを開けない: {}", path.display()))?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch("PRAGMA query_only=ON")?;
+    let schema: String = conn
+        .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+            row.get(0)
+        })
+        .context("read-only plannerが必要とするDB schemaを確認できない")?;
+    if schema != SCHEMA_VERSION {
+        bail!("read-only plannerはschema {SCHEMA_VERSION}の準備済みDBを必要とする(現在: {schema})")
     }
     Ok(conn)
 }
@@ -650,6 +672,33 @@ mod tests {
         RelationKind,
     };
     use crate::frontmatter::Frontmatter;
+
+    #[test]
+    fn read_only_open_never_creates_or_mutates_the_runtime_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let path = vault.index_db_path();
+        assert!(!path.exists());
+        assert!(open_db_read_only(&vault).is_err());
+        assert!(!path.exists(), "read-only openが空DBを作ってはならない");
+
+        drop(open_db(&vault).unwrap());
+        let conn = open_db_read_only(&vault).unwrap();
+        let query_only: i64 = conn
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(query_only, 1);
+        assert!(
+            conn.execute("INSERT INTO meta(key, value) VALUES('probe', 'write')", [])
+                .is_err()
+        );
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM meta WHERE key='probe'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+    }
 
     #[test]
     fn sync_and_incremental() {

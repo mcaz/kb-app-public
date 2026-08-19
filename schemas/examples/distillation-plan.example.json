@@ -1,0 +1,67 @@
+{
+  "schema": "kb-app.distillation-plan/v1",
+  "planner_profile": "mechanical-v1",
+  "plan_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "read_only": true,
+  "snapshot": {
+    "schema": "kb-app.distillation-snapshot/v1",
+    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "note_count": 2
+  },
+  "summary": {
+    "operations": {
+      "keep": 0,
+      "normalize": 0,
+      "revise": 1,
+      "extract": 1,
+      "split_canonical": 0,
+      "merge_candidate": 0,
+      "supersede_candidate": 0,
+      "unresolved": 0
+    },
+    "risks": {
+      "none": 0,
+      "low": 0,
+      "medium": 2,
+      "high": 0,
+      "blocked": 0
+    },
+    "actionable": 2
+  },
+  "entries": [
+    {
+      "note": "notes/current-policy",
+      "title": "現行方針",
+      "note_uid": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "authority": {
+        "namespace": "decisions",
+        "role": "canonical",
+        "status": "active",
+        "scope": "kb-app/current-policy"
+      },
+      "input_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "operation": "revise",
+      "risk": "medium",
+      "signals": ["canonical_has_pending_update"],
+      "reason": "active canonicalにupdates relationがあり、更新材料の反映状況を確認する必要がある",
+      "depends_on": ["notes/new-observation"]
+    },
+    {
+      "note": "notes/new-observation",
+      "title": "新しい観測",
+      "note_uid": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      "authority": {
+        "namespace": "records",
+        "role": "record",
+        "status": "active",
+        "scope": "kb-app/new-observation"
+      },
+      "input_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "operation": "extract",
+      "risk": "medium",
+      "signals": ["record_updates_canonical"],
+      "reason": "recordがactive canonicalの更新材料として型付けされている",
+      "depends_on": ["notes/current-policy"]
+    }
+  ]
+}

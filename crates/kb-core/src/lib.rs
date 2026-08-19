@@ -13,6 +13,7 @@ pub mod care;
 pub mod client_surface;
 pub mod connect;
 pub mod degradation;
+pub mod distillation;
 pub mod embed;
 pub mod error;
 mod external_tools;

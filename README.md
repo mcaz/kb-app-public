@@ -10,7 +10,21 @@
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
 - Rule Delivery評価: [docs/rule-delivery-evaluation.md](docs/rule-delivery-evaluation.md) — Codex / Claude Code共通の隔離20ケース
 - AI 間の開発引き継ぎ: [docs/development-context.md](docs/development-context.md) — Context Pack v1
-- 状態: **private backup のアプリ内 GitHub 認証・実受入まで完了(2026-08-16)** — OAuth device flow、OS キーチェーン保存、private+push gate、複数端末の検査付き復元を実 GitHub で確認済み。残: Stop 安全網の再設計、お手入れ FR-C7
+- 状態: **private backup実受入、authority付き正本判定、snapshot固定のread-only蒸留plannerまで実装(2026-08-20)** — `plan_distillation` / `kb distill plan`はDBを変更せず、入力hash・snapshot digest・決定的plan ID付きで候補を列挙する。semantic executorとatomic supersedeは次段
+
+## 継続蒸留plan
+
+準備済みSQLite DBを、pull・sync・migrationなしのread-only snapshotとして点検する。
+
+```sh
+kb --vault <name> distill plan
+kb --vault <name> distill plan --format markdown
+```
+
+同じsnapshotからは同じJSONが出る。これは承認キューや実行指示ではなく、後続のsemantic executorが
+入力版を再照合するための監査記録である。出力契約は
+[schemas/distillation-plan.schema.json](schemas/distillation-plan.schema.json)、設計判断は
+[ADR-0010](docs/adr/0010-read-only-distillation-planner.md)を参照。
 
 ## GitHub OAuth の build 設定
 
