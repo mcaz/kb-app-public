@@ -81,7 +81,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
    2026-08-10 改定・本人決定)。
    - **メモ(origin: human)= 人間の領分**: AI は読む・つなげる・気づきを知らせるまで。
      本文の変更・削除は不可
-   - **育つノート(origin: agent)= AI の領分**: AI が update / remove で直接手入れする
+   - **育つノート(origin: agent)= AI の領分**: AI が update と対象固定型の二段階削除で自律的に手入れする
      (更新・統合・陳腐化の削除)。**人間は GUI からは読むだけ**(編集・削除ボタンなし)
    - 越境は明示操作のみ: 「自分のメモにする」(agent → human。以後 AI は読むだけ)。
      逆方向(メモを AI に任せる)は将来
@@ -148,7 +148,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   外部 API はオプトイン。導入後の埋め込み停止は劣化として明示する
 - **FR-C4 ライフサイクル API**: propose(draft 起票)/ confirm(確定)/ archive / move。
   すべてコアの API として実装し、GUI・CLI・AI ツールはこれを呼ぶだけ
-- **FR-C5 MCP サーバー**: search / get / recent / propose に加え、**update / remove
+- **FR-C5 MCP サーバー**: search / get / recent / propose に加え、**update / prepare_remove /
+  commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
   新規添付・16MiB上限)**を公開。confirm は公開しない(確定は人の操作)。
   所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
@@ -158,11 +159,21 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     被リンクは出リンクより低く扱い、重複・循環・deprecatedを除外する。選外候補はID・タイトル・
     選外理由を構造化応答へ残し、必要な場合だけ追加のMCP `get`で取得できる。候補ごとのMarkdown再読・
     索引同期・埋め込み追い付きを行わない
+  - `propose` / `update`のMCP schemaは既存タグだけを受け、`allow_new_tags`を公開しない。未知引数として
+    渡されても書込前に拒否し、新語追加はtrusted UI / CLIの別承認経路に限定する
+  - note read / create / update / attach、degradation、KB OFF、tool errorは
+    `structuredContent.conversation_events` v1へ`required=true`で返す。対応hostはこれを会話へ
+    決定論的に描画し、モデルがリンク・警告を言い直すかどうかを保証点にしない
+  - 直接`remove`は公開しない。`prepare_remove`は対象IDと内容指紋へ固定した5分token、対象名、
+    `removal_prepared` eventを返す。`commit_remove`はdestructive annotationを持ち、同じnoteと未使用token
+    だけを受理する。AIは蒸留・メンテナンス方針の範囲内で個別の人間承認なしに両toolを続けて実行できる。
+    期限切れ、対象差し替え、準備後変更、二重実行は削除前に拒否し、対象・理由・履歴を報告する
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
-  構造(モデルごとの規律最適化の器)。
-  **保留(2026-08-10 本人決定)**: 器を先に作らず、現接続先の **Claude への直接最適化を
-  先行**し、後続開発(Stop 安全網・FR-C7 等)はその観察に合わせる。出し分けの器は
-  2社目のプロバイダ接続時に、Claude 最適化で得た知見から設計する
+  構造(2026-08-19実装)。`ClientSurface`はClaude Code / Codex CLI / Claude Desktop /
+  ChatGPT / 評価harness / unknownをactor先頭segmentから厳密に判定し、同じmodel familyでも
+  OS guard・自動retrieval・current-note schemaを分ける。Codex CLI / Claude Codeの`get.note`は
+  必須、アプリが現在ノートを記録できるClaude Desktopだけ省略可能。initializeの
+  `capabilities.experimental.kbApp`へsurfaceと保証レベルを構造化して返し、unknownはfail-closedとする
 - **FR-C8 ファイル(2026-08-10 添付として実装 → 2026-08-12 Artifact へ改定 →
   2026-08-13 コアとノート内のファイル欄まで実装、旧経路は読み取り専用に。
   2026-08-18 MCP content-only添付とgetのArtifact一覧を実装。
@@ -217,9 +228,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 - **FR-A5 起動ランチャ**: 登録済みの AI を、**ノート一覧・ノート画面からそのノートの文脈で
   直接起動**できる。起動形態は AI ごとに事前設定 — デスクトップアプリ / ターミナル
   (既定はアプリ。ターミナルはエンジニア向けで、Claude Code 等を vault ディレクトリで開く)。
-  ノート文脈の受け渡しは、コアが「いま見ているノート」状態を持ち MCP 側から参照可能にする
-  方式を第一候補とする(確実に注入できるターミナル起動と、起動のみのアプリ起動の差は
-  技術設計で詰める)
+  ノート文脈の受け渡しは、コアが「いま見ているノート」状態を持ち MCP 側から参照可能にする。
+  v0ではClaude Desktopだけ`get`のnote省略を公開し、Codex CLI / Claude Code / ChatGPTは
+  schema上必須にして、存在しない現在ノートを暗黙参照しない
 - **FR-A6 GitHub 連携(同期型へ改定 — 2026-08-10 本人決定)**: ユーザーが設定した
   GitHub リポジトリを唯一のバックアップ先とし、**ノートの変更は随時 push**(明示のみ →
   自動へ変更)、**複数デバイス運用を想定して、AI とのメッセージのやり取り(MCP ツール
@@ -260,8 +271,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   ClaudeとGPT／Codexを個別にON／OFFでき、全体OFFは個別設定より優先する。Claude Codeの
   前出し・Stopフックも同じ設定に従う。生ファイルはON/OFFにかかわらず、Codexの管理
   permission profileとClaude Codeの管理sandboxを通じてOSレベルで読み書きを拒否する。
+  Claude Desktop / ChatGPT通常チャット面はkb-app MCPに生path入力を公開しないbroker境界で分離し、
+  coding agent用OS policyやmanaged hookの存在を通常チャットの保証として流用しない。
   ONはMCPからデータを返せるようにし、OFFは接続とtool schemaを残したままデータ経路を閉じる。
-  管理ポリシーの導入状態と登録Vaultのpathが一致しない場合は、設定switchを操作不能にしてMCPも
+  coding agentで管理ポリシーの導入状態と登録Vaultのpathが一致しない場合は、設定switchを操作不能にしてMCPも
   同じ終端結果でfail-closedとする。既存の管理者ポリシーは自動で
   上書きしない。macOSでは設定Modalから管理者認証を経て導入・更新できる。CodexとClaude Codeの
   managed `UserPromptSubmit` hookは、モデルが自発的にtoolを選ぶ前にkb-app MCPの
@@ -316,7 +329,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   UI に現れた形)。FR-A3 はこの形に置き換え
 - 人間の操作面: 読む・検索する・承諾する・添付する・Claude に指示する(書き換えは Claude 経由)。
   新規作成・編集・退役・削除の GUI / CLI は撤去。通常の書き込みは AI クライアントの
-  propose / update / remove に限定し、移植の raw write はコア内部の互換経路に閉じる
+  propose / update / prepare_remove / commit_remove に限定し、移植の raw write はコア内部の互換経路に閉じる
 - タグ契約は propose / update / 旧Markdown import の全入口で同じcore validationを通す。
   importでも1〜4個・語形は常時強制し、語彙外は明示フラグがある場合だけ許可する。
   外部編集や既存データの違反は読み込み時に黙って修正・破棄せず、careで可視化する

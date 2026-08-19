@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/rule-delivery-trace.schema.json",
+  "title": "kb-app Rule Delivery Matrix client traces",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "traces"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "traces": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/trace"}
+    }
+  },
+  "$defs": {
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "tool_call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "pre_tool_text", "arguments", "result", "is_error"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "pre_tool_text": {"type": ["string", "null"]},
+        "arguments": {},
+        "result": {},
+        "is_error": {"type": "boolean"}
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "mode", "client_surface", "model", "model_version", "os", "run", "delivered_rule_ids", "event_rule_ids", "degraded_codes", "tool_calls", "response", "input_tokens", "latency_ms"],
+      "properties": {
+        "case_id": {"type": "string", "pattern": "^[ATEC][1-5]$"},
+        "mode": {"enum": ["semantic_only", "rules_top_k", "always_topic", "always_topic_event"]},
+        "client_surface": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "model_version": {"type": ["string", "null"]},
+        "os": {"type": "string", "minLength": 1},
+        "run": {"type": "integer", "minimum": 1},
+        "delivered_rule_ids": {"$ref": "#/$defs/strings"},
+        "event_rule_ids": {"$ref": "#/$defs/strings"},
+        "degraded_codes": {"$ref": "#/$defs/strings"},
+        "tool_calls": {"type": "array", "items": {"$ref": "#/$defs/tool_call"}},
+        "response": {"type": "string"},
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "latency_ms": {"type": ["integer", "null"], "minimum": 0}
+      }
+    }
+  }
+}

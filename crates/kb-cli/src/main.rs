@@ -156,12 +156,63 @@ enum EvalCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// 固定20ケースについて4方式のRule配信contextを生成する
+    RuleDeliveryPlan {
+        /// schemas/rule-delivery-eval.schema.jsonに従うsuite
+        #[arg(long)]
+        suite: PathBuf,
+        #[arg(long, value_enum)]
+        mode: RuleDeliveryModeArg,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// 固定suiteから実KBと分離した使い捨てVaultを作る
+    RuleDeliveryFixture {
+        #[arg(long)]
+        suite: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// client実行traceを機械判定する
+    RuleDeliveryScore {
+        #[arg(long)]
+        suite: PathBuf,
+        #[arg(long)]
+        traces: PathBuf,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ReportFormat {
     Json,
     Markdown,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RuleDeliveryModeArg {
+    SemanticOnly,
+    RulesTopK,
+    AlwaysTopic,
+    AlwaysTopicEvent,
+}
+
+impl From<RuleDeliveryModeArg> for kb_core::rule_delivery_eval::DeliveryMode {
+    fn from(value: RuleDeliveryModeArg) -> Self {
+        match value {
+            RuleDeliveryModeArg::SemanticOnly => Self::SemanticOnly,
+            RuleDeliveryModeArg::RulesTopK => Self::RulesTopK,
+            RuleDeliveryModeArg::AlwaysTopic => Self::AlwaysTopic,
+            RuleDeliveryModeArg::AlwaysTopicEvent => Self::AlwaysTopicEvent,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -458,6 +509,66 @@ fn main() -> Result<()> {
                     println!("{}", rendered.trim_end());
                 }
             }
+            EvalCommand::RuleDeliveryPlan {
+                suite,
+                mode,
+                format,
+                output,
+            } => {
+                let input = fs::read_to_string(&suite).with_context(|| {
+                    format!("Rule Delivery suiteを読めない: {}", suite.display())
+                })?;
+                let suite: kb_core::rule_delivery_eval::RuleDeliverySuite =
+                    serde_json::from_str(&input)
+                        .with_context(|| "Rule Delivery suite JSONが不正")?;
+                kb_core::rule_delivery_eval::validate_official_suite(&suite)?;
+                let plan = kb_core::rule_delivery_eval::prepare(&suite, mode.into())?;
+                let rendered = match format {
+                    ReportFormat::Json => serde_json::to_string_pretty(&plan)?,
+                    ReportFormat::Markdown => {
+                        anyhow::bail!("Rule Delivery planは--format jsonのみ対応")
+                    }
+                };
+                write_eval_output(output.as_ref(), &rendered, "Rule Delivery plan")?;
+            }
+            EvalCommand::RuleDeliveryFixture { suite, output } => {
+                let input = fs::read_to_string(&suite).with_context(|| {
+                    format!("Rule Delivery suiteを読めない: {}", suite.display())
+                })?;
+                let suite: kb_core::rule_delivery_eval::RuleDeliverySuite =
+                    serde_json::from_str(&input)
+                        .with_context(|| "Rule Delivery suite JSONが不正")?;
+                let vault = kb_core::rule_delivery_eval::create_fixture(&suite, &output)?;
+                println!("{}", vault.root.display());
+            }
+            EvalCommand::RuleDeliveryScore {
+                suite,
+                traces,
+                format,
+                output,
+            } => {
+                let suite_input = fs::read_to_string(&suite).with_context(|| {
+                    format!("Rule Delivery suiteを読めない: {}", suite.display())
+                })?;
+                let suite: kb_core::rule_delivery_eval::RuleDeliverySuite =
+                    serde_json::from_str(&suite_input)
+                        .with_context(|| "Rule Delivery suite JSONが不正")?;
+                kb_core::rule_delivery_eval::validate_official_suite(&suite)?;
+                let trace_input = fs::read_to_string(&traces).with_context(|| {
+                    format!("Rule Delivery traceを読めない: {}", traces.display())
+                })?;
+                let traces: kb_core::rule_delivery_eval::TraceSuite =
+                    serde_json::from_str(&trace_input)
+                        .with_context(|| "Rule Delivery trace JSONが不正")?;
+                let report = kb_core::rule_delivery_eval::score(&suite, &traces)?;
+                let rendered = match format {
+                    ReportFormat::Json => serde_json::to_string_pretty(&report)?,
+                    ReportFormat::Markdown => {
+                        kb_core::rule_delivery_eval::render_report_markdown(&report)
+                    }
+                };
+                write_eval_output(output.as_ref(), &rendered, "Rule Delivery report")?;
+            }
         },
         Command::Mcp { client } => {
             kb_core::mcp::serve(&client, || open_vault(cli.vault.as_deref()))?;
@@ -465,7 +576,7 @@ fn main() -> Result<()> {
         Command::Settings { command } => match command {
             SettingsCommand::AiEnabled { client } => {
                 let enabled = kb_core::settings::load()?.ai_kb_enabled_for(&client)
-                    && kb_core::ai_guard::client_is_enforced(&client);
+                    && kb_core::ai_guard::client_connection_is_allowed(&client);
                 println!("{}", serde_json::json!({"enabled": enabled}));
             }
             SettingsCommand::AiGuardStatus => {
@@ -483,6 +594,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn write_eval_output(output: Option<&PathBuf>, rendered: &str, label: &str) -> Result<()> {
+    if let Some(path) = output {
+        fs::write(path, format!("{}\n", rendered.trim_end()))
+            .with_context(|| format!("{label}を書けない: {}", path.display()))?;
+        println!("{}", path.display());
+    } else {
+        println!("{}", rendered.trim_end());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -490,7 +612,7 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{Cli, Command, EvalCommand, ReportFormat};
+    use super::{Cli, Command, EvalCommand, ReportFormat, RuleDeliveryModeArg};
 
     fn command_paths(command: &clap::Command, prefix: Option<&str>, paths: &mut BTreeSet<String>) {
         for subcommand in command.get_subcommands() {
@@ -522,6 +644,9 @@ mod tests {
             "embed status".to_string(),
             "eval".to_string(),
             "eval retrieval".to_string(),
+            "eval rule-delivery-fixture".to_string(),
+            "eval rule-delivery-plan".to_string(),
+            "eval rule-delivery-score".to_string(),
             "get".to_string(),
             "import".to_string(),
             "mcp".to_string(),
@@ -584,6 +709,36 @@ mod tests {
         };
         assert_eq!(cases, PathBuf::from("/private/golden.json"));
         assert!(matches!(format, ReportFormat::Markdown));
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn rule_delivery_plan_requires_an_explicit_mode() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "eval",
+            "rule-delivery-plan",
+            "--suite",
+            "/private/rules.json",
+            "--mode",
+            "always-topic-event",
+        ])
+        .unwrap();
+        let Command::Eval {
+            command:
+                EvalCommand::RuleDeliveryPlan {
+                    suite,
+                    mode,
+                    format,
+                    output,
+                },
+        } = cli.command
+        else {
+            panic!("eval rule-delivery-planとして解釈されなかった");
+        };
+        assert_eq!(suite, PathBuf::from("/private/rules.json"));
+        assert!(matches!(mode, RuleDeliveryModeArg::AlwaysTopicEvent));
+        assert!(matches!(format, ReportFormat::Json));
         assert!(output.is_none());
     }
 }

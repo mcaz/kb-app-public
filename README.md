@@ -8,6 +8,7 @@
 - 設計判断(ADR): [docs/adr/](docs/adr/) — 0001: コアは Rust、UI は TypeScript
 - コーディング規約: [docs/coding-guidelines.md](docs/coding-guidelines.md) — 機械が守る分と、残りの書き方
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
+- Rule Delivery評価: [docs/rule-delivery-evaluation.md](docs/rule-delivery-evaluation.md) — Codex / Claude Code共通の隔離20ケース
 - AI 間の開発引き継ぎ: [docs/development-context.md](docs/development-context.md) — Context Pack v1
 - 状態: **private backup のアプリ内 GitHub 認証・実受入まで完了(2026-08-16)** — OAuth device flow、OS キーチェーン保存、private+push gate、複数端末の検査付き復元を実 GitHub で確認済み。残: Stop 安全網の再設計、お手入れ FR-C7
 

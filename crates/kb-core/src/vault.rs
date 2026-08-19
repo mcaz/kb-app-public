@@ -283,28 +283,37 @@ impl Vault {
         Ok(note)
     }
 
-    /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
-    pub fn agent_delete_note(
-        &self,
-        conn: &rusqlite::Connection,
-        id: &str,
-        client: &str,
-    ) -> Result<()> {
+    /// MCPの削除準備で所有ガードと対象snapshotを同じDB正本から取得する。
+    pub fn agent_removal_candidate(&self, conn: &rusqlite::Connection, id: &str) -> Result<Note> {
         self.require_origin(
             conn,
             id,
             "agent",
             "旧 human ノートは削除できない(互換読み取り専用)",
-        )?;
+        )
+    }
+
+    /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
+    pub fn agent_delete_note(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+        reason: &str,
+        client: &str,
+    ) -> Result<()> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.chars().count() > 500 || reason.contains(['\n', '\r']) {
+            bail!("削除理由は1〜500文字の一行で指定する");
+        }
         let title = self
-            .read_note_from_db(conn, id)?
+            .agent_removal_candidate(conn, id)?
             .front
             .title
             .unwrap_or_else(|| id.to_string());
         crate::note_store::delete(
             conn,
             id,
-            &format!("**Deletion**: 「{title}」({id})を削除。"),
+            &format!("**Deletion**: 「{title}」({id})を削除。理由: {reason}"),
             &format!("note: delete {id} (via {client})"),
         )?;
         self.flush_note_exports(conn)?;
@@ -760,7 +769,9 @@ mod tests {
                 "更新できてはいけない: {id}"
             );
             assert!(
-                vault.agent_delete_note(&conn, id, "test/client").is_err(),
+                vault
+                    .agent_delete_note(&conn, id, "境界テスト", "test/client")
+                    .is_err(),
                 "削除できてはいけない: {id}"
             );
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), original);
@@ -802,7 +813,7 @@ mod tests {
         );
         assert!(
             vault
-                .agent_delete_note(&conn, "notes/linked", "test/client")
+                .agent_delete_note(&conn, "notes/linked", "添付境界テスト", "test/client")
                 .is_err()
         );
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), original);
@@ -815,6 +826,42 @@ mod tests {
         let note = agent_note("同期設計", "本文");
         vault.write_note_fixture("設計/同期/端末間", &note).unwrap();
         assert_eq!(vault.read_note("設計/同期/端末間").unwrap().body, "本文\n");
+    }
+
+    #[test]
+    fn agent_delete_requires_a_bounded_single_line_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let id = vault
+            .propose_for_test(
+                "削除理由の検証",
+                "本文",
+                None,
+                &["dev".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        for reason in ["", "一行目\n二行目"] {
+            let err = vault
+                .agent_delete_note(&conn, &id, reason, "test/client")
+                .unwrap_err();
+            assert!(err.to_string().contains("削除理由は1〜500文字の一行"));
+            assert_eq!(vault.read_note(&id).unwrap().body, "本文\n");
+        }
+
+        let too_long = "あ".repeat(501);
+        let err = vault
+            .agent_delete_note(&conn, &id, &too_long, "test/client")
+            .unwrap_err();
+        assert!(err.to_string().contains("削除理由は1〜500文字の一行"));
+        assert_eq!(vault.read_note(&id).unwrap().body, "本文\n");
+
+        vault
+            .agent_delete_note(&conn, &id, "重複ノートへ統合済み", "test/client")
+            .unwrap();
+        assert!(vault.read_note(&id).is_err());
     }
 
     #[test]
@@ -887,7 +934,11 @@ mod tests {
                 )
                 .is_err()
         );
-        assert!(vault.agent_delete_note(&conn, &legacy, "claude/x").is_err());
+        assert!(
+            vault
+                .agent_delete_note(&conn, &legacy, "所有ガードテスト", "claude/x")
+                .is_err()
+        );
 
         assert_eq!(
             vault.read_note(&ai).unwrap().front.origin.as_deref(),
@@ -914,7 +965,11 @@ mod tests {
         let ai2 = vault
             .propose_for_test("捨てる知見", "本文", None, &["dev".into()], "claude/x")
             .unwrap();
-        assert!(vault.agent_delete_note(&conn, &ai2, "claude/x").is_ok());
+        assert!(
+            vault
+                .agent_delete_note(&conn, &ai2, "重複整理", "claude/x")
+                .is_ok()
+        );
     }
 
     #[test]

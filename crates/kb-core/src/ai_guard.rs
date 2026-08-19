@@ -15,6 +15,7 @@ use std::process::Command;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+use crate::client_surface::{ClientSurface, RawVaultBoundary};
 use crate::error::{CoreError, Result};
 
 const CODEX_MARKER: &str = "# Managed by kb-app: AI raw-vault access guard";
@@ -81,22 +82,27 @@ pub fn status() -> Result<AiGuardStatus> {
     Ok(status)
 }
 
-/// MCP は、対応クライアントの OS ガードを確認できたときだけ Vault を開く。
-/// 未知クライアントを推測で許可すると、同じ問題を新しい連携で再導入するため閉じる。
-pub fn client_is_enforced(client: &str) -> bool {
-    let Ok(status) = status() else {
-        return false;
-    };
-    let client = client.to_ascii_lowercase();
-    if client.contains("claude") {
-        status.claude == GuardTargetState::Enforced
-    } else if ["gpt", "codex", "chatgpt", "openai"]
-        .iter()
-        .any(|name| client.contains(name))
-    {
-        status.codex == GuardTargetState::Enforced
-    } else {
-        false
+/// MCP がこのsurfaceへ Vault データを仲介してよいかを返す。
+///
+/// shell / file toolを持つcoding agentは管理OS sandboxが必須。通常チャット面は
+/// kb-app MCP自体が生path能力を公開しないbroker境界で許可する。未知surfaceは、
+/// model名から推測せずfail-closedにする。
+pub fn client_connection_is_allowed(client: &str) -> bool {
+    let surface = ClientSurface::from_hint(client);
+    match surface.capabilities().raw_vault_boundary {
+        RawVaultBoundary::McpToolBoundary => true,
+        RawVaultBoundary::ManagedOsSandbox => status()
+            .ok()
+            .is_some_and(|status| managed_surface_is_enforced(surface, &status)),
+        RawVaultBoundary::EvaluationFixture | RawVaultBoundary::Unsupported => false,
+    }
+}
+
+fn managed_surface_is_enforced(surface: ClientSurface, status: &AiGuardStatus) -> bool {
+    match surface {
+        ClientSurface::ClaudeCode => status.claude == GuardTargetState::Enforced,
+        ClientSurface::CodexCli => status.codex == GuardTargetState::Enforced,
+        _ => false,
     }
 }
 
@@ -584,6 +590,38 @@ mod tests {
             claude_settings: claude_settings(&guarded_paths, hook_executable).unwrap(),
             guarded_paths,
         }
+    }
+
+    fn example_status(codex: GuardTargetState, claude: GuardTargetState) -> AiGuardStatus {
+        AiGuardStatus {
+            ready: codex == GuardTargetState::Enforced && claude == GuardTargetState::Enforced,
+            codex,
+            claude,
+            guarded_paths: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn only_coding_surfaces_depend_on_their_matching_managed_guard() {
+        let codex_only = example_status(GuardTargetState::Enforced, GuardTargetState::Missing);
+        assert!(managed_surface_is_enforced(
+            ClientSurface::CodexCli,
+            &codex_only
+        ));
+        assert!(!managed_surface_is_enforced(
+            ClientSurface::ClaudeCode,
+            &codex_only
+        ));
+        assert!(!managed_surface_is_enforced(
+            ClientSurface::ClaudeDesktop,
+            &codex_only
+        ));
+
+        assert!(client_connection_is_allowed("claude-desktop/claude"));
+        assert!(client_connection_is_allowed("chatgpt/openai"));
+        assert!(!client_connection_is_allowed(
+            "future-client/claude-gpt-codex"
+        ));
     }
 
     #[test]

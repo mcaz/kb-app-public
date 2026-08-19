@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+use crate::client_surface::{ClientFamily, ClientSurface};
 use crate::error::{CoreError, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -40,33 +41,10 @@ impl Settings {
             return false;
         }
 
-        match ClientFamily::from_hint(client) {
+        match ClientSurface::from_hint(client).family() {
             ClientFamily::Claude => self.claude_kb_enabled,
             ClientFamily::Gpt => self.gpt_kb_enabled,
             ClientFamily::Other => true,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ClientFamily {
-    Claude,
-    Gpt,
-    Other,
-}
-
-impl ClientFamily {
-    fn from_hint(client: &str) -> Self {
-        let client = client.to_ascii_lowercase();
-        if client.contains("claude") {
-            Self::Claude
-        } else if ["gpt", "codex", "chatgpt", "openai"]
-            .iter()
-            .any(|name| client.contains(name))
-        {
-            Self::Gpt
-        } else {
-            Self::Other
         }
     }
 }
@@ -214,6 +192,8 @@ mod tests {
         assert!(settings.ai_kb_enabled_for("codex-cli/gpt-5-codex"));
         assert!(settings.ai_kb_enabled_for("chatgpt/openai"));
         assert!(settings.ai_kb_enabled_for("future-client/model"));
+        // model名の部分一致で未知surfaceを既存familyへ誤分類しない。
+        assert!(settings.ai_kb_enabled_for("future-client/claude-gpt-codex"));
 
         settings.ai_kb_enabled = false;
         assert!(!settings.ai_kb_enabled_for("codex-cli/gpt-5-codex"));

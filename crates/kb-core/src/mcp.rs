@@ -1,29 +1,125 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / recent / propose / update / remove / attach。
+//! 公開ツールは search / get / recent / propose / update / prepare_remove /
+//! commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
 //! 段階で公式 Rust SDK(rmcp)への載せ替えを再評価する(ADR-0001 スタック表)。
 
+use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
+use rand::RngCore as _;
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
+use crate::client_surface::ClientSurface;
 use crate::index::{open_db, sync_with_degradations};
 use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
 const KB_DISABLED_CODE: &str = "kb_disabled";
+const REMOVAL_TOKEN_TTL: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug)]
+struct PendingRemoval {
+    note_id: String,
+    title: String,
+    reason: String,
+    fingerprint: [u8; 32],
+    expires_at: Instant,
+}
+
+#[derive(Debug, Default)]
+struct RemovalPlans {
+    pending: HashMap<String, PendingRemoval>,
+}
+
+impl RemovalPlans {
+    fn prepare(
+        &mut self,
+        note_id: &str,
+        title: &str,
+        reason: &str,
+        note_text: &str,
+    ) -> Result<String> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.chars().count() > 500 || reason.contains(['\n', '\r']) {
+            anyhow::bail!("削除理由は1〜500文字の一行で指定する");
+        }
+        self.pending
+            .retain(|_, pending| pending.expires_at > Instant::now());
+        loop {
+            let mut bytes = [0_u8; 32];
+            rand::rng().fill_bytes(&mut bytes);
+            let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            if self.pending.contains_key(&token) {
+                continue;
+            }
+            self.pending.insert(
+                token.clone(),
+                PendingRemoval {
+                    note_id: note_id.to_string(),
+                    title: title.to_string(),
+                    reason: reason.to_string(),
+                    fingerprint: Sha256::digest(note_text.as_bytes()).into(),
+                    expires_at: Instant::now() + REMOVAL_TOKEN_TTL,
+                },
+            );
+            return Ok(token);
+        }
+    }
+
+    fn consume(&mut self, token: &str, note_id: &str) -> Result<PendingRemoval> {
+        let pending = self.pending.remove(token).ok_or_else(|| {
+            anyhow::anyhow!("削除tokenが無効または使用済み。prepare_removeからやり直す")
+        })?;
+        if pending.expires_at <= Instant::now() {
+            anyhow::bail!("削除tokenの期限が切れた。prepare_removeからやり直す");
+        }
+        if pending.note_id != note_id {
+            anyhow::bail!("削除対象がprepare_remove時と一致しない。prepare_removeからやり直す");
+        }
+        Ok(pending)
+    }
+}
+
+impl PendingRemoval {
+    fn require_unchanged(&self, note_text: &str) -> Result<()> {
+        let fingerprint: [u8; 32] = Sha256::digest(note_text.as_bytes()).into();
+        if self.fingerprint != fingerprint {
+            anyhow::bail!("削除対象がprepare_remove後に変更された。内容を確認してからやり直す");
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ServeOptions {
     /// tool callの前にGitHub pullを試す。短命な自動retrieval processではfalseにし、
     /// Keychain認証やremote I/Oを発話回数へ結び付けない。
     pub remote_sync: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ToolCallOptions {
+    remote_sync: bool,
+    update_embeddings: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct EvaluationServeOptions {
+    pub instructions: String,
+    pub event_rules: Vec<crate::rule_delivery_eval::PreparedEventRule>,
+    pub injected_degradations: Vec<String>,
+    pub trace_path: Option<PathBuf>,
 }
 
 impl Default for ServeOptions {
@@ -33,10 +129,9 @@ impl Default for ServeOptions {
 }
 
 /// server instructions(FR-C5)。「まず引く・終わりに起票を提案」の規律を配る。
-/// 旧 KB の M1/M3 実測で「instructions だけでフック無し環境でも規律が成立」を確認済み。
-/// FR-C6(プロバイダ別出し分け)は保留中のため、現接続先の Claude に直接最適化した文面
-/// (2026-08-10 本人決定: Claude 最適化を先行し、後続開発はその観察に合わせる)。
-const INSTRUCTIONS: &str = "\
+/// 裁量が残る「引く・育てる」の規律。能力差はClientSurface別schemaへ、必須表示は
+/// structured conversation eventへ分離し、instructionsだけを保証点にしない。
+const INSTRUCTIONS_BASE: &str = "\
 ユーザーの個人ナレッジベース(kb-app)への取次口。会話で「引く・育てる」を回す。\n\
 【契約(機構で強制。正本はアプリの docs/contract.md)】ノートはタグ1〜4個必須/\
 形式はアプリが管理(frontmatter を自分で書かない)。\n\
@@ -44,9 +139,11 @@ const INSTRUCTIONS: &str = "\
 推測で答える前に search(自然文可・意味で当たる。外したら語を変えて再検索)。ヒットは get で\
 全文を読んでから答える。`[kb-app 自動retrieval — MCP]` が届いていれば、その検索・リンク展開・本文取得は\
 実行済みなので、文脈が不足するときだけ追加検索する。本文中の /path.md リンクは必要なら辿る。\
-「このノート」=引数なしの get。該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
+該当なしは正常(その旨を添える)。degraded があれば回答に添える。\n\
 【育てる】残す価値のある知見・決定が生まれたら、会話の終わりに propose を提案(承諾を得て\
-から)。既存ノートの手入れは update / remove で直接(大きな変更は一言添える)。\
+から)。既存ノートの手入れは update で直接行う。蒸留・メンテナンス中の削除もAIの領分で、\
+prepare_remove で対象と理由を固定し、追加の人間承認なしに commit_remove へ同じnoteと\
+短命tokenを渡す。対象と理由は会話へ報告する。\
 本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
 【ファイル】会話で作成・受領した画像や文書を既存ノートの持ち物にするときは attach を使う。\
 ローカルpathではなく内容をBase64で渡す。保存先・持ち出し区分・来歴はkb-appが固定する。\n\
@@ -54,8 +151,20 @@ const INSTRUCTIONS: &str = "\
 update で本文に /path.md リンクを足す(ユーザーに可否を尋ねる形にはしない)。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
-提案)は勝手に変えない。それ以外はあなたの裁量で付与・統合・整理してよい(まとめて整理したら\
-一言報告)。新語を乱発せず既存語彙に揃える。";
+提案)は勝手に変えない。MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
+通常の書込で追加せず、trusted UI / CLIの別承認が必要だと伝える。";
+
+fn instructions_for(client: &str) -> String {
+    let current_note = if ClientSurface::from_hint(client)
+        .capabilities()
+        .current_note_argument_optional
+    {
+        "【現在ノート】ユーザーが「このノート」と言った場合だけ、note引数なしのgetを使える。\n"
+    } else {
+        "【現在ノート】getのnote引数は必須。search結果などのノートIDを必ず指定する。\n"
+    };
+    format!("{INSTRUCTIONS_BASE}\n{current_note}")
+}
 
 /// OFF 時は KB の内容や保存先を渡さず、迂回禁止だけを制御プレーンとして配る。
 /// ツールを非公開にするだけでは、汎用 shell を持つ AI が Vault を直読みできるため。
@@ -72,12 +181,49 @@ pub fn serve(client_hint: &str, open_vault: impl FnMut() -> Result<Vault>) -> Re
 pub fn serve_with_options(
     client_hint: &str,
     options: ServeOptions,
+    open_vault: impl FnMut() -> Result<Vault>,
+) -> Result<()> {
+    serve_loop(client_hint, options, None, open_vault)
+}
+
+/// 固定fixture専用のMCP server。端末設定とAI guardを評価対象へ混ぜず、明示された
+/// 一時Vaultだけを開く。production appからは呼ばない。
+pub fn serve_evaluation(
+    client_hint: &str,
+    evaluation: EvaluationServeOptions,
+    open_vault: impl FnMut() -> Result<Vault>,
+) -> Result<()> {
+    serve_loop(
+        client_hint,
+        ServeOptions { remote_sync: false },
+        Some(evaluation),
+        open_vault,
+    )
+}
+
+fn serve_loop(
+    client_hint: &str,
+    options: ServeOptions,
+    evaluation: Option<EvaluationServeOptions>,
     mut open_vault: impl FnMut() -> Result<Vault>,
 ) -> Result<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    let mut trace = evaluation
+        .as_ref()
+        .and_then(|options| options.trace_path.as_ref())
+        .map(|path| {
+            OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(path)
+                .with_context(|| format!("評価traceを開けない: {}", path.display()))
+        })
+        .transpose()?;
     let mut vault = None;
+    let mut removal_plans = RemovalPlans::default();
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -96,14 +242,18 @@ pub fn serve_with_options(
         let Some(id) = id else { continue };
         // GUIとは別プロセスなので、各要求で端末設定を読み直す。既に動いている
         // MCPもOFF後の次の要求からVaultへ触れなくなる。設定破損時はfail-closed。
-        let enabled = match crate::settings::load() {
-            Ok(settings) => {
-                settings.ai_kb_enabled_for(client_hint)
-                    && crate::ai_guard::client_is_enforced(client_hint)
-            }
-            Err(error) => {
-                eprintln!("kb mcp: settings unavailable: {}", error.detail());
-                false
+        let enabled = if evaluation.is_some() {
+            true
+        } else {
+            match crate::settings::load() {
+                Ok(settings) => {
+                    settings.ai_kb_enabled_for(client_hint)
+                        && crate::ai_guard::client_connection_is_allowed(client_hint)
+                }
+                Err(error) => {
+                    eprintln!("kb mcp: settings unavailable: {}", error.detail());
+                    false
+                }
             }
         };
         // initialize / list / OFF は Vault の場所すら開かない。ON の tool call が来た
@@ -112,35 +262,132 @@ pub fn serve_with_options(
         if needs_vault && vault.is_none() {
             vault = Some(open_vault()?);
         }
-        let response = match handle(
+        let handled = handle_with_search_options(
             vault.as_ref(),
             client_hint,
             enabled,
-            options.remote_sync,
+            ToolCallOptions {
+                remote_sync: options.remote_sync,
+                update_embeddings: evaluation.is_none(),
+            },
+            &mut removal_plans,
             method,
             msg.get("params"),
-        ) {
-            Ok(Some(result)) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        );
+        let response = match handled {
+            Ok(Some(mut result)) => {
+                if let Some(evaluation) = evaluation.as_ref() {
+                    apply_evaluation_transform(evaluation, method, msg.get("params"), &mut result);
+                }
+                json!({"jsonrpc": "2.0", "id": id, "result": result})
+            }
             Ok(None) => json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32601, "message": format!("unknown method: {method}")}}),
             Err(e) => json!({"jsonrpc": "2.0", "id": id,
                 "error": {"code": -32603, "message": e.to_string()}}),
         };
+        if let Some(trace) = trace.as_mut() {
+            writeln!(
+                trace,
+                "{}",
+                json!({
+                    "at": crate::frontmatter::now_iso(),
+                    "request": msg,
+                    "response": response,
+                })
+            )?;
+            trace.flush()?;
+        }
         writeln!(out, "{response}")?;
         out.flush()?;
     }
     Ok(())
 }
 
+fn apply_evaluation_transform(
+    evaluation: &EvaluationServeOptions,
+    method: &str,
+    params: Option<&Value>,
+    result: &mut Value,
+) {
+    if method == "initialize" {
+        result["instructions"] = json!(evaluation.instructions);
+        return;
+    }
+    if method != "tools/call" {
+        return;
+    }
+    let tool = params
+        .and_then(|params| params.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if tool == "search" && !evaluation.injected_degradations.is_empty() {
+        if let Some(text) = result
+            .pointer("/content/0/text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            let suffix = evaluation
+                .injected_degradations
+                .iter()
+                .map(|code| format!("⚠ 劣化: [{code}] 評価fixtureによる注入"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            *result.pointer_mut("/content/0/text").unwrap() =
+                json!(format!("{}\n{}\n", text.trim_end(), suffix));
+        }
+        result["structuredContent"]["eval_injected_degradations"] =
+            json!(evaluation.injected_degradations);
+    }
+    let event_rules = evaluation
+        .event_rules
+        .iter()
+        .filter(|rule| rule.after_tools.iter().any(|after| after == tool))
+        .map(|rule| {
+            json!({
+                "rule_id": rule.rule_id,
+                "instruction": rule.instruction,
+            })
+        })
+        .collect::<Vec<_>>();
+    if !event_rules.is_empty() {
+        result["structuredContent"]["event_rules"] = json!(event_rules);
+    }
+}
+
 fn method_needs_vault(enabled: bool, method: &str) -> bool {
     enabled && method == "tools/call"
 }
 
+#[cfg(test)]
 fn handle(
     vault: Option<&Vault>,
     client: &str,
     enabled: bool,
     remote_sync: bool,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<Option<Value>> {
+    handle_with_search_options(
+        vault,
+        client,
+        enabled,
+        ToolCallOptions {
+            remote_sync,
+            update_embeddings: true,
+        },
+        &mut RemovalPlans::default(),
+        method,
+        params,
+    )
+}
+
+fn handle_with_search_options(
+    vault: Option<&Vault>,
+    client: &str,
+    enabled: bool,
+    tool_options: ToolCallOptions,
+    removal_plans: &mut RemovalPlans,
     method: &str,
     params: Option<&Value>,
 ) -> Result<Option<Value>> {
@@ -150,24 +397,33 @@ fn handle(
                 .and_then(|p| p.get("protocolVersion"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(PROTOCOL_FALLBACK);
+            let surface = ClientSurface::from_hint(client);
+            let capabilities = surface.capabilities();
             let mut initialized = json!({
                 "protocolVersion": requested,
                 "capabilities": if enabled {
-                    json!({"tools": {}, "prompts": {}})
+                    json!({
+                        "tools": {},
+                        "prompts": {},
+                        "experimental": {"kbApp": capabilities},
+                    })
                 } else {
-                    json!({"tools": {}})
+                    json!({
+                        "tools": {},
+                        "experimental": {"kbApp": capabilities},
+                    })
                 },
                 "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
             });
             initialized["instructions"] = json!(if enabled {
-                INSTRUCTIONS
+                instructions_for(client)
             } else {
-                DISABLED_INSTRUCTIONS
+                DISABLED_INSTRUCTIONS.to_string()
             });
             Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
-        "tools/list" => Ok(Some(json!({"tools": tool_definitions()}))),
+        "tools/list" => Ok(Some(json!({"tools": tool_definitions(client)}))),
         // MCP prompts — 定型操作の入口(常駐コンテキストを増やさず、正しい挙動を
         // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
         "prompts/list" => Ok(Some(if enabled {
@@ -202,7 +458,15 @@ fn handle(
                 .cloned()
                 .unwrap_or(json!({}));
             let vault = vault.context("Vault is unavailable")?;
-            let output = call_tool(vault, client, name, &args, remote_sync);
+            let output = call_tool_with_search_options(
+                vault,
+                client,
+                name,
+                &args,
+                tool_options.remote_sync,
+                tool_options.update_embeddings,
+                removal_plans,
+            );
             match output {
                 Ok(output) => {
                     let mut result = json!({
@@ -216,6 +480,13 @@ fn handle(
                 // ツール内エラーはプロトコルエラーにせず isError で返す(fail-open)
                 Err(e) => Ok(Some(json!({
                     "content": [{"type": "text", "text": format!("エラー: {e}")}],
+                    "structuredContent": {
+                        "conversation_events": [{
+                            "type": "error",
+                            "required": true,
+                            "message": e.to_string(),
+                        }],
+                    },
                     "isError": true,
                 }))),
             }
@@ -235,6 +506,12 @@ fn disabled_tool_result() -> Value {
             "authoritative": true,
             "retryable": false,
             "data": [],
+            "conversation_events": [{
+                "type": "kb_disabled",
+                "required": true,
+                "code": KB_DISABLED_CODE,
+                "message": "KBは設定で無効です。別経路を探索しないでください",
+            }],
         },
         "isError": true,
     })
@@ -253,7 +530,8 @@ fn prompt_text(name: &str) -> Option<&'static str> {
         "タグの整理" => Some(
             "kb-app の全タグの現状を把握して(recent と search を使う)、タグ体系を見直して。\
 「タグ運用」ノートに合意があればそれに従い、合意のないタグはあなたの裁量で統合・改名・整理\
-してよい(update で実行)。ユーザーの合意が要ると感じた変更は提案に留めて。\
+してよい(update で実行)。MCPでは既存語彙だけを使い、新語が必要なら別承認が必要だと伝えて。\
+ユーザーの合意が要ると感じた変更は提案に留めて。\
 終わったら、実行した整理と提案を一覧で報告して。",
         ),
         "会話を起票" => Some(
@@ -269,12 +547,13 @@ fn prompt_text(name: &str) -> Option<&'static str> {
     }
 }
 
-fn tool_definitions() -> Value {
-    json!([
+fn tool_definitions(client: &str) -> Value {
+    let capabilities = ClientSurface::from_hint(client).capabilities();
+    let mut definitions = json!([
         {
             "name": "search",
             "description": "KB 検索(全文+意味+リンク近傍)。個人の話題ではまず引く。自然文可。degraded は回答に添える。",
-            "inputSchema": {"type": "object", "properties": {
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "query": {"type": "string", "description": "検索語(自然文可)"},
                 "limit": {"type": "integer", "description": "最大件数(既定8)"},
                 "any": {"type": "boolean", "description": "語をOR結合する(発話全文の自動retrieval用)"},
@@ -284,14 +563,14 @@ fn tool_definitions() -> Value {
         {
             "name": "get",
             "description": "ノート全文の取得(応答に添付と「近いノート」が付く)。search のヒットは必ず全文を読む。note 省略=いま開いているノート。",
-            "inputSchema": {"type": "object", "properties": {
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "note": {"type": "string", "description": "ノート ID。省略=いま開いているノート"}
             }}
         },
         {
             "name": "attach",
             "description": "会話で作成・受領した小さなファイルを既存ノートへ添付。pathではなくBase64内容だけを渡し、保存先・区分・来歴はkb-appが固定する(上限16 MiB)。",
-            "inputSchema": {"type": "object", "properties": {
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "note": {"type": "string", "description": "ひもづけ先の既存ノート ID"},
                 "file_name": {"type": "string", "description": "表示ファイル名(区切り文字なし)"},
                 "content_base64": {"type": "string", "description": "ファイル内容の標準Base64"},
@@ -301,55 +580,144 @@ fn tool_definitions() -> Value {
         {
             "name": "recent",
             "description": "最近のノート一覧。",
-            "inputSchema": {"type": "object", "properties": {
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "limit": {"type": "integer", "description": "最大件数(既定10)"}
             }}
         },
         {
             "name": "propose",
             "description": "知見をノートとして起票。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
-            "inputSchema": {"type": "object", "properties": {
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "title": {"type": "string", "description": "内容が一意に分かるタイトル"},
                 "body": {"type": "string", "description": "本文(自己完結)"},
                 "description": {"type": "string", "description": "一文要約"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙のみ。英小文字ケバブ)"},
-                "allow_new_tags": {"type": "boolean", "description": "語彙にない新語を許す(2本目のノートが見えたときだけ)"}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙のみ。英小文字ケバブ)"}
             }, "required": ["title", "body", "tags"]}
         },
         {
             "name": "update",
             "description": "AI ノートの直接更新(指定フィールドのみ置換)。大きな書き換えは一言添えてから。",
-            "inputSchema": {"type": "object", "properties": {
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "note": {"type": "string", "description": "ノート ID"},
                 "title": {"type": "string"},
                 "body": {"type": "string", "description": "本文全体の置換"},
                 "description": {"type": "string"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "既存語彙のみ(全消し・5個以上は不可)"},
-                "allow_new_tags": {"type": "boolean", "description": "語彙にない新語を許す"}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "既存語彙のみ(全消し・5個以上は不可)"}
             }, "required": ["note"]}
         },
         {
-            "name": "remove",
-            "description": "AI ノートの削除(履歴には残る)。重複・陳腐化の整理に。削除前に一言添える。",
-            "inputSchema": {"type": "object", "properties": {
-                "note": {"type": "string", "description": "ノート ID"}
-            }, "required": ["note"]}
+            "name": "prepare_remove",
+            "description": "AIノートの自律削除を準備。対象と現在内容を固定した5分間有効のtoken、理由、必須eventを返す。削除方針の範囲内なら追加の人間承認なしにcommit_removeへ進む。",
+            "annotations": {
+                "title": "削除対象を固定",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "note": {"type": "string", "description": "削除候補のノート ID"},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 500, "description": "AIが判断した削除理由(一行)"}
+            }, "required": ["note", "reason"]}
+        },
+        {
+            "name": "commit_remove",
+            "description": "prepare_removeで固定したAI管理ノートを自律削除。noteと短命tokenを照合し、理由と履歴を残して削除する。個別の人間承認は要求しない。",
+            "annotations": {
+                "title": "ノートを削除",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "note": {"type": "string", "description": "prepare_removeで固定したノート ID"},
+                "removal_token": {"type": "string", "description": "prepare_removeが返した5分間有効の対象固定token"}
+            }, "required": ["note", "removal_token"]}
         }
-    ])
+    ]);
+    if !capabilities.current_note_argument_optional {
+        let get = definitions
+            .as_array_mut()
+            .and_then(|items| items.iter_mut().find(|item| item["name"] == "get"))
+            .expect("get tool definition exists");
+        get["description"] = json!(
+            "ノート全文の取得(応答に添付と「近いノート」が付く)。search のヒットは必ず全文を読み、note IDを指定する。"
+        );
+        get["inputSchema"]["properties"]["note"]["description"] = json!("ノート ID(必須)");
+        get["inputSchema"]["required"] = json!(["note"]);
+    }
+    definitions
 }
 
+#[derive(Debug)]
 struct ToolOutput {
     text: String,
     structured: Option<Value>,
 }
 
-impl ToolOutput {
-    fn text(text: String) -> Self {
-        Self {
-            text,
-            structured: None,
-        }
+/// 会話UIへそのまま渡せるノート同一性。本文用の`/notes/...`リンクを
+/// 呼び出し側に組み立てさせると、作業directory基準の壊れたリンクになり得る。
+fn note_conversation_identity(vault: &Vault, id: &str, title: &str) -> Result<Value> {
+    let path = vault.note_path(id)?;
+    Ok(json!({
+        "note_id": id,
+        "title": title,
+        "conversation_link": path.to_string_lossy(),
+    }))
+}
+
+fn note_conversation_event(identity: &Value, event: &str) -> Value {
+    json!({
+        "type": "note_link",
+        "event": event,
+        "required": true,
+        "note_id": identity["note_id"],
+        "title": identity["title"],
+        "conversation_link": identity["conversation_link"],
+    })
+}
+
+fn conversation_events(
+    note_event: Option<Value>,
+    degraded: &[crate::degradation::Degradation],
+) -> Value {
+    let mut events = note_event.into_iter().collect::<Vec<_>>();
+    events.extend(degraded.iter().map(|item| {
+        json!({
+            "type": "degradation",
+            "required": true,
+            "code": item.code(),
+            "message": item.to_string(),
+        })
+    }));
+    json!(events)
+}
+
+fn note_markdown_link(identity: &Value) -> String {
+    let title = identity["title"]
+        .as_str()
+        .unwrap_or("無題")
+        .replace('[', "\\[")
+        .replace(']', "\\]");
+    let link = identity["conversation_link"].as_str().unwrap_or_default();
+    format!("[{title}](<{link}>)")
+}
+
+fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -> Result<()> {
+    let capabilities = ClientSurface::from_hint(client).capabilities();
+    if name == "get"
+        && !capabilities.current_note_argument_optional
+        && args.get("note").and_then(Value::as_str).is_none()
+    {
+        anyhow::bail!("このclient surfaceではgetのnote引数が必要");
     }
+    if matches!(name, "propose" | "update") && args.get("allow_new_tags").is_some() {
+        anyhow::bail!(
+            "allow_new_tags はAI用MCPでは利用できない。既存語彙を使うか、trusted UI / CLIの別承認を案内する"
+        );
+    }
+    Ok(())
 }
 
 fn remote_degradations(
@@ -363,6 +731,7 @@ fn remote_degradations(
     }
 }
 
+#[cfg(test)]
 fn call_tool(
     vault: &Vault,
     client: &str,
@@ -370,6 +739,27 @@ fn call_tool(
     args: &Value,
     remote_sync: bool,
 ) -> Result<ToolOutput> {
+    call_tool_with_search_options(
+        vault,
+        client,
+        name,
+        args,
+        remote_sync,
+        true,
+        &mut RemovalPlans::default(),
+    )
+}
+
+fn call_tool_with_search_options(
+    vault: &Vault,
+    client: &str,
+    name: &str,
+    args: &Value,
+    remote_sync: bool,
+    update_embeddings: bool,
+    removal_plans: &mut RemovalPlans,
+) -> Result<ToolOutput> {
+    reject_unavailable_mcp_capabilities(client, name, args)?;
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
     // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
     // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
@@ -381,7 +771,9 @@ fn call_tool(
         match sync_with_degradations(vault, &conn) {
             Ok(report) => {
                 degraded.extend(report.degraded);
-                degraded.extend(crate::index::embed_step(&conn));
+                if update_embeddings {
+                    degraded.extend(crate::index::embed_step(&conn));
+                }
             }
             Err(error) => degraded.push(crate::degradation::Degradation::IndexSync {
                 detail: error.to_string(),
@@ -465,6 +857,7 @@ fn call_tool(
                 structured["retrieval_candidates"] = serde_json::to_value(&retrieval.candidates)?;
                 structured["retrieval"] = serde_json::to_value(&retrieval.stats)?;
             }
+            structured["conversation_events"] = conversation_events(None, &out.degraded);
             snapshot.commit()?;
             Ok(ToolOutput {
                 text,
@@ -480,6 +873,8 @@ fn call_tool(
                 })?,
             };
             let note = vault.read_note_from_db(&conn, &id)?;
+            let title = note.front.title.as_deref().unwrap_or("無題");
+            let identity = note_conversation_identity(vault, &id, title)?;
             let attachments = vault.list_attachments(&id)?;
             let workspace_id = crate::workspace::workspace_id(vault)?;
             let stores = crate::store::Stores::open(&workspace_id)?;
@@ -572,17 +967,36 @@ fn call_tool(
                 .iter()
                 .map(|(name, _)| name.as_str())
                 .collect::<Vec<_>>();
+            let note_text = note.to_file_string()?;
+            let note_description = note.front.description.clone();
+            let note_tags = note.front.tags.clone();
+            let note_status = note.front.effective_status().to_string();
+            let note_origin = note.front.origin.clone();
+            let note_body = note.body.clone();
+            let link_text = note_markdown_link(&identity);
             Ok(ToolOutput {
                 text: format!(
-                    "(note: {id})\n{legacy_line}{managed_line}{sim_line}{}{}",
+                    "(note: {id})\nリンク: {link_text}\n{legacy_line}{managed_line}{sim_line}{}{}",
                     degradation_text(&degraded),
-                    note.to_file_string()?
+                    note_text
                 ),
                 structured: Some(json!({
                     "note": id,
+                    "note_id": identity["note_id"],
+                    "title": identity["title"],
+                    "description": note_description,
+                    "tags": note_tags,
+                    "status": note_status,
+                    "origin": note_origin,
+                    "body": note_body,
+                    "conversation_link": identity["conversation_link"],
                     "artifacts": artifact_rows,
                     "legacy_attachments": legacy_names,
                     "degraded": degraded,
+                    "conversation_events": conversation_events(
+                        Some(note_conversation_event(&identity, "note_read")),
+                        &degraded,
+                    ),
                 })),
             })
         }
@@ -623,8 +1037,17 @@ fn call_tool(
                 .as_ref()
                 .map(|artifact_ref| artifact_ref.name.as_str());
             let availability = crate::store::availability(vault, &stores, &taken.manifest);
+            let note = vault.read_note_from_db(&conn, note_id)?;
+            let identity = note_conversation_identity(
+                vault,
+                note_id,
+                note.front.title.as_deref().unwrap_or("無題"),
+            )?;
             let structured = json!({
                 "note": note_id,
+                "note_id": identity["note_id"],
+                "title": identity["title"],
+                "conversation_link": identity["conversation_link"],
                 "file_name": taken.manifest.display_name,
                 "artifact_id": taken.manifest.id,
                 "version": taken.manifest.version,
@@ -637,12 +1060,19 @@ fn call_tool(
                 "availability": availability,
                 "delivery": taken.delivery,
                 "warn_over_bytes": taken.warn_over,
+                "degraded": degraded,
+                "conversation_events": conversation_events(
+                    Some(note_conversation_event(&identity, "artifact_attached")),
+                    &degraded,
+                ),
             });
             Ok(ToolOutput {
                 text: with_degradations(
                     format!(
                         "添付した: {} → {} (artifact {})",
-                        file_name, note_id, taken.manifest.id
+                        file_name,
+                        note_markdown_link(&identity),
+                        taken.manifest.id
                     ),
                     &degraded,
                 ),
@@ -664,7 +1094,14 @@ fn call_tool(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(ToolOutput::text(with_degradations(text, &degraded)))
+            Ok(ToolOutput {
+                text: with_degradations(text, &degraded),
+                structured: Some(json!({
+                    "hits": hits,
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(None, &degraded),
+                })),
+            })
         }
         "propose" => {
             let title = args
@@ -688,10 +1125,6 @@ fn call_tool(
             // 語彙外タグは**書く前に**弾く(契約1の強制点)。以前は起票後に
             // 「新しいタグを導入した」と教えるだけだったため語彙が膨らみ続けた
             // (60ノートに112語・1回きり61%)。2026-08-12 に事前拒否へ引き上げ。
-            let allow_new = args
-                .get("allow_new_tags")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
             let id = vault.propose(
                 &conn,
                 NoteProposal {
@@ -699,19 +1132,24 @@ fn call_tool(
                     body,
                     description,
                     tags: &tags,
-                    allow_new_tags: allow_new,
+                    allow_new_tags: false,
                     client,
                 },
             )?;
-            let added = if allow_new {
-                "\n新語を追加した。語彙の合意は「タグ運用」ノートに反映すること。"
-            } else {
-                ""
-            };
-            Ok(ToolOutput::text(with_degradations(
-                format!("起票した: {id}。{added}"),
+            let mut structured = note_conversation_identity(vault, &id, title)?;
+            structured["event"] = json!("note_created");
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(note_conversation_event(&structured, "note_created")),
                 &degraded,
-            )))
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!("起票した: {}", note_markdown_link(&structured)),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
         }
         "update" => {
             let id = args
@@ -723,10 +1161,6 @@ fn call_tool(
                     .filter_map(|t| t.as_str().map(String::from))
                     .collect()
             });
-            let allow_new = args
-                .get("allow_new_tags")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
             vault.agent_update_note(
                 &conn,
                 NoteUpdate {
@@ -735,25 +1169,103 @@ fn call_tool(
                     body: args.get("body").and_then(|v| v.as_str()),
                     description: args.get("description").and_then(|v| v.as_str()),
                     tags: tags.as_deref(),
-                    allow_new_tags: allow_new,
+                    allow_new_tags: false,
                     client,
                 },
             )?;
-            Ok(ToolOutput::text(with_degradations(
-                format!("更新した: {id}"),
+            let note = vault.read_note_from_db(&conn, id)?;
+            let mut structured = note_conversation_identity(
+                vault,
+                id,
+                note.front.title.as_deref().unwrap_or("無題"),
+            )?;
+            structured["event"] = json!("note_updated");
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(note_conversation_event(&structured, "note_updated")),
                 &degraded,
-            )))
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!("更新した: {}", note_markdown_link(&structured)),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
         }
-        "remove" => {
+        "prepare_remove" => {
             let id = args
                 .get("note")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
-            vault.agent_delete_note(&conn, id, client)?;
-            Ok(ToolOutput::text(with_degradations(
-                format!("削除した: {id}(履歴には残る)"),
-                &degraded,
-            )))
+            let note = vault.agent_removal_candidate(&conn, id)?;
+            let title = note.front.title.as_deref().unwrap_or("無題");
+            let reason = args
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("reason が必要"))?;
+            let token = removal_plans.prepare(id, title, reason, &note.to_file_string()?)?;
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "削除準備: {id} [{title}]。理由: {}。まだ削除していない。メンテナンス方針の範囲内なら5分以内にcommit_removeを実行できる",
+                        reason.trim()
+                    ),
+                    &degraded,
+                ),
+                structured: Some(json!({
+                    "note_id": id,
+                    "title": title,
+                    "reason": reason.trim(),
+                    "removal_token": token,
+                    "expires_in_seconds": REMOVAL_TOKEN_TTL.as_secs(),
+                    "event": "removal_prepared",
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(Some(json!({
+                        "type": "removal_prepared",
+                        "event": "removal_prepared",
+                        "required": true,
+                        "note_id": id,
+                        "title": title,
+                        "reason": reason.trim(),
+                        "expires_in_seconds": REMOVAL_TOKEN_TTL.as_secs(),
+                    })), &degraded),
+                })),
+            })
+        }
+        "commit_remove" => {
+            let id = args
+                .get("note")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let token = args
+                .get("removal_token")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("removal_token が必要"))?;
+            let pending = removal_plans.consume(token, id)?;
+            let note = vault.agent_removal_candidate(&conn, id)?;
+            pending.require_unchanged(&note.to_file_string()?)?;
+            vault.agent_delete_note(&conn, id, &pending.reason, client)?;
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!("削除した: {id} [{}] (履歴には残る)", pending.title),
+                    &degraded,
+                ),
+                structured: Some(json!({
+                    "note_id": id,
+                    "title": pending.title,
+                    "reason": pending.reason,
+                    "event": "note_removed",
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(Some(json!({
+                        "type": "note_removed",
+                        "event": "note_removed",
+                        "required": true,
+                        "note_id": id,
+                        "title": pending.title,
+                    })), &degraded),
+                })),
+            })
         }
         other => anyhow::bail!("unknown tool: {other}"),
     }
@@ -822,9 +1334,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        assert_eq!(initialized["capabilities"]["tools"], serde_json::json!({}));
         assert_eq!(
-            initialized["capabilities"],
-            serde_json::json!({"tools": {}})
+            initialized["capabilities"]["experimental"]["kbApp"]["client_surface"],
+            "unknown"
         );
         assert_eq!(initialized["instructions"], DISABLED_INSTRUCTIONS);
         assert!(
@@ -853,7 +1366,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(tools, serde_json::json!({"tools": tool_definitions()}));
+        assert_eq!(
+            tools,
+            serde_json::json!({"tools": tool_definitions("test/client")})
+        );
         assert_eq!(prompts, serde_json::json!({"prompts": []}));
     }
 
@@ -924,11 +1440,94 @@ mod tests {
         let initialized = handle(Some(&vault), "test/client", true, true, "initialize", None)
             .unwrap()
             .unwrap();
+        assert_eq!(initialized["capabilities"]["tools"], serde_json::json!({}));
         assert_eq!(
-            initialized["capabilities"],
-            serde_json::json!({"tools": {}, "prompts": {}})
+            initialized["capabilities"]["prompts"],
+            serde_json::json!({})
         );
-        assert_eq!(initialized["instructions"], INSTRUCTIONS);
+        assert_eq!(initialized["instructions"], instructions_for("test/client"));
+    }
+
+    #[test]
+    fn evaluation_transform_injects_only_selected_context_and_event_rules() {
+        let options = EvaluationServeOptions {
+            instructions: "fixture instructions".into(),
+            event_rules: vec![crate::rule_delivery_eval::PreparedEventRule {
+                rule_id: "event.note-link".into(),
+                after_tools: vec!["get".into()],
+                instruction: "structured linkを回答する".into(),
+            }],
+            injected_degradations: vec!["index_sync:fixture".into()],
+            trace_path: None,
+        };
+        let mut initialized = serde_json::json!({"instructions": "production"});
+        apply_evaluation_transform(&options, "initialize", None, &mut initialized);
+        assert_eq!(initialized["instructions"], "fixture instructions");
+
+        let mut searched = serde_json::json!({
+            "content": [{"type": "text", "text": "該当なし。"}],
+            "structuredContent": {"hits": []}
+        });
+        apply_evaluation_transform(
+            &options,
+            "tools/call",
+            Some(&serde_json::json!({"name": "search"})),
+            &mut searched,
+        );
+        assert!(
+            searched["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("劣化")
+        );
+        assert_eq!(
+            searched["structuredContent"]["eval_injected_degradations"][0],
+            "index_sync:fixture"
+        );
+        assert!(searched["structuredContent"].get("event_rules").is_none());
+
+        let mut fetched = serde_json::json!({
+            "content": [{"type": "text", "text": "note"}],
+            "structuredContent": {"note_id": "notes/a"}
+        });
+        apply_evaluation_transform(
+            &options,
+            "tools/call",
+            Some(&serde_json::json!({"name": "get"})),
+            &mut fetched,
+        );
+        assert_eq!(
+            fetched["structuredContent"]["event_rules"][0]["rule_id"],
+            "event.note-link"
+        );
+    }
+
+    #[test]
+    fn evaluation_search_does_not_advance_or_report_the_embedding_queue() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "評価ノート",
+                "固定fixture本文",
+                None,
+                &["eval".into()],
+                "rule-delivery-eval/fixture",
+            )
+            .unwrap();
+
+        let output = call_tool_with_search_options(
+            &vault,
+            "rule-delivery-eval/test",
+            "search",
+            &serde_json::json!({"query": "固定fixture"}),
+            false,
+            false,
+            &mut RemovalPlans::default(),
+        )
+        .unwrap();
+        let structured = output.structured.unwrap();
+        assert_eq!(structured["degraded"], serde_json::json!([]));
     }
 
     #[test]
@@ -956,7 +1555,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_get_update_and_remove_cannot_escape_the_vault() {
+    fn mcp_get_update_and_two_phase_remove_cannot_escape_the_vault() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let outside = dir.path().join("outside");
@@ -970,7 +1569,17 @@ mod tests {
                 "update",
                 serde_json::json!({"note": "../outside/secret", "body": "侵入"}),
             ),
-            ("remove", serde_json::json!({"note": "../outside/secret"})),
+            (
+                "prepare_remove",
+                serde_json::json!({"note": "../outside/secret", "reason": "境界テスト"}),
+            ),
+            (
+                "commit_remove",
+                serde_json::json!({
+                    "note": "../outside/secret",
+                    "removal_token": "invalid"
+                }),
+            ),
         ] {
             assert!(call_tool(&vault, "test/client", tool, &args, true).is_err());
             assert_eq!(std::fs::read_to_string(&secret).unwrap(), "TOP SECRET");
@@ -1023,6 +1632,87 @@ mod tests {
 
         assert!(output.text.contains("AIへ返す本文"), "{}", output.text);
         assert!(!output.text.contains("壊れたMarkdown"), "{}", output.text);
+    }
+
+    #[test]
+    fn note_events_return_a_conversation_ready_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "語彙seed",
+                "evalタグを既存語彙にする。",
+                None,
+                &["eval".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        let proposed = call_tool(
+            &vault,
+            "test/client",
+            "propose",
+            &serde_json::json!({
+                "title": "評価ノート",
+                "body": "初期本文",
+                "tags": ["eval"]
+            }),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let note_id = proposed["note_id"].as_str().unwrap();
+        let expected_link = vault.note_path(note_id).unwrap();
+
+        assert_eq!(proposed["title"], "評価ノート");
+        assert_eq!(proposed["event"], "note_created");
+        assert_eq!(proposed["conversation_events"][0]["type"], "note_link");
+        assert_eq!(proposed["conversation_events"][0]["event"], "note_created");
+        assert_eq!(proposed["conversation_events"][0]["required"], true);
+        assert_eq!(
+            proposed["conversation_link"].as_str(),
+            expected_link.to_str()
+        );
+        assert!(expected_link.is_absolute());
+
+        let fetched = call_tool(
+            &vault,
+            "test/client",
+            "get",
+            &serde_json::json!({"note": note_id}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(fetched["note_id"], note_id);
+        assert_eq!(fetched["title"], "評価ノート");
+        assert_eq!(fetched["body"], "初期本文\n");
+        assert_eq!(fetched["tags"], serde_json::json!(["eval"]));
+        assert_eq!(fetched["status"], "stable");
+        assert_eq!(fetched["conversation_link"], proposed["conversation_link"]);
+        assert_eq!(fetched["conversation_events"][0]["event"], "note_read");
+
+        let updated = call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &serde_json::json!({
+                "note": note_id,
+                "title": "更新済み評価ノート",
+                "body": "更新本文"
+            }),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(updated["note_id"], note_id);
+        assert_eq!(updated["title"], "更新済み評価ノート");
+        assert_eq!(updated["event"], "note_updated");
+        assert_eq!(updated["conversation_link"], proposed["conversation_link"]);
+        assert_eq!(updated["conversation_events"][0]["event"], "note_updated");
     }
 
     #[test]
@@ -1199,9 +1889,9 @@ mod tests {
 
     #[test]
     fn attach_schema_accepts_content_but_never_a_client_path() {
-        let tools = tool_definitions();
+        let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 7);
+        assert_eq!(definitions.len(), 8);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -1214,6 +1904,287 @@ mod tests {
             attach["inputSchema"]["required"],
             serde_json::json!(["note", "file_name", "content_base64"])
         );
+    }
+
+    #[test]
+    fn autonomous_remove_uses_a_short_lived_target_bound_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let note_id = vault
+            .propose_for_test(
+                "削除対象",
+                "削除前の本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let mut plans = RemovalPlans::default();
+
+        let prepared = call_tool_with_search_options(
+            &vault,
+            "test/client",
+            "prepare_remove",
+            &serde_json::json!({"note": note_id, "reason": "重複した中間ノート"}),
+            false,
+            true,
+            &mut plans,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let token = prepared["removal_token"].as_str().unwrap();
+        assert_eq!(token.len(), 64);
+        assert_eq!(prepared["expires_in_seconds"], 300);
+        assert_eq!(prepared["reason"], "重複した中間ノート");
+        assert_eq!(prepared["conversation_events"][0]["required"], true);
+        assert_eq!(
+            prepared["conversation_events"][0]["event"],
+            "removal_prepared"
+        );
+        assert!(
+            vault
+                .read_note_from_db(&open_db(&vault).unwrap(), &note_id)
+                .is_ok()
+        );
+
+        let removed = call_tool_with_search_options(
+            &vault,
+            "test/client",
+            "commit_remove",
+            &serde_json::json!({
+                "note": note_id,
+                "removal_token": token,
+            }),
+            false,
+            true,
+            &mut plans,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(removed["event"], "note_removed");
+        assert!(
+            vault
+                .read_note_from_db(&open_db(&vault).unwrap(), &note_id)
+                .is_err()
+        );
+
+        let reused = call_tool_with_search_options(
+            &vault,
+            "test/client",
+            "commit_remove",
+            &serde_json::json!({
+                "note": note_id,
+                "removal_token": token,
+            }),
+            false,
+            true,
+            &mut plans,
+        )
+        .unwrap_err();
+        assert!(reused.to_string().contains("無効または使用済み"));
+    }
+
+    #[test]
+    fn removal_plan_rejects_expiry_target_swap_and_note_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let first = vault
+            .propose_for_test("対象A", "本文A", None, &["test".into()], "test/client")
+            .unwrap();
+        let second = vault
+            .propose_for_test("対象B", "本文B", None, &["test".into()], "test/client")
+            .unwrap();
+        let mut plans = RemovalPlans::default();
+
+        let prepare = |note: &str, plans: &mut RemovalPlans| {
+            call_tool_with_search_options(
+                &vault,
+                "test/client",
+                "prepare_remove",
+                &serde_json::json!({"note": note, "reason": "重複整理"}),
+                false,
+                true,
+                plans,
+            )
+            .unwrap()
+            .structured
+            .unwrap()["removal_token"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+
+        let swap_token = prepare(&first, &mut plans);
+        let swapped = call_tool_with_search_options(
+            &vault,
+            "test/client",
+            "commit_remove",
+            &serde_json::json!({"note": second, "removal_token": swap_token}),
+            false,
+            true,
+            &mut plans,
+        )
+        .unwrap_err();
+        assert!(
+            swapped
+                .to_string()
+                .contains("削除対象がprepare_remove時と一致しない")
+        );
+
+        let changed_token = prepare(&first, &mut plans);
+        let conn = open_db(&vault).unwrap();
+        vault
+            .agent_update_note(
+                &conn,
+                NoteUpdate {
+                    id: &first,
+                    title: None,
+                    body: Some("変更後"),
+                    description: None,
+                    tags: None,
+                    allow_new_tags: false,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let changed = call_tool_with_search_options(
+            &vault,
+            "test/client",
+            "commit_remove",
+            &serde_json::json!({"note": first, "removal_token": changed_token}),
+            false,
+            true,
+            &mut plans,
+        )
+        .unwrap_err();
+        assert!(changed.to_string().contains("prepare_remove後に変更された"));
+
+        let expired_token = prepare(&second, &mut plans);
+        plans.pending.get_mut(&expired_token).unwrap().expires_at =
+            Instant::now() - Duration::from_secs(1);
+        let expired = call_tool_with_search_options(
+            &vault,
+            "test/client",
+            "commit_remove",
+            &serde_json::json!({"note": second, "removal_token": expired_token}),
+            false,
+            true,
+            &mut plans,
+        )
+        .unwrap_err();
+        assert!(expired.to_string().contains("期限が切れた"));
+    }
+
+    #[test]
+    fn destructive_annotation_is_attached_only_to_commit_remove() {
+        let tools = tool_definitions("chatgpt/openai");
+        let definitions = tools.as_array().unwrap();
+        assert!(definitions.iter().all(|tool| tool["name"] != "remove"));
+        let prepare = definitions
+            .iter()
+            .find(|tool| tool["name"] == "prepare_remove")
+            .unwrap();
+        let commit = definitions
+            .iter()
+            .find(|tool| tool["name"] == "commit_remove")
+            .unwrap();
+        assert_eq!(prepare["annotations"]["destructiveHint"], false);
+        assert_eq!(commit["annotations"]["destructiveHint"], true);
+        assert_eq!(
+            commit["inputSchema"]["required"],
+            serde_json::json!(["note", "removal_token"])
+        );
+        assert_eq!(
+            prepare["inputSchema"]["required"],
+            serde_json::json!(["note", "reason"])
+        );
+    }
+
+    #[test]
+    fn surface_schema_requires_explicit_note_and_hides_new_tag_capability() {
+        fn find<'a>(definitions: &'a Value, name: &str) -> &'a Value {
+            definitions
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|definition| definition["name"] == name)
+                .unwrap()
+        }
+
+        let codex = tool_definitions("codex-cli/gpt-5-codex");
+        let desktop = tool_definitions("claude-desktop/claude");
+
+        assert_eq!(
+            find(&codex, "get")["inputSchema"]["required"],
+            serde_json::json!(["note"])
+        );
+        assert!(
+            find(&desktop, "get")["inputSchema"]
+                .get("required")
+                .is_none()
+        );
+        for definitions in [&codex, &desktop] {
+            for name in ["propose", "update"] {
+                let schema = &find(definitions, name)["inputSchema"];
+                assert_eq!(schema["additionalProperties"], false);
+                assert!(schema["properties"].get("allow_new_tags").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_rejects_hidden_new_tag_override_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let error = call_tool(
+            &vault,
+            "codex-cli/gpt-5-codex",
+            "propose",
+            &serde_json::json!({
+                "title": "拒否されるノート",
+                "body": "本文",
+                "tags": ["unapproved"],
+                "allow_new_tags": true
+            }),
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("AI用MCPでは利用できない"));
+        let conn = open_db(&vault).unwrap();
+        assert!(recent(&conn, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn core_enforces_surface_specific_current_note_capability() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let note_id = vault
+            .propose_for_test("現在ノート", "本文", None, &["test".into()], "test/client")
+            .unwrap();
+        crate::connect::set_current_note(&vault, &note_id).unwrap();
+
+        let error = call_tool(
+            &vault,
+            "codex-cli/gpt-5-codex",
+            "get",
+            &serde_json::json!({}),
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("note引数が必要"));
+
+        let desktop = call_tool(
+            &vault,
+            "claude-desktop/claude",
+            "get",
+            &serde_json::json!({}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(desktop.structured.unwrap()["note_id"], note_id);
     }
 
     #[test]
@@ -1270,6 +2241,12 @@ mod tests {
 
         assert!(attached.get("isError").is_none(), "{attached}");
         assert_eq!(attached["structuredContent"]["note"], note_id);
+        assert_eq!(attached["structuredContent"]["note_id"], note_id);
+        assert_eq!(attached["structuredContent"]["title"], "鬼キャラクター");
+        assert_eq!(
+            attached["structuredContent"]["conversation_link"].as_str(),
+            vault.note_path(&note_id).unwrap().to_str()
+        );
         assert_eq!(attached["structuredContent"]["file_name"], "red-oni.png");
         assert_eq!(attached["structuredContent"]["media_type"], "image/png");
         assert_eq!(attached["structuredContent"]["size"], 9);

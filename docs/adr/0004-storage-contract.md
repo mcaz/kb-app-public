@@ -88,7 +88,7 @@ lossless round-tripを検証する。詳細数値とkill criteriaはPoCレポー
 ## P2 ローカル実行面をSQLiteへ移す（2026-08-18）
 
 本人決定により、SQLite単独正本をGitへ入れる案は引き続き棄却したまま、日常の実行面だけを
-DBへ移した。AI・GUI・CLIの通常読取とpropose／update／removeはSQLite transactionを境界とし、
+DBへ移した。AI・GUI・CLIの通常読取とpropose／update／二段階削除はSQLite transactionを境界とし、
 同じtransactionでdurable outboxを積んでMarkdownへ出力する。MarkdownはObsidian表示、Git
 バックアップ、fresh clone復元、lossless検証を担う。
 
