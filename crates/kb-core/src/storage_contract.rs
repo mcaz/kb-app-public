@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::artifact::{
     ArtifactId, ArtifactRef, ContentHash, Locator, Manifest, RefName, SyncPolicy,
 };
+use crate::authority::{AuthorityRole, AuthorityStatus, RelationKind};
 use crate::frontmatter::{Frontmatter, Note};
 use crate::ledger;
 use crate::vault::Vault;
@@ -73,6 +74,7 @@ pub struct RepositoryExportV1 {
 pub fn snapshot(vault: &Vault) -> Result<RepositorySnapshotV1> {
     let workspace_id = crate::workspace::stored_workspace_id(vault)?;
     let notes = read_notes(vault)?;
+    validate_note_authority(&notes)?;
     let note_ids: BTreeSet<&str> = notes.iter().map(|n| n.id.as_str()).collect();
     let tracked = vault.root.join(ledger::DIR);
     let artifacts =
@@ -135,6 +137,105 @@ fn read_notes(vault: &Vault) -> Result<Vec<SnapshotNote>> {
             })
         })
         .collect()
+}
+
+fn validate_note_authority(notes: &[SnapshotNote]) -> Result<()> {
+    let mut by_uid = BTreeMap::new();
+    let mut active_canonical = BTreeMap::new();
+    for note in notes {
+        let front = &note.frontmatter;
+        crate::authority::validate_envelope(
+            front.note_uid.as_ref(),
+            front.authority.as_ref(),
+            &front.relations,
+        )?;
+        let Some(uid) = &front.note_uid else {
+            continue;
+        };
+        if let Some(existing) = by_uid.insert(uid.as_str(), note) {
+            bail!(
+                "note_uidが重複している: {} ({}, {})",
+                uid,
+                existing.id,
+                note.id
+            );
+        }
+        let authority = front.authority.as_ref().expect("envelope検証済み");
+        if authority.is_active_canonical() {
+            let key = (authority.namespace.as_str(), authority.scope.as_str());
+            if let Some(existing) = active_canonical.insert(key, note.id.as_str()) {
+                bail!(
+                    "active canonicalが重複している: {}/{} ({existing}, {})",
+                    authority.namespace.as_str(),
+                    authority.scope,
+                    note.id
+                );
+            }
+        }
+    }
+
+    let mut superseded_targets = BTreeSet::new();
+    for source in notes {
+        let Some(source_uid) = &source.frontmatter.note_uid else {
+            continue;
+        };
+        let source_authority = source
+            .frontmatter
+            .authority
+            .as_ref()
+            .expect("envelope検証済み");
+        for relation in &source.frontmatter.relations {
+            let target = by_uid.get(relation.target.as_str()).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "typed relationの参照先がない: {} {} -> {}",
+                    source.id,
+                    relation.kind.as_str(),
+                    relation.target
+                )
+            })?;
+            if relation.kind != RelationKind::Supersedes {
+                continue;
+            }
+            let target_authority = target
+                .frontmatter
+                .authority
+                .as_ref()
+                .expect("UID付きnoteはauthority検証済み");
+            if !source_authority.is_active_canonical()
+                || target_authority.role != AuthorityRole::Canonical
+                || target_authority.status != AuthorityStatus::Superseded
+                || source_authority.namespace != target_authority.namespace
+                || source_authority.scope != target_authority.scope
+            {
+                bail!(
+                    "supersedesは同じnamespace/scopeのactive canonicalからsuperseded canonicalへ結ぶ: {} -> {}",
+                    source_uid,
+                    relation.target
+                );
+            }
+            superseded_targets.insert(relation.target.as_str());
+        }
+    }
+
+    for note in notes {
+        let Some(authority) = &note.frontmatter.authority else {
+            continue;
+        };
+        if authority.role == AuthorityRole::Canonical
+            && authority.status == AuthorityStatus::Superseded
+            && note
+                .frontmatter
+                .note_uid
+                .as_ref()
+                .is_none_or(|uid| !superseded_targets.contains(uid.as_str()))
+        {
+            bail!(
+                "superseded canonicalに後継のsupersedes relationがない: {}",
+                note.id
+            );
+        }
+    }
+    Ok(())
 }
 
 fn read_json_dir<T, F>(dir: &Path, key: F) -> Result<Vec<T>>
@@ -347,9 +448,29 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::artifact::{Created, Policy, Role};
+    use crate::authority::{Authority, NoteNamespace, NoteRelation, NoteUid, RelationKind};
+    use crate::frontmatter::Note;
     use crate::index::{open_db, sync};
     use crate::ledger::Ledger;
     use tempfile::tempdir;
+
+    fn authority_note(
+        title: &str,
+        uid: NoteUid,
+        authority: Authority,
+        relations: Vec<NoteRelation>,
+    ) -> Note {
+        let mut front = Frontmatter::new_note(title);
+        front.origin = Some("agent".into());
+        front.tags = vec!["test".into()];
+        front.note_uid = Some(uid);
+        front.authority = Some(authority);
+        front.relations = relations;
+        Note {
+            front,
+            body: "本文".into(),
+        }
+    }
 
     #[test]
     fn derived_index_does_not_change_the_repository_digest() {
@@ -486,5 +607,107 @@ mod tests {
 
         let err = verify(&vault).unwrap_err().to_string();
         assert!(err.contains("形式が壊れている"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_active_canonical_scope_is_rejected() {
+        let dir = tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("vault")).unwrap();
+        for (id, title, uid) in [
+            ("notes/first", "一つ目", NoteUid::at(1)),
+            ("notes/second", "二つ目", NoteUid::at(2)),
+        ] {
+            vault
+                .write_note_fixture(
+                    id,
+                    &authority_note(
+                        title,
+                        uid,
+                        Authority {
+                            namespace: NoteNamespace::Decisions,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: "kb-app/github-operations".into(),
+                        },
+                        Vec::new(),
+                    ),
+                )
+                .unwrap();
+        }
+
+        let error = verify(&vault).unwrap_err().to_string();
+        assert!(error.contains("active canonicalが重複"), "{error}");
+    }
+
+    #[test]
+    fn relation_target_must_exist_in_the_same_snapshot() {
+        let dir = tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("vault")).unwrap();
+        vault
+            .write_note_fixture(
+                "notes/source",
+                &authority_note(
+                    "参照元",
+                    NoteUid::at(1),
+                    Authority {
+                        namespace: NoteNamespace::Knowledge,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "kb-app/relation-integrity".into(),
+                    },
+                    vec![NoteRelation {
+                        kind: RelationKind::Supports,
+                        target: NoteUid::at(99),
+                    }],
+                ),
+            )
+            .unwrap();
+
+        let error = verify(&vault).unwrap_err().to_string();
+        assert!(error.contains("参照先がない"), "{error}");
+    }
+
+    #[test]
+    fn supersession_is_one_active_canonical_pointing_to_its_predecessor() {
+        let dir = tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("vault")).unwrap();
+        let old_uid = NoteUid::at(1);
+        vault
+            .write_note_fixture(
+                "notes/old",
+                &authority_note(
+                    "旧版",
+                    old_uid.clone(),
+                    Authority {
+                        namespace: NoteNamespace::Procedures,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Superseded,
+                        scope: "kb-app/release".into(),
+                    },
+                    Vec::new(),
+                ),
+            )
+            .unwrap();
+        vault
+            .write_note_fixture(
+                "notes/current",
+                &authority_note(
+                    "現行版",
+                    NoteUid::at(2),
+                    Authority {
+                        namespace: NoteNamespace::Procedures,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "kb-app/release".into(),
+                    },
+                    vec![NoteRelation {
+                        kind: RelationKind::Supersedes,
+                        target: old_uid,
+                    }],
+                ),
+            )
+            .unwrap();
+
+        assert!(verify(&vault).is_ok());
     }
 }

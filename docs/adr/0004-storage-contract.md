@@ -103,3 +103,15 @@ Git pull後だけがMarkdownからDBへ入る経路である。未commitのノ�
 
 この段階は複数端末のmerge可能な交換表現をMarkdownのまま維持する。writer別分割event log＋
 content-addressed immutable objectへの移行は、P1のkill criteriaを通した後の別判断とする。
+
+## P3 authorityを論理snapshotの不変条件へ加える（2026-08-20）
+
+[ADR-0009](0009-canonical-authority.md)に従い、ノートの`note_uid`、authority envelope、typed relationを
+Storage Contractの論理内容へ加えた。legacyノートは`note_uid`とauthorityの両方が無い状態だけを
+互換読み取りとして許す。envelope付きノートについては、UID重複、同じnamespace+scopeのactive
+canonical重複、relation参照切れ、自己参照・重複edge、不正なsupersedes、後継の無いsupersededを
+snapshot生成時に失敗させる。
+
+SQLiteはschema v4で同じ項目とrelationを索引化するが、正本は引き続き決定的snapshotとfresh clone
+再現性で定義する。したがってDBのunique indexだけを保証点にせず、Markdownから復元した状態にも
+同じStorage Contract検査を適用する。

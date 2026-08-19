@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/note-authority.schema.json",
+  "title": "kb-app note authority envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["note_uid", "authority", "relations"],
+  "properties": {
+    "note_uid": {"$ref": "#/$defs/note_uid"},
+    "authority": {"$ref": "#/$defs/authority"},
+    "relations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/relation"}
+    }
+  },
+  "$defs": {
+    "note_uid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "role", "status", "scope"],
+      "properties": {
+        "namespace": {
+          "enum": ["entities", "initiatives", "decisions", "procedures", "records", "knowledge"]
+        },
+        "role": {"enum": ["canonical", "record", "proposal"]},
+        "status": {"enum": ["active", "historical", "superseded"]},
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[^\\s/]+(?:/[^\\s/]+)*$"
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "target"],
+      "properties": {
+        "type": {
+          "enum": ["derived_from", "supports", "updates", "contradicts", "supersedes", "mentions"]
+        },
+        "target": {"$ref": "#/$defs/note_uid"}
+      }
+    }
+  }
+}

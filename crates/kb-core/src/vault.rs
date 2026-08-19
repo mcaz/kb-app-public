@@ -9,7 +9,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use git2::{Repository, Signature};
+use rusqlite::OptionalExtension;
 
+#[cfg(test)]
+use crate::authority::NoteNamespace;
+use crate::authority::{Authority, NoteRelation, NoteUid};
 use crate::frontmatter::{Frontmatter, Generated, Note, now_iso, today};
 use crate::note_id::NoteId;
 
@@ -26,6 +30,8 @@ pub struct NoteProposal<'a> {
     pub body: &'a str,
     pub description: Option<&'a str>,
     pub tags: &'a [String],
+    pub authority: Authority,
+    pub relations: Vec<NoteRelation>,
     pub allow_new_tags: bool,
     pub client: &'a str,
 }
@@ -37,6 +43,8 @@ pub struct NoteUpdate<'a> {
     pub body: Option<&'a str>,
     pub description: Option<&'a str>,
     pub tags: Option<&'a [String]>,
+    pub authority: Option<Authority>,
+    pub relations: Option<Vec<NoteRelation>>,
     pub allow_new_tags: bool,
     pub client: &'a str,
 }
@@ -222,6 +230,8 @@ impl Vault {
             body,
             description,
             tags,
+            authority,
+            relations,
             allow_new_tags,
             client,
         } = proposal;
@@ -231,6 +241,9 @@ impl Vault {
         front.created = Some(now_iso());
         front.description = description.map(|s| s.to_string());
         front.tags = tags.to_vec();
+        front.note_uid = Some(NoteUid::new());
+        front.authority = Some(authority);
+        front.relations = relations;
         front.generated = Some(Generated {
             by: client.into(),
             at: now_iso(),
@@ -285,12 +298,27 @@ impl Vault {
 
     /// MCPの削除準備で所有ガードと対象snapshotを同じDB正本から取得する。
     pub fn agent_removal_candidate(&self, conn: &rusqlite::Connection, id: &str) -> Result<Note> {
-        self.require_origin(
+        let note = self.require_origin(
             conn,
             id,
             "agent",
             "旧 human ノートは削除できない(互換読み取り専用)",
-        )
+        )?;
+        if let Some(uid) = &note.front.note_uid {
+            let source: Option<String> = conn
+                .query_row(
+                    "SELECT source.id FROM note_relations relation
+                     JOIN notes source ON source.note_uid = relation.src_uid
+                     WHERE relation.target_uid=?1 LIMIT 1",
+                    [uid.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(source) = source {
+                bail!("typed relationの参照先は削除できない: {source} -> {id}");
+            }
+        }
+        Ok(note)
     }
 
     /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
@@ -332,6 +360,8 @@ impl Vault {
             body,
             description,
             tags,
+            authority,
+            relations,
             allow_new_tags,
             client,
         } = update;
@@ -350,6 +380,13 @@ impl Vault {
         if let Some(ts) = tags {
             crate::tags::validate(conn, ts, allow_new_tags)?;
             note.front.tags = ts.to_vec();
+        }
+        if let Some(authority) = authority {
+            note.front.authority = Some(authority);
+            note.front.note_uid.get_or_insert_with(NoteUid::new);
+        }
+        if let Some(relations) = relations {
+            note.front.relations = relations;
         }
         if let Some(b) = body {
             note.body = b.to_string();
@@ -390,6 +427,13 @@ impl Vault {
                 body,
                 description,
                 tags,
+                authority: Authority {
+                    namespace: NoteNamespace::Records,
+                    role: crate::authority::AuthorityRole::Record,
+                    status: crate::authority::AuthorityStatus::Active,
+                    scope: format!("test/{}", slugify(title)),
+                },
+                relations: Vec::new(),
                 allow_new_tags: true,
                 client,
             },
@@ -761,6 +805,8 @@ mod tests {
                             body: Some("侵入"),
                             description: None,
                             tags: None,
+                            authority: None,
+                            relations: None,
                             allow_new_tags: false,
                             client: "test/client",
                         },
@@ -805,6 +851,8 @@ mod tests {
                         body: Some("侵入"),
                         description: None,
                         tags: None,
+                        authority: None,
+                        relations: None,
                         allow_new_tags: false,
                         client: "test/client",
                     },
@@ -928,6 +976,8 @@ mod tests {
                         body: Some("侵入"),
                         description: None,
                         tags: None,
+                        authority: None,
+                        relations: None,
                         allow_new_tags: false,
                         client: "claude/x",
                     },
@@ -954,6 +1004,8 @@ mod tests {
                         body: None,
                         description: None,
                         tags: None,
+                        authority: None,
+                        relations: None,
                         allow_new_tags: false,
                         client: "claude/x",
                     },
@@ -987,6 +1039,13 @@ mod tests {
                         body: "本文",
                         description: None,
                         tags: &[],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: crate::authority::AuthorityRole::Canonical,
+                            status: crate::authority::AuthorityStatus::Active,
+                            scope: "test/no-tags".into(),
+                        },
+                        relations: Vec::new(),
                         allow_new_tags: true,
                         client: "test/client",
                     },
@@ -1001,6 +1060,13 @@ mod tests {
                     body: "本文",
                     description: None,
                     tags: &["known".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Knowledge,
+                        role: crate::authority::AuthorityRole::Canonical,
+                        status: crate::authority::AuthorityStatus::Active,
+                        scope: "test/known-tag".into(),
+                    },
+                    relations: Vec::new(),
                     allow_new_tags: false,
                     client: "test/client",
                 },
@@ -1017,6 +1083,13 @@ mod tests {
                         body: "本文",
                         description: None,
                         tags: &["brand-new".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: crate::authority::AuthorityRole::Canonical,
+                            status: crate::authority::AuthorityStatus::Active,
+                            scope: "test/new-tag".into(),
+                        },
+                        relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
                     },
@@ -1033,6 +1106,8 @@ mod tests {
                         body: None,
                         description: None,
                         tags: Some(&[]),
+                        authority: None,
+                        relations: None,
                         allow_new_tags: true,
                         client: "test/client",
                     },

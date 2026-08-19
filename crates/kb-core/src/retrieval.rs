@@ -333,10 +333,16 @@ fn push_candidate(
 
 fn outgoing_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut statement = conn.prepare_cached(
-        "SELECT l.dst FROM links l
-         JOIN notes n ON n.id = l.dst
-         WHERE l.src = ?1 AND n.status != 'deprecated'
-         ORDER BY l.dst",
+        "SELECT other FROM (
+             SELECT l.dst AS other FROM links l
+             JOIN notes n ON n.id = l.dst
+             WHERE l.src = ?1 AND n.status != 'deprecated'
+             UNION
+             SELECT target.id AS other FROM notes source
+             JOIN note_relations relation ON relation.src_uid = source.note_uid
+             JOIN notes target ON target.note_uid = relation.target_uid
+             WHERE source.id = ?1 AND target.status != 'deprecated'
+         ) ORDER BY other",
     )?;
     let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -344,10 +350,16 @@ fn outgoing_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
 
 fn incoming_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut statement = conn.prepare_cached(
-        "SELECT l.src FROM links l
-         JOIN notes n ON n.id = l.src
-         WHERE l.dst = ?1 AND n.status != 'deprecated'
-         ORDER BY l.src",
+        "SELECT other FROM (
+             SELECT l.src AS other FROM links l
+             JOIN notes n ON n.id = l.src
+             WHERE l.dst = ?1 AND n.status != 'deprecated'
+             UNION
+             SELECT source.id AS other FROM notes target
+             JOIN note_relations relation ON relation.target_uid = target.note_uid
+             JOIN notes source ON source.note_uid = relation.src_uid
+             WHERE target.id = ?1 AND source.status != 'deprecated'
+         ) ORDER BY other",
     )?;
     let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -362,12 +374,20 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE notes(
                  id TEXT PRIMARY KEY,
+                 note_uid TEXT,
                  title TEXT,
                  status TEXT NOT NULL,
                  document TEXT NOT NULL
              );
              CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
-             CREATE INDEX links_dst ON links(dst);",
+             CREATE INDEX links_dst ON links(dst);
+             CREATE TABLE note_relations(
+                 src_uid TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 target_uid TEXT NOT NULL,
+                 PRIMARY KEY(src_uid, kind, target_uid)
+             );
+             CREATE INDEX note_relations_target ON note_relations(target_uid);",
         )
         .unwrap();
         conn

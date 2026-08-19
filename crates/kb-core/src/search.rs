@@ -27,6 +27,25 @@ pub struct Hit {
     /// 作成日時・最終更新(一覧でも見えるように)
     pub created: Option<String>,
     pub updated: Option<String>,
+    pub note_uid: Option<String>,
+    pub namespace: Option<String>,
+    pub authority_role: Option<String>,
+    pub authority_status: Option<String>,
+    pub authority_scope: Option<String>,
+}
+
+impl Hit {
+    fn authority_priority(&self) -> u8 {
+        match (
+            self.authority_role.as_deref(),
+            self.authority_status.as_deref(),
+        ) {
+            (Some("canonical"), Some("active")) => 0,
+            (None, None) => 1,
+            (Some("proposal"), _) | (_, Some("superseded")) => 3,
+            _ => 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -84,6 +103,11 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
         }),
     }
 
+    // 同じqueryに現行canonicalがあるときだけ、legacy・record・proposal・supersededより
+    // 前へ出す。候補集合自体は従来の全文・意味検索で作り、authorityだけで無関係な
+    // ノートを混ぜない。
+    hits.sort_by_key(Hit::authority_priority);
+
     let related = match related_of(conn, hits.first().map(|hit| hit.id.as_str())) {
         Ok(related) => related,
         Err(error) => {
@@ -111,7 +135,8 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     }
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
-                snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags, n.created, n.generated_at
+                snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags, n.created, n.generated_at,
+                n.note_uid, n.namespace, n.authority_role, n.authority_status, n.authority_scope
          FROM fts_main f JOIN notes n ON n.id = f.id
          WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
          ORDER BY rank LIMIT ?2",
@@ -128,6 +153,11 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
             tags: split_tags(r.get::<_, Option<String>>(5)?),
             created: r.get(6)?,
             updated: r.get(7)?,
+            note_uid: r.get(8)?,
+            namespace: r.get(9)?,
+            authority_role: r.get(10)?,
+            authority_status: r.get(11)?,
+            authority_scope: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -144,7 +174,8 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
     let neighbors = embed::knn(conn, &qv, limit * 2)?;
     let mut out = Vec::new();
     let mut stmt = conn.prepare_cached(
-        "SELECT title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at
+        "SELECT title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at,
+                note_uid, namespace, authority_role, authority_status, authority_scope
          FROM notes WHERE id = ?1 AND status != 'deprecated'",
     )?;
     for (id, dist) in neighbors {
@@ -160,9 +191,28 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                 r.get::<_, Option<String>>(4)?,
                 r.get::<_, Option<String>>(5)?,
                 r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
+                r.get::<_, Option<String>>(11)?,
             ))
         });
-        if let Ok((title, status, snippet, origin, tags, created, updated)) = row {
+        if let Ok((
+            title,
+            status,
+            snippet,
+            origin,
+            tags,
+            created,
+            updated,
+            note_uid,
+            namespace,
+            authority_role,
+            authority_status,
+            authority_scope,
+        )) = row
+        {
             out.push((
                 Hit {
                     id,
@@ -175,6 +225,11 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
                     tags: split_tags(tags),
                     created,
                     updated,
+                    note_uid,
+                    namespace,
+                    authority_role,
+                    authority_status,
+                    authority_scope,
                 },
                 dist,
             ));
@@ -235,7 +290,8 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
         }
     }
     let sql = format!(
-        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin, n.tags, n.created, n.generated_at FROM notes n
+        "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin, n.tags, n.created, n.generated_at,
+                n.note_uid, n.namespace, n.authority_role, n.authority_status, n.authority_scope FROM notes n
          WHERE n.status != 'deprecated' AND {} LIMIT {}",
         conds.join(" AND "),
         limit
@@ -253,6 +309,11 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
             tags: split_tags(r.get::<_, Option<String>>(5)?),
             created: r.get(6)?,
             updated: r.get(7)?,
+            note_uid: r.get(8)?,
+            namespace: r.get(9)?,
+            authority_role: r.get(10)?,
+            authority_status: r.get(11)?,
+            authority_scope: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -345,7 +406,20 @@ pub fn similar_notes(
     let me = embed::from_blob(&blob);
     let linked: std::collections::HashSet<String> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT dst FROM links WHERE src = ?1 UNION SELECT src FROM links WHERE dst = ?1",
+            "SELECT other FROM (
+                 SELECT dst AS other FROM links WHERE src = ?1
+                 UNION SELECT src AS other FROM links WHERE dst = ?1
+                 UNION
+                 SELECT target.id AS other FROM notes source
+                 JOIN note_relations relation ON relation.src_uid = source.note_uid
+                 JOIN notes target ON target.note_uid = relation.target_uid
+                 WHERE source.id = ?1
+                 UNION
+                 SELECT source.id AS other FROM notes target
+                 JOIN note_relations relation ON relation.target_uid = target.note_uid
+                 JOIN notes source ON source.note_uid = relation.src_uid
+                 WHERE target.id = ?1
+             )",
         )?;
         let rows = stmt.query_map([id], |r| r.get::<_, String>(0))?;
         rows.collect::<std::result::Result<_, _>>()?
@@ -374,6 +448,16 @@ pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Op
         "SELECT DISTINCT other, (SELECT title FROM notes WHERE id = other) FROM (
              SELECT dst AS other FROM links WHERE src = ?1
              UNION SELECT src AS other FROM links WHERE dst = ?1
+             UNION
+             SELECT target.id AS other FROM notes source
+             JOIN note_relations relation ON relation.src_uid = source.note_uid
+             JOIN notes target ON target.note_uid = relation.target_uid
+             WHERE source.id = ?1
+             UNION
+             SELECT source.id AS other FROM notes target
+             JOIN note_relations relation ON relation.target_uid = target.note_uid
+             JOIN notes source ON source.note_uid = relation.src_uid
+             WHERE target.id = ?1
          ) LIMIT 5",
     )?;
     let rows = stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -536,6 +620,16 @@ fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Resu
              SELECT l.src AS other
              FROM links l JOIN notes n ON n.id = l.src AND n.status != 'deprecated'
              WHERE l.dst = ?1
+             UNION
+             SELECT target.id AS other FROM notes source
+             JOIN note_relations relation ON relation.src_uid = source.note_uid
+             JOIN notes target ON target.note_uid = relation.target_uid
+             WHERE source.id = ?1 AND target.status != 'deprecated'
+             UNION
+             SELECT source.id AS other FROM notes target
+             JOIN note_relations relation ON relation.target_uid = target.note_uid
+             JOIN notes source ON source.note_uid = relation.src_uid
+             WHERE target.id = ?1 AND source.status != 'deprecated'
          )",
     )?;
     for note in notes.iter_mut() {
@@ -566,7 +660,13 @@ fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Resu
     }
 
     let linked: std::collections::HashMap<String, std::collections::HashSet<String>> = {
-        let mut stmt = conn.prepare_cached("SELECT src, dst FROM links")?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT src, dst FROM links
+             UNION
+             SELECT source.id, target.id FROM note_relations relation
+             JOIN notes source ON source.note_uid = relation.src_uid
+             JOIN notes target ON target.note_uid = relation.target_uid",
+        )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut by_note =
             std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
@@ -634,7 +734,9 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
         agent_notes: count(
             "SELECT count(*) FROM notes WHERE status != 'deprecated' AND origin = 'agent'",
         )?,
-        links: count("SELECT count(*) FROM links")?,
+        links: count(
+            "SELECT (SELECT count(*) FROM links) + (SELECT count(*) FROM note_relations)",
+        )?,
         embed_enabled: crate::embed::model_installed(),
         embedded,
     })
@@ -643,7 +745,8 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
 /// 直近ノート(generated_at 降順、なければ mtime 降順)。
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at
+        "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at,
+                note_uid, namespace, authority_role, authority_status, authority_scope
          FROM notes WHERE status != 'deprecated'
          ORDER BY coalesce(generated_at, created, '') DESC LIMIT ?1",
     )?;
@@ -659,6 +762,11 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
             tags: split_tags(r.get::<_, Option<String>>(5)?),
             created: r.get(6)?,
             updated: r.get(7)?,
+            note_uid: r.get(8)?,
+            namespace: r.get(9)?,
+            authority_role: r.get(10)?,
+            authority_status: r.get(11)?,
+            authority_scope: r.get(12)?,
         })
     })?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -668,9 +776,12 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use crate::authority::{
+        Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteRelation, RelationKind,
+    };
     use crate::frontmatter::{Frontmatter, Generated, Note};
     use crate::index::{open_db, sync};
-    use crate::vault::Vault;
+    use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
     const PERFORMANCE_NOTE_COUNT: usize = 10_000;
     const PERFORMANCE_CATEGORY_COUNT: usize = 100;
@@ -770,6 +881,206 @@ mod tests {
     fn recent_returns_all() {
         let (_d, _v, conn) = setup();
         assert_eq!(super::recent(&conn, 10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn active_canonical_ranks_before_records_and_proposals() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let create = |title: &str, authority: Authority| {
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title,
+                        body: "権威順位番兵アルタイル",
+                        description: None,
+                        tags: &["test".into()],
+                        authority,
+                        relations: Vec::new(),
+                        allow_new_tags: true,
+                        client: "test/client",
+                    },
+                )
+                .unwrap()
+        };
+        let record = create(
+            "記録",
+            Authority {
+                namespace: NoteNamespace::Records,
+                role: AuthorityRole::Record,
+                status: AuthorityStatus::Active,
+                scope: "test/authority-ranking".into(),
+            },
+        );
+        let proposal = create(
+            "提案",
+            Authority {
+                namespace: NoteNamespace::Knowledge,
+                role: AuthorityRole::Proposal,
+                status: AuthorityStatus::Active,
+                scope: "test/authority-ranking".into(),
+            },
+        );
+        let canonical = create(
+            "正本",
+            Authority {
+                namespace: NoteNamespace::Knowledge,
+                role: AuthorityRole::Canonical,
+                status: AuthorityStatus::Active,
+                scope: "test/authority-ranking".into(),
+            },
+        );
+        assert!(
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: "重複正本",
+                        body: "権威順位番兵アルタイル",
+                        description: None,
+                        tags: &["test".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: "test/authority-ranking".into(),
+                        },
+                        relations: Vec::new(),
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .is_err()
+        );
+
+        let hits = super::search(&conn, "権威順位番兵アルタイル", 10).hits;
+        assert_eq!(
+            hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(),
+            [canonical.as_str(), record.as_str(), proposal.as_str()]
+        );
+    }
+
+    #[test]
+    fn typed_relations_expand_retrieval_and_block_dangling_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let target = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "根拠記録",
+                    body: "観測結果",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Records,
+                        role: AuthorityRole::Record,
+                        status: AuthorityStatus::Active,
+                        scope: "test/typed-relation-source".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let target_uid = vault
+            .read_note_from_db(&conn, &target)
+            .unwrap()
+            .front
+            .note_uid
+            .unwrap();
+        assert!(
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: "参照切れ",
+                        body: "保存してはいけない",
+                        description: None,
+                        tags: &["test".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: "test/missing-relation-target".into(),
+                        },
+                        relations: vec![NoteRelation {
+                            kind: RelationKind::Supports,
+                            target: crate::authority::NoteUid::at(999),
+                        }],
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .is_err()
+        );
+        let source = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "導出知識",
+                    body: "結論",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Knowledge,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "test/typed-relation-result".into(),
+                    },
+                    relations: vec![NoteRelation {
+                        kind: RelationKind::DerivedFrom,
+                        target: target_uid,
+                    }],
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+
+        let bundle = crate::retrieval::context_documents(
+            &conn,
+            std::slice::from_ref(&source),
+            crate::retrieval::RetrievalOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            bundle
+                .documents
+                .iter()
+                .map(|doc| doc.id.as_str())
+                .collect::<Vec<_>>(),
+            [source.as_str(), target.as_str()]
+        );
+        assert!(vault.agent_removal_candidate(&conn, &target).is_err());
+        assert!(
+            vault
+                .agent_delete_note(&conn, &target, "蒸留後の整理", "test/client")
+                .is_err()
+        );
+        vault
+            .agent_update_note(
+                &conn,
+                NoteUpdate {
+                    id: &source,
+                    title: None,
+                    body: None,
+                    description: None,
+                    tags: None,
+                    authority: None,
+                    relations: Some(Vec::new()),
+                    allow_new_tags: false,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        vault
+            .agent_delete_note(&conn, &target, "蒸留後の整理", "test/client")
+            .unwrap();
     }
 
     #[test]

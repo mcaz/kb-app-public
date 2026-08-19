@@ -168,6 +168,11 @@ fn convert(
     let source = get("source");
 
     let mut front = Frontmatter {
+        // Legacy imports remain authority-less until an explicit migration assigns
+        // a stable UID and canonical scope. This preserves lossless compatibility.
+        note_uid: None,
+        authority: None,
+        relations: Vec::new(),
         kind: get("type").unwrap_or_else(|| "Note".into()),
         title: get("title"),
         description: None,

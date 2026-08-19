@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use kb_core::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace};
 use kb_core::index::{open_db, sync};
 use kb_core::registry::Registry;
 use kb_core::search::recent;
@@ -58,6 +59,15 @@ enum Command {
         description: Option<String>,
         #[arg(long, value_delimiter = ',')]
         tags: Vec<String>,
+        #[arg(long, value_enum)]
+        namespace: NamespaceArg,
+        #[arg(long, value_enum)]
+        role: AuthorityRoleArg,
+        #[arg(long, value_enum, default_value = "active")]
+        authority_status: AuthorityStatusArg,
+        /// 同じ主題・適用範囲のcanonicalを一意にする安定key
+        #[arg(long)]
+        scope: String,
         #[arg(long, default_value = "cli/unknown")]
         client: String,
         /// 語彙にない新語を許す(既定は拒否 — 契約1の強制点)
@@ -204,6 +214,63 @@ enum RuleDeliveryModeArg {
     AlwaysTopicEvent,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum NamespaceArg {
+    Entities,
+    Initiatives,
+    Decisions,
+    Procedures,
+    Records,
+    Knowledge,
+}
+
+impl From<NamespaceArg> for NoteNamespace {
+    fn from(value: NamespaceArg) -> Self {
+        match value {
+            NamespaceArg::Entities => Self::Entities,
+            NamespaceArg::Initiatives => Self::Initiatives,
+            NamespaceArg::Decisions => Self::Decisions,
+            NamespaceArg::Procedures => Self::Procedures,
+            NamespaceArg::Records => Self::Records,
+            NamespaceArg::Knowledge => Self::Knowledge,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum AuthorityRoleArg {
+    Canonical,
+    Record,
+    Proposal,
+}
+
+impl From<AuthorityRoleArg> for AuthorityRole {
+    fn from(value: AuthorityRoleArg) -> Self {
+        match value {
+            AuthorityRoleArg::Canonical => Self::Canonical,
+            AuthorityRoleArg::Record => Self::Record,
+            AuthorityRoleArg::Proposal => Self::Proposal,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum AuthorityStatusArg {
+    Active,
+    Historical,
+    Superseded,
+}
+
+impl From<AuthorityStatusArg> for AuthorityStatus {
+    fn from(value: AuthorityStatusArg) -> Self {
+        match value {
+            AuthorityStatusArg::Active => Self::Active,
+            AuthorityStatusArg::Historical => Self::Historical,
+            AuthorityStatusArg::Superseded => Self::Superseded,
+        }
+    }
+}
+
 impl From<RuleDeliveryModeArg> for kb_core::rule_delivery_eval::DeliveryMode {
     fn from(value: RuleDeliveryModeArg) -> Self {
         match value {
@@ -317,6 +384,10 @@ fn main() -> Result<()> {
             body,
             description,
             tags,
+            namespace,
+            role,
+            authority_status,
+            scope,
             client,
             allow_new_tags,
         } => {
@@ -331,6 +402,13 @@ fn main() -> Result<()> {
                     body: &body,
                     description: description.as_deref(),
                     tags: &tags,
+                    authority: Authority {
+                        namespace: namespace.into(),
+                        role: role.into(),
+                        status: authority_status.into(),
+                        scope,
+                    },
+                    relations: Vec::new(),
                     allow_new_tags,
                     client: &client,
                 },

@@ -8,7 +8,7 @@
 
 | # | 契約 | 強制点 |
 |---|---|---|
-| 1 | **すべてのノートはタグを1〜4個持つ**(タグはこのアプリの一次の整理手段) | propose / update / import は core の単一validationで個数・形(英小文字・数字・ハイフン、20文字以内)・語彙を検査 / 「タグ運用」ノートがあればその語彙表だけを正本とし、無い新規vaultだけ現用語からbootstrap / **語彙外の新語は拒否**(近い既存語を添えて返す) / 新語追加の`allow_new_tags`はtrusted UI / CLIの別承認経路だけに置き、AI用MCPのschemaから能力を除外し、未知引数として渡されても書込前に拒否 / 外部編集を含む既存違反は読み取りを止めずcareへ表示し、silent normalizeしない |
+| 1 | **すべてのノートはタグを1〜4個持つ**(タグは主題を横断する可変facetであり、正本判定には使わない) | propose / update / import は core の単一validationで個数・形(英小文字・数字・ハイフン、20文字以内)・語彙を検査 / 「タグ運用」ノートがあればその語彙表だけを正本とし、無い新規vaultだけ現用語からbootstrap / **語彙外の新語は拒否**(近い既存語を添えて返す) / 新語追加の`allow_new_tags`はtrusted UI / CLIの別承認経路だけに置き、AI用MCPのschemaから能力を除外し、未知引数として渡されても書込前に拒否 / 外部編集を含む既存違反は読み取りを止めずcareへ表示し、silent normalizeしない |
 | 2 | **ノートの形式(OKF frontmatter)はアプリが管理**する。直接の形式いじりはしない | parse 検証・書き込みはコア API 経由のみ |
 | 3 | **ノートは AI の領分**(update / 蒸留 / 削除判断と実行は AI、人間は方針を統治)。旧 `origin: human` ノートは互換読み取り専用 | 通常の書き込み口は propose / update と対象固定型の二段階削除だけ。個別の人間承認を要求せず、MCPはprepare_removeで対象ID・内容指紋へ固定した5分tokenと`required=true`のremoval_prepared eventを返し、同じnoteとtokenを受けるdestructive annotation付きcommit_removeだけが削除する。tokenは使用時に失効し、期限切れ・対象差し替え・準備後変更・二重実行をコアで拒否する。削除理由・対象・履歴を残し、Git履歴から回復可能にする。新規・移植ノートは`origin: agent`。CLIに人間用のnew / edit / archive / deleteを公開せず、コアのraw writeは移植内部に閉じる |
 | 4 | **同期・検索索引は派生**。壊れたら画面に出す(沈黙しない) | 続行可能な失敗は `data + Degradation[]` で返し、安定した `code` をUI/MCPへ表示 / MCPは`structuredContent.conversation_events`へ`required=true`のdegradation・note link・終端状態を載せ、対応hostはモデルの最終文へ委ねず描画 / 取得失敗を空配列へ変換して「0件」と偽らない / Markdown出力失敗は`markdown_export`として残す / 続行不能だけをerrorにする |
@@ -16,6 +16,7 @@
 | 6 | **正本は特定の保存形式ではなく再現可能性契約(Storage Contract)で定義する**(2026-08-16追加、2026-08-18実行面改定) | 日常のAI・GUI・CLIはSQLite transactionから読み書き / 同じtransactionでdurable outboxを積みMarkdownへ出力 / MarkdownはObsidian表示・Gitバックアップ・fresh clone復元用で、通常syncは外部編集を暗黙importしない / DB binary自体はGit同期しない / repository の論理状態を決定的な JSON snapshot へ exportしSHA-256 digestで比較 / fresh cloneからDBと検索索引を再構築する受入テスト |
 | 7 | **個人データを送る前に、接続先が認証済みの private repository であることを確認する**(2026-08-16 追加) | GitHub API の認証済み応答で private + push 権限を確認 / public・internal・未認証・404・通信失敗・判定不能は fail-closed / LFS を含む各 upload の直前に再確認 / 初回は「private repository を作る」と「既存 Vault を使う」を分ける / 既存 Vault は `.kb-workspace` が一致するときだけ現在の Vault に接続し、不一致を自動 merge・上書きしない |
 | 8 | **AI は Vault の生ファイルを読まず、kb-app の取次口だけを使う**(2026-08-17 追加、2026-08-19 surface分離) | `client` actorの先頭segmentを`ClientSurface`へ厳密変換し、モデル名や`claude` / `gpt`の部分一致で能力を推測しない / Codex CLI は管理 `requirements.toml` の global deny-read と専用 permission profile、Claude Code は管理 `managed-settings` の OS sandbox で、登録 Vault と kb-app 端末設定を常時 deny-read / deny-write / unsandboxed escape 無効にする / 組み込み Read と shell の子 process の両方を拒否 / 両coding agentの管理 `UserPromptSubmit` hookは同じkb-app実行ファイルをMCP serverとして子起動し、モデル判断の前に `initialize → search(include_documents)` を一度実行して、上位5 seedからDB有向リンクを最大2ホップ展開し、最大50候補から予算内・最大10本文を同じDB snapshotで取得 / Claude Desktop・ChatGPT通常チャット面はkb-app MCPが生path能力を公開しないbroker境界とし、managed hookによる検索開始保証は主張しない / 未知surfaceはfail-closed / OFFでもinitializeはtools capabilityとON時と同じtool setを公開し、全tools/callをVault操作前に同一の構造化終端結果`kb_disabled`（`authoritative=true` / `retryable=false` / 空data）で拒否 / promptsは非公開 / hookはこの終端結果なら無音終了し、それ以外の失敗は該当なしへ変換せず劣化として届ける / coding agentで管理ポリシーが未導入・古い・競合・登録 Vault 不一致なら設定 UI の switch を操作不能にし、MCPも同じ終端結果でfail-closed / ONはMCPからデータを返せるようにするだけで、生ファイル拒否を緩めない |
+| 9 | **現行の正本・記録・候補をpathや本文推測ではなくauthority envelopeで一意に判定する**(2026-08-20追加) | 新規proposeはcore発行の不変`note_uid`と、共通6namespace (`entities` / `initiatives` / `decisions` / `procedures` / `records` / `knowledge`)、role (`canonical` / `record` / `proposal`)、status (`active` / `historical` / `superseded`)、安定scopeを必須化 / legacyノートは明示移行までenvelope不在の読み取りを許す / 同じnamespace+scopeのactive canonicalはSQLiteの部分unique indexとStorage Contractの両方で1件に固定 / `note_uid`の差し替えを拒否 / typed relation (`derived_from` / `supports` / `updates` / `contradicts` / `supersedes` / `mentions`) は存在する`note_uid`だけを端点にし、自己参照・重複・参照切れを拒否 / `supersedes`は同じnamespace+scopeのactive canonicalからsuperseded canonicalへだけ結び、後継のないsupersededを拒否 / typed relationで参照中のノートは、参照元を整理するまで削除しない / 検索は候補集合を変えずactive canonicalをrecord・proposal・supersededより優先 |
 
 - タグ無しノートは契約違反状態として**お手入れの気づき**に出す(修復は Claude への依頼で)
 - 契約5 の「新しい版は前の版の区分を引き継ぐ」は、確認を1段置いても
@@ -47,6 +48,11 @@
   OSガードを再判定してから、公開されたsearchのDB本文同梱オプションだけを呼ぶ。候補探索と本文予算選択は
   DB内で完結し、Markdownを検索時に読み直さない。Claudeだけにあった旧Python hookはmanaged hook導入時に
   削除し、CodexとClaudeの差を残さない。
+- 契約9の`proposal`は**人間の承認待ち状態ではない**。AIが蒸留中に正本候補と既存canonicalを
+  区別するためのauthority roleであり、承認キュー・確定ボタン・下書きバッジ・状態filterを
+  UIへ復活させない。ユーザーは方針を統治し、AIはその範囲で分類・統合・削除を実行する。
+- 契約9のlegacy互換は恒久的な別体系ではない。envelopeの無い既存ノートは読めるが、新規proposeは
+  必ずauthorityを持つ。物理path移動は安定UID・alias・transactional moveが揃う別段まで行わない。
 - 契約の変更はこの文書の改定+コアの強制点の変更として行う(instructions だけの変更は不可)
 - **語彙の正本は設定ファイルでなく「タグ運用」ノートの `## 語彙` 節**。
   どの語を使うかは運用(会話で合意し KB のノートに記録する)であり、この文書は

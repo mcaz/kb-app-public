@@ -1,0 +1,15 @@
+{
+  "note_uid": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "authority": {
+    "namespace": "decisions",
+    "role": "canonical",
+    "status": "active",
+    "scope": "kb-app/github-operations"
+  },
+  "relations": [
+    {
+      "type": "derived_from",
+      "target": "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+    }
+  ]
+}

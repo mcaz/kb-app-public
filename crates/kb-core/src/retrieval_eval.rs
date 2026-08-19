@@ -659,13 +659,21 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE notes(
-                 id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
+                 id TEXT PRIMARY KEY, note_uid TEXT, title TEXT, description TEXT, status TEXT,
                  origin TEXT, generated_by TEXT, generated_at TEXT,
                  mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT,
-                 document TEXT NOT NULL DEFAULT ''
+                 document TEXT NOT NULL DEFAULT '', namespace TEXT,
+                 authority_role TEXT, authority_status TEXT, authority_scope TEXT
              );
              CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
              CREATE INDEX links_dst ON links(dst);
+             CREATE TABLE note_relations(
+                 src_uid TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 target_uid TEXT NOT NULL,
+                 PRIMARY KEY(src_uid, kind, target_uid)
+             );
+             CREATE INDEX note_relations_target ON note_relations(target_uid);
              CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
              CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
              CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');",

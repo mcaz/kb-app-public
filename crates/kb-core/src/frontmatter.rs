@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::authority::{Authority, NoteRelation, NoteUid};
+
 pub const STATUS_DRAFT: &str = "draft";
 pub const STATUS_STABLE: &str = "stable";
 pub const STATUS_DEPRECATED: &str = "deprecated";
@@ -47,6 +49,15 @@ pub struct Frontmatter {
     /// 作成時に刻まれ、越境の明示操作でのみ変わる(原則9)。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// pathから独立した不変identity。legacyノートは移行waveまで不在を許す。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note_uid: Option<NoteUid>,
+    /// canonical・record・proposalを機械判定するauthority envelope。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority: Option<Authority>,
+    /// pathでなくnote_uidを端点にするtyped relation。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<NoteRelation>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
 }
@@ -65,6 +76,9 @@ impl Frontmatter {
             stale_after: None,
             created: None,
             origin: None,
+            note_uid: None,
+            authority: None,
+            relations: Vec::new(),
             extra: BTreeMap::new(),
         }
     }
@@ -125,6 +139,11 @@ pub struct Note {
 
 impl Note {
     pub fn to_file_string(&self) -> Result<String> {
+        crate::authority::validate_envelope(
+            self.front.note_uid.as_ref(),
+            self.front.authority.as_ref(),
+            &self.front.relations,
+        )?;
         let yaml = serde_yaml::to_string(&self.front).context("frontmatter serialize")?;
         let body = self.body.trim_start_matches('\n').trim_end();
         Ok(format!("---\n{yaml}---\n\n{body}\n"))
@@ -149,6 +168,11 @@ impl Note {
         if front.kind.trim().is_empty() {
             bail!("type が空(OKF 必須キー)");
         }
+        crate::authority::validate_envelope(
+            front.note_uid.as_ref(),
+            front.authority.as_ref(),
+            &front.relations,
+        )?;
         Ok(Note {
             front,
             body: body.to_string(),
@@ -175,6 +199,10 @@ pub fn today() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authority::{
+        Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteRelation, NoteUid,
+        RelationKind,
+    };
 
     #[test]
     fn roundtrip_preserves_unknown_keys() {
@@ -205,5 +233,37 @@ mod tests {
     #[test]
     fn missing_type_rejected() {
         assert!(Note::parse("---\ntitle: x\n---\n\nb\n").is_err());
+    }
+
+    #[test]
+    fn authority_and_typed_relations_round_trip_without_paths() {
+        let uid = NoteUid::at(1);
+        let target = NoteUid::at(2);
+        let mut front = Frontmatter::new_note("正本");
+        front.note_uid = Some(uid.clone());
+        front.authority = Some(Authority {
+            namespace: NoteNamespace::Decisions,
+            role: AuthorityRole::Canonical,
+            status: AuthorityStatus::Active,
+            scope: "kb-app/github-operations".into(),
+        });
+        front.relations.push(NoteRelation {
+            kind: RelationKind::DerivedFrom,
+            target: target.clone(),
+        });
+        let document = Note {
+            front,
+            body: "本文".into(),
+        }
+        .to_file_string()
+        .unwrap();
+
+        let parsed = Note::parse(&document).unwrap();
+        assert_eq!(parsed.front.note_uid, Some(uid));
+        assert_eq!(
+            parsed.front.authority.unwrap().scope,
+            "kb-app/github-operations"
+        );
+        assert_eq!(parsed.front.relations[0].target, target);
     }
 }

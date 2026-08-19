@@ -306,6 +306,13 @@ pub fn create_fixture(suite: &RuleDeliverySuite, path: &Path) -> Result<Vault> {
                 body: &note.body,
                 description: Some("Rule Delivery Matrix evaluation fixture"),
                 tags: &note.tags,
+                authority: crate::authority::Authority {
+                    namespace: crate::authority::NoteNamespace::Records,
+                    role: crate::authority::AuthorityRole::Record,
+                    status: crate::authority::AuthorityStatus::Active,
+                    scope: format!("rule-delivery/{}", crate::vault::slugify(&note.title)),
+                },
+                relations: Vec::new(),
                 allow_new_tags: true,
                 client: "rule-delivery-eval/fixture",
             },

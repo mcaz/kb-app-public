@@ -147,8 +147,12 @@ prepare_remove で対象と理由を固定し、追加の人間承認なしに c
 本文は未来の読者向けに自己完結で(経緯・出典・関連ノートへの /path.md リンク)。\n\
 【ファイル】会話で作成・受領した画像や文書を既存ノートの持ち物にするときは attach を使う。\
 ローカルpathではなく内容をBase64で渡す。保存先・持ち出し区分・来歴はkb-appが固定する。\n\
-【関連】ノート間の関連づけはあなたの領分。get の「近いノート」を見て、本当に関連するなら\
-update で本文に /path.md リンクを足す(ユーザーに可否を尋ねる形にはしない)。\n\
+【関連】ノート間の関連づけはあなたの領分。get の「近いノート」を全文確認し、本当に関連するなら\
+update のrelationsへ対象note_uidを含むtyped relationを設定する。relationsは全置換なので既存edgeを保持して送る。\
+本文の /path.md リンクは人間可読な参照が必要な場合に併用する(ユーザーに可否を尋ねる形にはしない)。\n\
+【authority】proposeでは共通6namespace、canonical/record/proposal role、authority status、\
+同じ主題・適用範囲を示すscopeを必ず指定する。同じnamespace+scopeのactive canonicalを複数作らない。\
+typed relationはnote_uidを端点にし、根拠・更新・矛盾・後継をpath変更から独立して結ぶ。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
@@ -586,13 +590,23 @@ fn tool_definitions(client: &str) -> Value {
         },
         {
             "name": "propose",
-            "description": "知見をノートとして起票。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
+            "description": "知見をauthority付きノートとして起票。本文は自己完結の Markdown で、経緯・出典と関連ノートへの /path.md リンクを含める。",
             "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "title": {"type": "string", "description": "内容が一意に分かるタイトル"},
                 "body": {"type": "string", "description": "本文(自己完結)"},
                 "description": {"type": "string", "description": "一文要約"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙のみ。英小文字ケバブ)"}
-            }, "required": ["title", "body", "tags"]}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "タグ1〜4個(必須・既存語彙のみ。英小文字ケバブ)"},
+                "authority": {"type": "object", "additionalProperties": false, "properties": {
+                    "namespace": {"type": "string", "enum": ["entities", "initiatives", "decisions", "procedures", "records", "knowledge"]},
+                    "role": {"type": "string", "enum": ["canonical", "record", "proposal"]},
+                    "status": {"type": "string", "enum": ["active", "historical", "superseded"]},
+                    "scope": {"type": "string", "description": "同じ主題・適用範囲のcanonicalを一意にする安定key"}
+                }, "required": ["namespace", "role", "status", "scope"]},
+                "relations": {"type": "array", "description": "初期typed relation一覧。targetは既存ノートのnote_uid", "items": {"type": "object", "additionalProperties": false, "properties": {
+                    "type": {"type": "string", "enum": ["derived_from", "supports", "updates", "contradicts", "supersedes", "mentions"]},
+                    "target": {"type": "string", "description": "参照先note_uid(ULID)"}
+                }, "required": ["type", "target"]}}
+            }, "required": ["title", "body", "tags", "authority"]}
         },
         {
             "name": "update",
@@ -602,7 +616,17 @@ fn tool_definitions(client: &str) -> Value {
                 "title": {"type": "string"},
                 "body": {"type": "string", "description": "本文全体の置換"},
                 "description": {"type": "string"},
-                "tags": {"type": "array", "items": {"type": "string"}, "description": "既存語彙のみ(全消し・5個以上は不可)"}
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "既存語彙のみ(全消し・5個以上は不可)"},
+                "authority": {"type": "object", "additionalProperties": false, "properties": {
+                    "namespace": {"type": "string", "enum": ["entities", "initiatives", "decisions", "procedures", "records", "knowledge"]},
+                    "role": {"type": "string", "enum": ["canonical", "record", "proposal"]},
+                    "status": {"type": "string", "enum": ["active", "historical", "superseded"]},
+                    "scope": {"type": "string"}
+                }, "required": ["namespace", "role", "status", "scope"]},
+                "relations": {"type": "array", "description": "typed relation一覧を全置換。getで既存edgeを確認してから送る", "items": {"type": "object", "additionalProperties": false, "properties": {
+                    "type": {"type": "string", "enum": ["derived_from", "supports", "updates", "contradicts", "supersedes", "mentions"]},
+                    "target": {"type": "string", "description": "参照先note_uid(ULID)"}
+                }, "required": ["type", "target"]}}
             }, "required": ["note"]}
         },
         {
@@ -665,6 +689,24 @@ fn note_conversation_identity(vault: &Vault, id: &str, title: &str) -> Result<Va
         "title": title,
         "conversation_link": path.to_string_lossy(),
     }))
+}
+
+fn authority_argument(args: &Value, required: bool) -> Result<Option<crate::authority::Authority>> {
+    let Some(value) = args.get("authority") else {
+        if required {
+            anyhow::bail!("authority が必要");
+        }
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .context("authority の形式が不正")
+        .map(Some)
+}
+
+fn relations_argument(args: &Value) -> Result<Option<Vec<crate::authority::NoteRelation>>> {
+    args.get("relations")
+        .map(|value| serde_json::from_value(value.clone()).context("relations の形式が不正"))
+        .transpose()
 }
 
 fn note_conversation_event(identity: &Value, event: &str) -> Value {
@@ -972,6 +1014,9 @@ fn call_tool_with_search_options(
             let note_tags = note.front.tags.clone();
             let note_status = note.front.effective_status().to_string();
             let note_origin = note.front.origin.clone();
+            let note_uid = note.front.note_uid.clone();
+            let note_authority = note.front.authority.clone();
+            let note_relations = note.front.relations.clone();
             let note_body = note.body.clone();
             let link_text = note_markdown_link(&identity);
             Ok(ToolOutput {
@@ -988,6 +1033,9 @@ fn call_tool_with_search_options(
                     "tags": note_tags,
                     "status": note_status,
                     "origin": note_origin,
+                    "note_uid": note_uid,
+                    "authority": note_authority,
+                    "relations": note_relations,
                     "body": note_body,
                     "conversation_link": identity["conversation_link"],
                     "artifacts": artifact_rows,
@@ -1132,11 +1180,17 @@ fn call_tool_with_search_options(
                     body,
                     description,
                     tags: &tags,
+                    authority: authority_argument(args, true)?.expect("required above"),
+                    relations: relations_argument(args)?.unwrap_or_default(),
                     allow_new_tags: false,
                     client,
                 },
             )?;
             let mut structured = note_conversation_identity(vault, &id, title)?;
+            let created = vault.read_note_from_db(&conn, &id)?;
+            structured["note_uid"] = serde_json::to_value(&created.front.note_uid)?;
+            structured["authority"] = serde_json::to_value(&created.front.authority)?;
+            structured["relations"] = serde_json::to_value(&created.front.relations)?;
             structured["event"] = json!("note_created");
             structured["degraded"] = serde_json::to_value(&degraded)?;
             structured["conversation_events"] = conversation_events(
@@ -1169,6 +1223,8 @@ fn call_tool_with_search_options(
                     body: args.get("body").and_then(|v| v.as_str()),
                     description: args.get("description").and_then(|v| v.as_str()),
                     tags: tags.as_deref(),
+                    authority: authority_argument(args, false)?,
+                    relations: relations_argument(args)?,
                     allow_new_tags: false,
                     client,
                 },
@@ -1179,6 +1235,9 @@ fn call_tool_with_search_options(
                 id,
                 note.front.title.as_deref().unwrap_or("無題"),
             )?;
+            structured["note_uid"] = serde_json::to_value(&note.front.note_uid)?;
+            structured["authority"] = serde_json::to_value(&note.front.authority)?;
+            structured["relations"] = serde_json::to_value(&note.front.relations)?;
             structured["event"] = json!("note_updated");
             structured["degraded"] = serde_json::to_value(&degraded)?;
             structured["conversation_events"] = conversation_events(
@@ -1655,7 +1714,13 @@ mod tests {
             &serde_json::json!({
                 "title": "評価ノート",
                 "body": "初期本文",
-                "tags": ["eval"]
+                "tags": ["eval"],
+                "authority": {
+                    "namespace": "knowledge",
+                    "role": "canonical",
+                    "status": "active",
+                    "scope": "test/evaluation-note"
+                }
             }),
             false,
         )
@@ -1667,6 +1732,8 @@ mod tests {
 
         assert_eq!(proposed["title"], "評価ノート");
         assert_eq!(proposed["event"], "note_created");
+        assert!(proposed["note_uid"].as_str().is_some());
+        assert_eq!(proposed["authority"]["namespace"], "knowledge");
         assert_eq!(proposed["conversation_events"][0]["type"], "note_link");
         assert_eq!(proposed["conversation_events"][0]["event"], "note_created");
         assert_eq!(proposed["conversation_events"][0]["required"], true);
@@ -2044,6 +2111,8 @@ mod tests {
                     body: Some("変更後"),
                     description: None,
                     tags: None,
+                    authority: None,
+                    relations: None,
                     allow_new_tags: false,
                     client: "test/client",
                 },
@@ -2131,6 +2200,10 @@ mod tests {
                 assert_eq!(schema["additionalProperties"], false);
                 assert!(schema["properties"].get("allow_new_tags").is_none());
             }
+            assert_eq!(
+                find(definitions, "propose")["inputSchema"]["required"],
+                serde_json::json!(["title", "body", "tags", "authority"])
+            );
         }
     }
 

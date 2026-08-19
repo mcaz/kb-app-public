@@ -178,6 +178,17 @@ export type AppError =
 /**  Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。 */
 { code: "unexpected"; message: string };
 
+export type Authority = {
+	namespace: NoteNamespace,
+	role: AuthorityRole,
+	status: AuthorityStatus,
+	scope: string,
+};
+
+export type AuthorityRole = "canonical" | "record" | "proposal";
+
+export type AuthorityStatus = "active" | "historical" | "superseded";
+
 /**  この端末で実体を開けるか。**台帳には載せない**(上の doc 参照)。 */
 export type Availability = 
 /**  手元にある */
@@ -370,6 +381,11 @@ export type Hit_Deserialize = {
 	/**  作成日時・最終更新(一覧でも見えるように) */
 	created: string | null,
 	updated: string | null,
+	note_uid: string | null,
+	namespace: string | null,
+	authority_role: string | null,
+	authority_status: string | null,
+	authority_scope: string | null,
 };
 
 export type Hit_Serialize = {
@@ -388,6 +404,11 @@ export type Hit_Serialize = {
 	/**  作成日時・最終更新(一覧でも見えるように) */
 	created: string | null,
 	updated: string | null,
+	note_uid: string | null,
+	namespace: string | null,
+	authority_role: string | null,
+	authority_status: string | null,
+	authority_scope: string | null,
 };
 
 export type HomeState = HomeState_Serialize | HomeState_Deserialize;
@@ -447,6 +468,13 @@ export type NoteListPage = {
 	degraded: Degradation[],
 };
 
+export type NoteNamespace = "entities" | "initiatives" | "decisions" | "procedures" | "records" | "knowledge";
+
+export type NoteRelation = {
+	type: RelationKind,
+	target: NoteUid,
+};
+
 /**  カテゴリ別一覧の1行。本文全体を画面へ運ばないための軽量表現。 */
 export type NoteSummary = {
 	id: string,
@@ -463,6 +491,8 @@ export type NoteSummary = {
 	file_count: number,
 };
 
+export type NoteUid = string;
+
 export type NoteView = {
 	id: string,
 	title: string,
@@ -471,6 +501,9 @@ export type NoteView = {
 	status: string,
 	origin: string | null,
 	tags: string[],
+	note_uid: NoteUid | null,
+	authority: Authority | null,
+	relations: NoteRelation[],
 	created_at: string | null,
 	generated_at: string | null,
 	related: ([string, string | null])[],
@@ -484,6 +517,8 @@ export type PreviewFile = {
 	path: string,
 	text: string | null,
 };
+
+export type RelationKind = "derived_from" | "supports" | "updates" | "contradicts" | "supersedes" | "mentions";
 
 export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";
 

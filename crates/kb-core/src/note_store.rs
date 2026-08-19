@@ -77,6 +77,7 @@ pub(crate) fn put(
         )
         .optional()?;
     crate::index::upsert(&transaction, vault, id.as_str(), now_nanos()?, note)?;
+    validate_authority_write(&transaction, id.as_str(), note)?;
     transaction.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
          VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, ?4, ?5, ?6)",
@@ -109,6 +110,28 @@ pub(crate) fn delete(
         )
         .optional()?
         .with_context(|| format!("削除するノートが見つからない: {id}"))?;
+    let note_uid: Option<String> = transaction
+        .query_row(
+            "SELECT note_uid FROM notes WHERE id = ?1",
+            [id.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(note_uid) = &note_uid {
+        let source: Option<String> = transaction
+            .query_row(
+                "SELECT source.id FROM note_relations relation
+                 JOIN notes source ON source.note_uid = relation.src_uid
+                 WHERE relation.target_uid = ?1 LIMIT 1",
+                [note_uid],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(source) = source {
+            bail!("typed relationの参照先は削除できない: {source} -> {id}");
+        }
+    }
     transaction.execute("DELETE FROM notes WHERE id = ?1", [id.as_str()])?;
     transaction.execute(
         "DELETE FROM links WHERE src = ?1 OR dst = ?1",
@@ -117,12 +140,84 @@ pub(crate) fn delete(
     transaction.execute("DELETE FROM fts_main WHERE id = ?1", [id.as_str()])?;
     transaction.execute("DELETE FROM fts_tri WHERE id = ?1", [id.as_str()])?;
     transaction.execute("DELETE FROM note_vecs WHERE id = ?1", [id.as_str()])?;
+    if let Some(note_uid) = note_uid {
+        transaction.execute("DELETE FROM note_relations WHERE src_uid = ?1", [&note_uid])?;
+    }
     transaction.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
          VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, NULL, ?4, ?5)",
         rusqlite::params![id.as_str(), DELETE, base_document, log_entry, commit_message],
     )?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn validate_authority_write(conn: &Connection, id: &str, note: &Note) -> Result<()> {
+    use crate::authority::{AuthorityRole, AuthorityStatus, RelationKind};
+
+    let Some(uid) = &note.front.note_uid else {
+        return Ok(());
+    };
+    let authority = note
+        .front
+        .authority
+        .as_ref()
+        .context("note_uid付きノートにauthorityがない")?;
+    for relation in &note.front.relations {
+        let target: Option<(String, String, String, String)> = conn
+            .query_row(
+                "SELECT namespace, authority_role, authority_status, authority_scope
+                 FROM notes WHERE note_uid=?1",
+                [relation.target.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((target_namespace, target_role, target_status, target_scope)) = target else {
+            bail!(
+                "typed relationの参照先がない: {id} {} -> {}",
+                relation.kind.as_str(),
+                relation.target
+            );
+        };
+        if relation.kind == RelationKind::Supersedes
+            && (!authority.is_active_canonical()
+                || target_role != AuthorityRole::Canonical.as_str()
+                || target_status != AuthorityStatus::Superseded.as_str()
+                || target_namespace != authority.namespace.as_str()
+                || target_scope != authority.scope)
+        {
+            bail!(
+                "supersedesは同じnamespace/scopeのactive canonicalからsuperseded canonicalへ結ぶ"
+            );
+        }
+    }
+
+    let incoming_supersedes: Option<(String, String, String, String)> = conn
+        .query_row(
+            "SELECT source.namespace, source.authority_role, source.authority_status,
+                    source.authority_scope
+             FROM note_relations relation
+             JOIN notes source ON source.note_uid = relation.src_uid
+             WHERE relation.target_uid=?1 AND relation.kind='supersedes' LIMIT 1",
+            [uid.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    if authority.role == AuthorityRole::Canonical && authority.status == AuthorityStatus::Superseded
+    {
+        let Some((namespace, role, status, scope)) = incoming_supersedes else {
+            bail!("superseded canonicalに後継のsupersedes relationがない: {id}");
+        };
+        if namespace != authority.namespace.as_str()
+            || role != AuthorityRole::Canonical.as_str()
+            || status != AuthorityStatus::Active.as_str()
+            || scope != authority.scope
+        {
+            bail!("superseded canonicalの後継authorityが一致しない: {id}");
+        }
+    } else if incoming_supersedes.is_some() {
+        bail!("supersedesの参照先はsuperseded canonicalに固定する: {id}");
+    }
     Ok(())
 }
 
@@ -178,7 +273,9 @@ fn now_nanos() -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteUid};
     use crate::frontmatter::Frontmatter;
+    use crate::vault::NoteProposal;
 
     fn note(body: &str) -> Note {
         let mut front = Frontmatter::new_note("DB first");
@@ -305,5 +402,38 @@ mod tests {
         std::fs::remove_dir_all(vault.root.join(".kb")).unwrap();
         let restored = crate::index::open_db(&vault).unwrap();
         assert_eq!(read(&restored, id).unwrap().body, "復元する本文\n");
+    }
+
+    #[test]
+    fn an_existing_note_uid_cannot_be_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "不変UID",
+                    body: "本文",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Knowledge,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "test/immutable-uid".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let mut changed = read(&conn, &id).unwrap();
+        let original = changed.front.note_uid.clone();
+        changed.front.note_uid = Some(NoteUid::at(999));
+
+        assert!(put(&vault, &conn, &id, &changed, "update", "update note").is_err());
+        assert_eq!(read(&conn, &id).unwrap().front.note_uid, original);
     }
 }

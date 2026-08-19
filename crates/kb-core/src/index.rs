@@ -7,13 +7,13 @@ use std::fs;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "3";
+const SCHEMA_VERSION: &str = "4";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let path = vault.index_db_path();
@@ -116,7 +116,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             r.get(0)
         })
         .ok();
-    if ver.as_deref() == Some(SCHEMA_VERSION) {
+    if matches!(ver.as_deref(), Some("3" | SCHEMA_VERSION)) {
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
         // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
         for (col, ddl) in [
@@ -125,6 +125,20 @@ fn init_schema(conn: &Connection) -> Result<()> {
             (
                 "document",
                 "ALTER TABLE notes ADD COLUMN document TEXT NOT NULL DEFAULT ''",
+            ),
+            ("note_uid", "ALTER TABLE notes ADD COLUMN note_uid TEXT"),
+            ("namespace", "ALTER TABLE notes ADD COLUMN namespace TEXT"),
+            (
+                "authority_role",
+                "ALTER TABLE notes ADD COLUMN authority_role TEXT",
+            ),
+            (
+                "authority_status",
+                "ALTER TABLE notes ADD COLUMN authority_status TEXT",
+            ),
+            (
+                "authority_scope",
+                "ALTER TABLE notes ADD COLUMN authority_scope TEXT",
             ),
         ] {
             if conn
@@ -137,6 +151,18 @@ fn init_schema(conn: &Connection) -> Result<()> {
         }
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
+             CREATE UNIQUE INDEX IF NOT EXISTS notes_note_uid ON notes(note_uid)
+                 WHERE note_uid IS NOT NULL;
+             CREATE UNIQUE INDEX IF NOT EXISTS notes_active_canonical_scope
+                 ON notes(namespace, authority_scope)
+                 WHERE authority_role = 'canonical' AND authority_status = 'active';
+             CREATE TABLE IF NOT EXISTS note_relations(
+                 src_uid TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 target_uid TEXT NOT NULL,
+                 PRIMARY KEY(src_uid, kind, target_uid)
+             );
+             CREATE INDEX IF NOT EXISTS note_relations_target ON note_relations(target_uid);
              CREATE TABLE IF NOT EXISTS note_exports(
                  seq INTEGER PRIMARY KEY AUTOINCREMENT,
                  op_id TEXT NOT NULL UNIQUE,
@@ -146,7 +172,8 @@ fn init_schema(conn: &Connection) -> Result<()> {
                  document TEXT,
                  log_entry TEXT NOT NULL,
                  commit_message TEXT NOT NULL
-             );",
+             );
+             INSERT OR REPLACE INTO meta(key, value) VALUES('schema', '4');",
         )?;
         return Ok(());
     }
@@ -162,10 +189,19 @@ fn init_schema(conn: &Connection) -> Result<()> {
             id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
             origin TEXT, generated_by TEXT, generated_at TEXT,
             mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT,
-            document TEXT NOT NULL DEFAULT ''
+            document TEXT NOT NULL DEFAULT '', note_uid TEXT, namespace TEXT,
+            authority_role TEXT, authority_status TEXT, authority_scope TEXT
         );
+        CREATE UNIQUE INDEX notes_note_uid ON notes(note_uid) WHERE note_uid IS NOT NULL;
+        CREATE UNIQUE INDEX notes_active_canonical_scope ON notes(namespace, authority_scope)
+            WHERE authority_role = 'canonical' AND authority_status = 'active';
         CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
         CREATE INDEX links_dst ON links(dst);
+        CREATE TABLE note_relations(
+            src_uid TEXT NOT NULL, kind TEXT NOT NULL, target_uid TEXT NOT NULL,
+            PRIMARY KEY(src_uid, kind, target_uid)
+        );
+        CREATE INDEX note_relations_target ON note_relations(target_uid);
         DROP TABLE IF EXISTS note_vecs;
         CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
         CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
@@ -327,6 +363,24 @@ fn sync_files(
     }
 
     for gone in known.keys().filter(|k| !seen.contains(*k)) {
+        let referenced: Option<String> = transaction
+            .query_row(
+                "SELECT source.id FROM notes target
+                 JOIN note_relations relation ON relation.target_uid = target.note_uid
+                 JOIN notes source ON source.note_uid = relation.src_uid
+                 WHERE target.id=?1 LIMIT 1",
+                [gone],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(source) = referenced {
+            bail!("typed relationの参照先は削除できない: {source} -> {gone}");
+        }
+        transaction.execute(
+            "DELETE FROM note_relations
+             WHERE src_uid = (SELECT note_uid FROM notes WHERE id=?1)",
+            [gone],
+        )?;
         transaction.execute("DELETE FROM notes WHERE id=?1", [gone])?;
         transaction.execute("DELETE FROM links WHERE src=?1", [gone])?;
         transaction.execute("DELETE FROM fts_main WHERE id=?1", [gone])?;
@@ -334,8 +388,79 @@ fn sync_files(
         transaction.execute("DELETE FROM note_vecs WHERE id=?1", [gone])?;
         updated += 1;
     }
+    validate_authority_index(&transaction)?;
     transaction.commit()?;
     Ok(SyncReport { updated, degraded })
+}
+
+/// Markdown snapshotを明示importするとき、全noteを同じtransactionへ入れた後で
+/// relationの大域条件を検査する。note単位のupsert順には依存させない。
+fn validate_authority_index(conn: &Connection) -> Result<()> {
+    let dangling: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT source.id, relation.kind, relation.target_uid
+             FROM note_relations relation
+             JOIN notes source ON source.note_uid = relation.src_uid
+             LEFT JOIN notes target ON target.note_uid = relation.target_uid
+             WHERE target.id IS NULL LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((source, kind, target)) = dangling {
+        bail!("typed relationの参照先がない: {source} {kind} -> {target}");
+    }
+
+    let invalid_supersedes: Option<(String, String)> = conn
+        .query_row(
+            "SELECT source.id, target.id
+             FROM note_relations relation
+             JOIN notes source ON source.note_uid = relation.src_uid
+             JOIN notes target ON target.note_uid = relation.target_uid
+             WHERE relation.kind = 'supersedes'
+               AND NOT (
+                 source.authority_role = 'canonical'
+                 AND source.authority_status = 'active'
+                 AND target.authority_role = 'canonical'
+                 AND target.authority_status = 'superseded'
+                 AND source.namespace = target.namespace
+                 AND source.authority_scope = target.authority_scope
+               )
+             LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((source, target)) = invalid_supersedes {
+        bail!(
+            "supersedesは同じnamespace/scopeのactive canonicalからsuperseded canonicalへ結ぶ: {source} -> {target}"
+        );
+    }
+
+    let orphaned: Option<String> = conn
+        .query_row(
+            "SELECT target.id FROM notes target
+             WHERE target.authority_role = 'canonical'
+               AND target.authority_status = 'superseded'
+               AND NOT EXISTS (
+                 SELECT 1 FROM note_relations relation
+                 JOIN notes source ON source.note_uid = relation.src_uid
+                 WHERE relation.target_uid = target.note_uid
+                   AND relation.kind = 'supersedes'
+                   AND source.authority_role = 'canonical'
+                   AND source.authority_status = 'active'
+                   AND source.namespace = target.namespace
+                   AND source.authority_scope = target.authority_scope
+               )
+             LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(target) = orphaned {
+        bail!("superseded canonicalに後継のsupersedes relationがない: {target}");
+    }
+    Ok(())
 }
 
 /// sync の後段: 未埋め込みノートの追い付き(1回あたり少数に制限し、残は劣化情報で見せる)。
@@ -369,10 +494,18 @@ pub(crate) fn upsert(
         .collect::<Vec<_>>()
         .join(" ");
     let search_text = format!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {} {}",
         f.title.as_deref().unwrap_or(""),
         f.description.as_deref().unwrap_or(""),
         f.tags.join(" "),
+        f.authority
+            .as_ref()
+            .map(|authority| authority.namespace.as_str())
+            .unwrap_or(""),
+        f.authority
+            .as_ref()
+            .map(|authority| authority.scope.as_str())
+            .unwrap_or(""),
         attach_names,
         note.body
     );
@@ -380,9 +513,33 @@ pub(crate) fn upsert(
     let old_body: Option<String> = conn
         .query_row("SELECT body FROM notes WHERE id=?1", [id], |r| r.get(0))
         .ok();
+    let old_uid: Option<Option<String>> = conn
+        .query_row("SELECT note_uid FROM notes WHERE id=?1", [id], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    if let Some(Some(old_uid)) = &old_uid
+        && f.note_uid.as_ref().map(|uid| uid.as_str()) != Some(old_uid.as_str())
+    {
+        bail!("note_uidは作成後に変更・削除できない: {id}");
+    }
+    if let Some(Some(old_uid)) = old_uid {
+        conn.execute("DELETE FROM note_relations WHERE src_uid=?1", [&old_uid])?;
+    }
     conn.execute(
-        "INSERT OR REPLACE INTO notes(id, title, description, status, origin, generated_by, generated_at, mtime, body, tags, created, document)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        "INSERT INTO notes(
+            id, title, description, status, origin, generated_by, generated_at, mtime, body,
+            tags, created, document, note_uid, namespace, authority_role, authority_status,
+            authority_scope
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+         ON CONFLICT(id) DO UPDATE SET
+            title=excluded.title, description=excluded.description, status=excluded.status,
+            origin=excluded.origin, generated_by=excluded.generated_by,
+            generated_at=excluded.generated_at, mtime=excluded.mtime, body=excluded.body,
+            tags=excluded.tags, created=excluded.created, document=excluded.document,
+            note_uid=excluded.note_uid, namespace=excluded.namespace,
+            authority_role=excluded.authority_role, authority_status=excluded.authority_status,
+            authority_scope=excluded.authority_scope",
         rusqlite::params![
             id,
             f.title,
@@ -396,8 +553,33 @@ pub(crate) fn upsert(
             f.tags.join(" "),
             f.created_at(),
             note.to_file_string()?,
+            f.note_uid.as_ref().map(|uid| uid.as_str()),
+            f.authority
+                .as_ref()
+                .map(|authority| authority.namespace.as_str()),
+            f.authority
+                .as_ref()
+                .map(|authority| authority.role.as_str()),
+            f.authority
+                .as_ref()
+                .map(|authority| authority.status.as_str()),
+            f.authority
+                .as_ref()
+                .map(|authority| authority.scope.as_str()),
         ],
     )?;
+    if let Some(uid) = &f.note_uid {
+        for relation in &f.relations {
+            conn.execute(
+                "INSERT INTO note_relations(src_uid, kind, target_uid) VALUES(?1, ?2, ?3)",
+                rusqlite::params![
+                    uid.as_str(),
+                    relation.kind.as_str(),
+                    relation.target.as_str()
+                ],
+            )?;
+        }
+    }
     conn.execute("DELETE FROM fts_main WHERE id=?1", [id])?;
     conn.execute("DELETE FROM fts_tri WHERE id=?1", [id])?;
     // 本文が実際に変わったときだけ埋め込みを捨てる(メタ変更や mtime 精度移行で
@@ -463,6 +645,10 @@ fn extract_links(src_id: &str, body: &str, _vault: &Vault) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authority::{
+        Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteRelation, NoteUid,
+        RelationKind,
+    };
     use crate::frontmatter::Frontmatter;
 
     #[test]
@@ -532,6 +718,18 @@ mod tests {
         drop(legacy);
 
         let migrated = open_db(&vault).unwrap();
+        let schema: String = migrated
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, "4");
+        assert!(migrated.prepare("SELECT note_uid, namespace, authority_role, authority_status, authority_scope FROM notes LIMIT 0").is_ok());
+        assert!(
+            migrated
+                .prepare("SELECT src_uid, kind, target_uid FROM note_relations LIMIT 0")
+                .is_ok()
+        );
         assert_eq!(
             crate::note_store::read(&migrated, "notes/migrate")
                 .unwrap()
@@ -682,6 +880,42 @@ mod tests {
              BEGIN SELECT RAISE(FAIL, 'fixture failure'); END;",
         )
         .unwrap();
+
+        assert!(import_markdown_snapshot(&vault, &conn).is_err());
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(indexed, 0);
+    }
+
+    #[test]
+    fn explicit_import_rejects_a_dangling_typed_relation_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let mut front = Frontmatter::new_note("参照切れ");
+        front.origin = Some("agent".into());
+        front.tags = vec!["test".into()];
+        front.note_uid = Some(NoteUid::at(1));
+        front.authority = Some(Authority {
+            namespace: NoteNamespace::Knowledge,
+            role: AuthorityRole::Canonical,
+            status: AuthorityStatus::Active,
+            scope: "test/import-relation".into(),
+        });
+        front.relations.push(NoteRelation {
+            kind: RelationKind::Supports,
+            target: NoteUid::at(2),
+        });
+        vault
+            .write_note_fixture(
+                "notes/dangling",
+                &Note {
+                    front,
+                    body: "本文".into(),
+                },
+            )
+            .unwrap();
 
         assert!(import_markdown_snapshot(&vault, &conn).is_err());
         let indexed: i64 = conn

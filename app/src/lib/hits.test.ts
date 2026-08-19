@@ -14,6 +14,11 @@ const hit = (over: Partial<Hit>): Hit => ({
   tags: [],
   created: null,
   updated: null,
+  note_uid: null,
+  namespace: null,
+  authority_role: null,
+  authority_status: null,
+  authority_scope: null,
   ...over,
 });
 

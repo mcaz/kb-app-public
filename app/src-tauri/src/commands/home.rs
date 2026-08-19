@@ -167,6 +167,13 @@ mod tests {
                     body: "本文",
                     description: None,
                     tags: &["test".into()],
+                    authority: kb_core::authority::Authority {
+                        namespace: kb_core::authority::NoteNamespace::Knowledge,
+                        role: kb_core::authority::AuthorityRole::Canonical,
+                        status: kb_core::authority::AuthorityStatus::Active,
+                        scope: "test/home-state".into(),
+                    },
+                    relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
                 },

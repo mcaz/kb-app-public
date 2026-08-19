@@ -19,6 +19,9 @@ pub struct NoteView {
     status: String,
     origin: Option<String>,
     tags: Vec<String>,
+    note_uid: Option<kb_core::authority::NoteUid>,
+    authority: Option<kb_core::authority::Authority>,
+    relations: Vec<kb_core::authority::NoteRelation>,
     created_at: Option<String>,
     generated_at: Option<String>,
     related: Vec<(String, Option<String>)>,
@@ -75,6 +78,9 @@ fn note_view_from(
         status: note.front.effective_status().to_string(),
         origin: note.front.origin.clone(),
         tags: note.front.tags.clone(),
+        note_uid: note.front.note_uid.clone(),
+        authority: note.front.authority.clone(),
+        relations: note.front.relations.clone(),
         created_at: note.front.created_at(),
         generated_at: note.front.updated_at(),
         related,
@@ -115,6 +121,13 @@ mod tests {
                     body: "本文",
                     description: None,
                     tags: &["test".into()],
+                    authority: kb_core::authority::Authority {
+                        namespace: kb_core::authority::NoteNamespace::Knowledge,
+                        role: kb_core::authority::AuthorityRole::Canonical,
+                        status: kb_core::authority::AuthorityStatus::Active,
+                        scope: "test/note-body".into(),
+                    },
+                    relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
                 },
@@ -345,7 +358,13 @@ fn graph_data_from(
     let ids: std::collections::HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
     let edges: Vec<(String, String)> = {
         let mut stmt = conn
-            .prepare("SELECT src, dst FROM links")
+            .prepare(
+                "SELECT src, dst FROM links
+                 UNION
+                 SELECT source.id, target.id FROM note_relations relation
+                 JOIN notes source ON source.note_uid = relation.src_uid
+                 JOIN notes target ON target.note_uid = relation.target_uid",
+            )
             .map_err(AppError::index)?;
         let rows = stmt
             .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))

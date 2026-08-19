@@ -1,6 +1,7 @@
 # OKF 適合設計 v0(spec 精読の結果)
 
-2026-08-09 起草。[requirements.md](requirements.md) FR-C1「OKF 互換基本方針」の実行 —
+2026-08-09 起草、2026-08-20 authority拡張を追記。[requirements.md](requirements.md)
+FR-C1「OKF 互換基本方針」の実行 —
 技術設計の最初のタスクと位置づけた spec 精読と適合設計。
 spec 原本: https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf (SPEC.md)
 
@@ -38,33 +39,38 @@ kb-app の中核関心に重なる:
 3. **resource の意味論**: 概念が記述する実体資産の正準 URI(§4.1)。抽象概念には
    不要。出所側は `sources[].resource`(URL / バンドル相対パス / scope descriptor)
 
-## kb-app ノートの frontmatter 詳細設計(案)
+## kb-app ノートの frontmatter 詳細設計
 
-概念 ID = パス(`.md` 抜き)。frontmatter に `id` フィールドは置かない(パス=ID を
-そのまま採用。FR-C1 と整合)。全キーはアプリが生成・検証し、ユーザーには見せない(原則7)。
+OKF上の概念 ID = パス(`.md` 抜き)を互換表示用に維持し、kb-app内部の不変identityは
+`note_uid`に分離する。全キーはアプリが生成・検証し、ユーザーには見せない(原則7)。
 
 | キー | 由来 | 書くのは誰 | 内容 |
 |---|---|---|---|
 | `type` | OKF 必須 | app | 当面全ノート `Note` 固定(語彙拡張は未決へ) |
 | `title` | OKF 推奨 | ユーザー / AI | 表示名 |
 | `description` | OKF 推奨 | AI(提案) | 一文要約。index 生成・検索スニペットに使用 |
-| `tags` | OKF 推奨 | AI 提案 → 承諾 | 分類方針(requirements FR-C1)の中分類 |
-| `status` | OKF §5.4 | ライフサイクル API のみ | propose = `draft` / 承諾 = `stable` / 退役 = `deprecated` |
+| `tags` | OKF 推奨 | AI | 主題を横断する可変facet。正本判定には使わない |
+| `status` | OKF §5.4 | ライフサイクル API のみ | 通常は`stable`。OKF互換の`deprecated`は表示上の退役にだけ使い、draft/承認キューは持たない |
 | `generated` | OKF §5.2 | app(保存時に自動) | `{by, at}`。actor 規約: ユーザー編集 = `human:<ローカルID>`、AI 起票・編纂 = `<クライアント>/<モデル>`(例 `claude-desktop/claude-fable-5`) |
 | `verified` | OKF §5.2 | app(承諾時に追記) | 受信箱・お手入れの承諾履歴。人間の承諾 = `human:` actor |
 | `sources` | OKF §5.1 | AI(propose 時) | 会話由来なら `resource: "conversation:<クライアント>/<日付>"`(scope descriptor)。外部 URL 由来ならその URL |
 | `stale_after` | OKF §5.5 | お手入れ(任意) | 期限のある知識にだけ付く |
 | `origin` | **app 拡張** | app(作成時のみ) | `human` / `agent`(所有。越境の明示操作でのみ変更) |
 | `created` | **app 拡張(2026-08-11 追加)** | app(作成時のみ) | 作成日時。OKF に該当フィールドが無く(`generated.at` は「最終更新」)、一覧・ノートで作成/更新を出し分けるために必要。移行ノートは `legacy.created` から解決 |
+| `note_uid` | **app 拡張(2026-08-20 追加)** | core(作成時のみ) | pathと独立した不変ULID。legacyは明示移行まで不在を許す |
+| `authority` | **app 拡張(2026-08-20 追加)** | core + AI | namespace / role / authority status / scope。現行canonicalを機械判定する |
+| `relations` | **app 拡張(2026-08-20 追加)** | core + AI | `note_uid`を端点にした根拠・更新・矛盾・後継等のtyped relation |
 
-### なぜ `origin` だけは拡張が要るか(原則9 の機構化)
+### なぜapp拡張が要るか
 
 `generated.by` は「**最後の**意味ある変更を書いた者」であり「生まれ」ではない。
 育つノートをユーザーが手直しすると `generated.by` は `human:` になり、書き手由来の
 種類判定が反転してしまう。git の初回コミット著者から導出する案は棄却 —
 正本はファイルであり、git を持たない配布形(tarball、§3)や再構築(原則1)で
-消える情報を種類判定の根拠にできない。よって「生まれ」は frontmatter に1キーだけ
-持つ。命名は requirements 未決「ノート2種類の呼び分け」と同時に決める。
+消える情報を種類判定の根拠にできない。よって「生まれ」は`origin`としてfrontmatterに持つ。
+さらにOKFのpath IDだけではrenameをまたぐlineageと現行正本の一意性を表せないため、
+[ADR-0009](adr/0009-canonical-authority.md)で`note_uid` / `authority` / `relations`を追加した。
+consumerはOKF §4.1どおり未知キーを保持できる。
 
 ### 適合宣言と予約ファイル
 
