@@ -16,15 +16,7 @@ use crate::vault::Vault;
 const SCHEMA_VERSION: &str = "5";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
-    let path = vault.index_db_path();
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let conn = Connection::open(&path).context("index.db open")?;
-    conn.busy_timeout(Duration::from_secs(5))?; // 全接続で必須(PoC ③)
-    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
-    debug_assert_eq!(mode.to_lowercase(), "wal");
-    init_schema(&conn)?;
+    let conn = open_db_recovery(vault)?;
     restore_missing_documents(vault, &conn)?;
     if !runtime_store_is_db(&conn) {
         let report = import_markdown_snapshot(vault, &conn)?;
@@ -40,6 +32,21 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
             );
         }
     }
+    Ok(conn)
+}
+
+/// Markdown import/exportが衝突して通常起動できない場合の限定的な復旧接続。
+/// schema準備だけを行い、Markdown restore/importやoutbox flushは呼ばない。
+pub fn open_db_recovery(vault: &Vault) -> Result<Connection> {
+    let path = vault.index_db_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let conn = Connection::open(&path).context("index.db open")?;
+    conn.busy_timeout(Duration::from_secs(5))?; // 全接続で必須(PoC ③)
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+    debug_assert_eq!(mode.to_lowercase(), "wal");
+    init_schema(&conn)?;
     Ok(conn)
 }
 
@@ -337,6 +344,14 @@ fn runtime_store_is_db(conn: &Connection) -> bool {
     .is_ok_and(|value| value == "db-v1")
 }
 
+pub(crate) fn mark_runtime_store_db(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('runtime_store', 'db-v1')",
+        [],
+    )?;
+    Ok(())
+}
+
 fn sync_files(
     vault: &Vault,
     conn: &Connection,
@@ -621,7 +636,7 @@ pub(crate) fn upsert(
     if let Some(uid) = &f.note_uid {
         for relation in &f.relations {
             conn.execute(
-                "INSERT INTO note_relations(src_uid, kind, target_uid) VALUES(?1, ?2, ?3)",
+                "INSERT OR IGNORE INTO note_relations(src_uid, kind, target_uid) VALUES(?1, ?2, ?3)",
                 rusqlite::params![
                     uid.as_str(),
                     relation.kind.as_str(),
@@ -1050,6 +1065,77 @@ mod tests {
             .query_row("SELECT count(*) FROM notes", [], |row| row.get(0))
             .unwrap();
         assert_eq!(indexed, 0);
+    }
+
+    #[test]
+    fn explicit_import_collapses_duplicate_typed_relations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+
+        let target_uid = NoteUid::at(1);
+        let mut target = Frontmatter::new_note("対象");
+        target.origin = Some("agent".into());
+        target.tags = vec!["test".into()];
+        target.note_uid = Some(target_uid.clone());
+        target.authority = Some(Authority {
+            namespace: NoteNamespace::Knowledge,
+            role: AuthorityRole::Canonical,
+            status: AuthorityStatus::Active,
+            scope: "test/target".into(),
+        });
+        vault
+            .write_note_fixture(
+                "notes/a-target",
+                &Note {
+                    front: target,
+                    body: "対象本文".into(),
+                },
+            )
+            .unwrap();
+
+        let relation = NoteRelation {
+            kind: RelationKind::Supports,
+            target: target_uid,
+        };
+        let mut source = Frontmatter::new_note("参照元");
+        source.origin = Some("agent".into());
+        source.tags = vec!["test".into()];
+        source.note_uid = Some(NoteUid::at(2));
+        source.authority = Some(Authority {
+            namespace: NoteNamespace::Knowledge,
+            role: AuthorityRole::Canonical,
+            status: AuthorityStatus::Active,
+            scope: "test/source".into(),
+        });
+        source.relations = vec![relation];
+        let source_note = Note {
+            front: source,
+            body: "参照本文".into(),
+        };
+        vault
+            .write_note_fixture("notes/b-source", &source_note)
+            .unwrap();
+
+        let report = import_markdown_snapshot(&vault, &conn).unwrap();
+        assert!(report.degraded.is_empty());
+        // 旧migrationでnotes側のUIDだけが欠け、relation ledgerにはedgeが残った
+        // 不整合を再現する。同じMarkdownを再importしても同一edgeは増やさない。
+        conn.execute(
+            "UPDATE notes SET note_uid=NULL WHERE id='notes/b-source'",
+            [],
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        vault
+            .write_note_fixture("notes/b-source", &source_note)
+            .unwrap();
+        let report = import_markdown_snapshot(&vault, &conn).unwrap();
+        assert!(report.degraded.is_empty());
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM note_relations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

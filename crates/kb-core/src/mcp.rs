@@ -1,5 +1,6 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / recent / plan_distillation / apply_distillation /
+//! 公開ツールは search / get / recent / inspect_markdown_conflict /
+//! resolve_markdown_conflict / plan_distillation / apply_distillation /
 //! rollback_distillation / propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
@@ -20,7 +21,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::client_surface::ClientSurface;
-use crate::index::{open_db, open_db_read_only, sync_with_degradations};
+use crate::index::{open_db, open_db_read_only, open_db_recovery, sync_with_degradations};
 use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
@@ -676,6 +677,37 @@ fn tool_definitions(client: &str) -> Value {
             }}
         },
         {
+            "name": "inspect_markdown_conflict",
+            "description": "DB確定documentのMarkdown出力が外部編集で停止した対象を読み取り専用で検査し、外部Markdownと保留documentの全文・SHA-256を返す。解消前に必ず実行する。",
+            "annotations": {
+                "title": "Markdown出力競合を検査",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "note": {"type": "string", "description": "競合しているノート ID"}
+            }, "required": ["note"]}
+        },
+        {
+            "name": "resolve_markdown_conflict",
+            "description": "inspect_markdown_conflictで確認した外部Markdownを、検査時の両SHA-256へ固定してDB確定documentで置換し、保留outboxを再開する。strategy v1はkeep_dbのみ。",
+            "annotations": {
+                "title": "Markdown出力競合を解消",
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "note": {"type": "string", "description": "inspectで確認したノート ID"},
+                "strategy": {"type": "string", "const": "keep_db"},
+                "markdown_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "pending_document_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            }, "required": ["note", "strategy", "markdown_hash", "pending_document_hash"]}
+        },
+        {
             "name": "plan_distillation",
             "description": "DBの同一read snapshotから、input hash・snapshot digest・決定的plan ID付きの蒸留候補を列挙する。KB、remote、索引、careを変更しない。",
             "annotations": {
@@ -914,13 +946,20 @@ fn call_tool_with_search_options(
 ) -> Result<ToolOutput> {
     reject_unavailable_mcp_capabilities(client, name, args)?;
     let distillation_plan = name == "plan_distillation";
+    let conflict_operation = matches!(
+        name,
+        "inspect_markdown_conflict" | "resolve_markdown_conflict"
+    );
     // メッセージのやり取りの際に pull(複数デバイス同期・FR-A6 改定)。
     // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
     // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
-    let mut degraded = remote_degradations(remote_sync && !distillation_plan, || {
-        crate::connect::pull_if_stale(vault)
-    });
-    let conn = if distillation_plan {
+    let mut degraded = remote_degradations(
+        remote_sync && !distillation_plan && !conflict_operation,
+        || crate::connect::pull_if_stale(vault),
+    );
+    let conn = if conflict_operation {
+        open_db_recovery(vault)?
+    } else if distillation_plan {
         open_db_read_only(vault)?
     } else {
         open_db(vault)?
@@ -941,6 +980,63 @@ fn call_tool_with_search_options(
         }
     }
     match name {
+        "inspect_markdown_conflict" => {
+            let note = args
+                .get("note")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let conflict = vault.inspect_markdown_export_conflict(&conn, note)?;
+            Ok(ToolOutput {
+                text: format!(
+                    "Markdown出力競合を検査した: {} / external {} / pending {}。内容を比較し、DB確定状態を採用する場合だけresolve_markdown_conflictを実行する",
+                    conflict.note, conflict.markdown_hash, conflict.pending_document_hash
+                ),
+                structured: Some(serde_json::to_value(conflict)?),
+            })
+        }
+        "resolve_markdown_conflict" => {
+            let note = args
+                .get("note")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let strategy = args
+                .get("strategy")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("strategy が必要"))?;
+            if strategy != "keep_db" {
+                anyhow::bail!("strategy v1はkeep_dbのみ");
+            }
+            let markdown_hash = args
+                .get("markdown_hash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("markdown_hash が必要"))?;
+            let pending_document_hash =
+                args.get("pending_document_hash")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("pending_document_hash が必要"))?;
+            let report = vault.resolve_markdown_export_keep_db(
+                &conn,
+                note,
+                markdown_hash,
+                pending_document_hash,
+            )?;
+            let mut structured = serde_json::to_value(&report)?;
+            structured["conversation_events"] = json!([{
+                "type": "markdown_conflict_resolved",
+                "event": "markdown_conflict_resolved",
+                "required": true,
+                "note_id": &report.note,
+                "strategy": report.strategy,
+                "pending_exports": report.pending_exports,
+            }]);
+            Ok(ToolOutput {
+                text: format!(
+                    "Markdown出力競合を解消した: {} / strategy keep_db / pending exports {}",
+                    report.note, report.pending_exports
+                ),
+                structured: Some(structured),
+            })
+        }
         "plan_distillation" => {
             let plan = crate::distillation::plan(&conn)?;
             let counts = &plan.summary.operations;
@@ -1909,6 +2005,104 @@ mod tests {
     }
 
     #[test]
+    fn mcp_resolves_only_the_inspected_markdown_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test("競合解消", "更新前", None, &["test".into()], "test/client")
+            .unwrap();
+        let path = vault.note_path(&id).unwrap();
+        let mut external = std::fs::read_to_string(&path).unwrap();
+        external.push_str("\n外部編集\n");
+        std::fs::write(&path, external).unwrap();
+
+        let failed = call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &serde_json::json!({"note": id, "body": "DB確定本文"}),
+            false,
+        )
+        .unwrap_err();
+        assert!(failed.to_string().contains("外部編集"));
+
+        // 旧DB migrationの途中状態でも、競合解消操作はMarkdown importより先に
+        // outboxを検査できなければならない。
+        let conn = open_db_recovery(&vault).unwrap();
+        conn.execute("DELETE FROM meta WHERE key = 'runtime_store'", [])
+            .unwrap();
+
+        let inspected = call_tool(
+            &vault,
+            "test/client",
+            "inspect_markdown_conflict",
+            &serde_json::json!({"note": id}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert!(
+            inspected["markdown_document"]
+                .as_str()
+                .unwrap()
+                .contains("外部編集")
+        );
+        assert!(
+            inspected["pending_document"]
+                .as_str()
+                .unwrap()
+                .contains("DB確定本文")
+        );
+
+        let stale = call_tool(
+            &vault,
+            "test/client",
+            "resolve_markdown_conflict",
+            &serde_json::json!({
+                "note": id,
+                "strategy": "keep_db",
+                "markdown_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "pending_document_hash": inspected["pending_document_hash"],
+            }),
+            true,
+        )
+        .unwrap_err();
+        assert!(stale.to_string().contains("検査後"));
+
+        let resolved = call_tool(
+            &vault,
+            "test/client",
+            "resolve_markdown_conflict",
+            &serde_json::json!({
+                "note": id,
+                "strategy": "keep_db",
+                "markdown_hash": inspected["markdown_hash"],
+                "pending_document_hash": inspected["pending_document_hash"],
+            }),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(resolved["strategy"], "keep_db");
+        assert_eq!(resolved["pending_exports"], 0);
+        let runtime_store: String = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'runtime_store'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(runtime_store, "db-v1");
+        assert!(
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("DB確定本文")
+        );
+    }
+
+    #[test]
     fn note_events_return_a_conversation_ready_identity() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
@@ -2173,7 +2367,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 11);
+        assert_eq!(definitions.len(), 13);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")

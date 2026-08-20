@@ -28,7 +28,13 @@ import {
 import { useSession } from "@/lib/stores/session";
 
 export function App() {
-  const { data: setup, isPending } = useSetupState();
+  const {
+    data: setup,
+    error: setupError,
+    isError: setupFailed,
+    isPending,
+    refetch: retrySetup,
+  } = useSetupState();
   const ready = setup !== undefined && !setup.needs_onboarding;
   const { data: home } = useHomeState(ready);
   const { data: categoryData } = useNoteCategories(ready);
@@ -81,7 +87,71 @@ export function App() {
     ]);
   }, [maintenance.dataUpdatedAt, queryClient]);
 
-  if (isPending) return null;
+  if (isPending) {
+    return (
+      <main
+        aria-busy="true"
+        aria-live="polite"
+        style={{
+          alignItems: "center",
+          background: "#f8fafc",
+          color: "#0f172a",
+          display: "flex",
+          fontFamily: "system-ui, sans-serif",
+          height: "100vh",
+          justifyContent: "center",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <strong style={{ display: "block", fontSize: 20 }}>kb-app</strong>
+          <span style={{ color: "#64748b", display: "block", marginTop: 8 }}>
+            起動しています…
+          </span>
+        </div>
+      </main>
+    );
+  }
+  if (setupFailed) {
+    return (
+      <main
+        role="alert"
+        style={{
+          alignItems: "center",
+          background: "#f8fafc",
+          color: "#0f172a",
+          display: "flex",
+          fontFamily: "system-ui, sans-serif",
+          height: "100vh",
+          justifyContent: "center",
+          padding: 32,
+        }}
+      >
+        <div style={{ maxWidth: 520, textAlign: "center" }}>
+          <strong style={{ display: "block", fontSize: 20 }}>
+            kb-appを起動できませんでした
+          </strong>
+          <p style={{ color: "#475569", margin: "12px 0 20px" }}>
+            {setupError instanceof Error ? setupError.message : String(setupError)}
+          </p>
+          <button
+            type="button"
+            onClick={() => void retrySetup()}
+            style={{
+              background: "#0f172a",
+              border: 0,
+              borderRadius: 8,
+              color: "white",
+              cursor: "pointer",
+              font: "inherit",
+              padding: "10px 16px",
+            }}
+          >
+            再試行
+          </button>
+        </div>
+      </main>
+    );
+  }
   if (setup?.needs_onboarding) return <OnboardingPage />;
 
   return (

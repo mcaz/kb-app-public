@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use git2::{Repository, Signature};
 use rusqlite::OptionalExtension;
+use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
 use crate::authority::NoteNamespace;
@@ -22,6 +24,25 @@ const RESERVED: &[&str] = &["index.md", "log.md"];
 
 pub struct Vault {
     pub root: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarkdownExportConflict {
+    pub note: String,
+    pub operation_id: String,
+    pub markdown_hash: String,
+    pub pending_document_hash: String,
+    pub base_document_hash: Option<String>,
+    pub markdown_document: String,
+    pub pending_document: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarkdownExportResolution {
+    pub note: String,
+    pub operation_id: String,
+    pub strategy: &'static str,
+    pub pending_exports: usize,
 }
 
 /// ノート起票の入力。タグ契約の明示フラグを起票内容と一体で渡す。
@@ -486,6 +507,84 @@ impl Vault {
         Ok(count)
     }
 
+    /// 外部編集とDB outboxの衝突を、内容を変更せずに検査する。
+    /// 解消側はここで返す両hashへ固定し、検査後の差し替えを拒否する。
+    pub fn inspect_markdown_export_conflict(
+        &self,
+        conn: &rusqlite::Connection,
+        raw: &str,
+    ) -> Result<MarkdownExportConflict> {
+        let id = NoteId::parse(raw)?;
+        let export = crate::note_store::pending(conn)?
+            .into_iter()
+            .find(|export| export.note_id == id.as_str())
+            .with_context(|| format!("保留中のMarkdown出力がない: {id}"))?;
+        if export.operation != crate::note_store::ExportOperation::Upsert {
+            bail!("delete出力の競合はこの操作では解消できない: {id}");
+        }
+        let pending_document = export.document.context("upsert exportに本文がない")?;
+        let markdown_document = fs::read_to_string(self.note_path(id.as_str())?)
+            .with_context(|| format!("表示用Markdownを読めない: {id}"))?;
+        if export.base_document.as_deref() == Some(markdown_document.as_str())
+            || pending_document == markdown_document
+        {
+            bail!("表示用Markdownは外部編集状態ではない: {id}");
+        }
+        Ok(MarkdownExportConflict {
+            note: id.to_string(),
+            operation_id: export.op_id,
+            markdown_hash: document_hash(&markdown_document),
+            pending_document_hash: document_hash(&pending_document),
+            base_document_hash: export.base_document.as_deref().map(document_hash),
+            markdown_document,
+            pending_document,
+        })
+    }
+
+    /// 検査済みの外部Markdownだけを、hash固定でDB側の確定documentへ置き換える。
+    /// 外部編集を黙って捨てないため、inspectで得た両hashが一致しなければ停止する。
+    pub fn resolve_markdown_export_keep_db(
+        &self,
+        conn: &rusqlite::Connection,
+        raw: &str,
+        expected_markdown_hash: &str,
+        expected_pending_document_hash: &str,
+    ) -> Result<MarkdownExportResolution> {
+        let conflict = self.inspect_markdown_export_conflict(conn, raw)?;
+        if conflict.markdown_hash != expected_markdown_hash {
+            bail!(
+                "検査後に表示用Markdownが変わったため停止: {}",
+                conflict.note
+            );
+        }
+        if conflict.pending_document_hash != expected_pending_document_hash {
+            bail!(
+                "検査後にDB確定documentが変わったため停止: {}",
+                conflict.note
+            );
+        }
+        let export = crate::note_store::pending(conn)?
+            .into_iter()
+            .find(|export| export.op_id == conflict.operation_id)
+            .context("検査したMarkdown出力が見つからない")?;
+        let document = export.document.context("upsert exportに本文がない")?;
+        let note = Note::parse(&document)?;
+        self.write_note(&conflict.note, &note)?;
+        self.append_log_once(&export.op_id, &export.log_entry)?;
+        self.write_index_md()?;
+        self.commit_note_op(&conflict.note, &export.commit_message)?;
+        crate::note_store::complete(conn, export.seq)?;
+        self.flush_note_exports(conn)?;
+        crate::index::mark_runtime_store_db(conn)?;
+        crate::connect::auto_push(self);
+        Ok(MarkdownExportResolution {
+            note: conflict.note,
+            operation_id: conflict.operation_id,
+            strategy: "keep_db",
+            pending_exports: crate::note_store::pending_count(conn)?,
+        })
+    }
+
     fn ensure_export_base(
         &self,
         id: &NoteId,
@@ -688,6 +787,10 @@ impl Vault {
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
         Ok(())
     }
+}
+
+fn document_hash(document: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(document.as_bytes()))
 }
 
 /// タイトル → ファイル名 slug。日本語はそのまま残す(パス=ID、APFS/NTFS で有効)。
