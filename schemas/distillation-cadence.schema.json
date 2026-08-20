@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/distillation-cadence.schema.json",
+  "title": "kb-app persistent distillation cadence run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "executed", "accepted", "selected_lanes", "status_before", "status_after", "review_scope", "audit", "state_persisted"],
+  "properties": {
+    "schema": {"const": "kb-app.distillation-cadence-run/v1"},
+    "executed": {"type": "boolean"},
+    "accepted": {"type": "boolean"},
+    "selected_lanes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/lane"}
+    },
+    "status_before": {"$ref": "#/$defs/status"},
+    "status_after": {"$ref": "#/$defs/status"},
+    "review_scope": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/review_item"}
+    },
+    "audit": {
+      "anyOf": [
+        {"$ref": "distillation-audit.schema.json"},
+        {"type": "null"}
+      ]
+    },
+    "state_persisted": {"type": "boolean"}
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "lane": {
+      "enum": ["after_write", "daily", "weekly", "monthly"]
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "audit_id", "lanes", "failed_checks"],
+      "properties": {
+        "at": {"type": "string", "format": "date-time"},
+        "audit_id": {"$ref": "#/$defs/hash"},
+        "lanes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/lane"}
+        },
+        "failed_checks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": ["no_actionable_entries", "no_unresolved_entries", "no_non_none_risk_entries", "no_pending_markdown_exports", "storage_contract_valid", "remote_backup_current_or_local_only"]
+          }
+        }
+      }
+    },
+    "lane_status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lane", "due", "last_completed_at", "next_due_at"],
+      "properties": {
+        "lane": {"$ref": "#/$defs/lane"},
+        "due": {"type": "boolean"},
+        "last_completed_at": {"type": ["string", "null"], "format": "date-time"},
+        "next_due_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "status": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "checked_at", "state_exists", "current_checkpoint_id", "accepted_checkpoint_id", "lanes", "last_failure"],
+      "properties": {
+        "schema": {"const": "kb-app.distillation-cadence-status/v1"},
+        "checked_at": {"type": "string", "format": "date-time"},
+        "state_exists": {"type": "boolean"},
+        "current_checkpoint_id": {"$ref": "#/$defs/hash"},
+        "accepted_checkpoint_id": {
+          "anyOf": [
+            {"$ref": "#/$defs/hash"},
+            {"type": "null"}
+          ]
+        },
+        "lanes": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"$ref": "#/$defs/lane_status"}
+        },
+        "last_failure": {
+          "anyOf": [
+            {"$ref": "#/$defs/failure"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "review_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "reasons"],
+      "properties": {
+        "note": {"type": "string", "minLength": 1},
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/lane"}
+        }
+      }
+    }
+  }
+}

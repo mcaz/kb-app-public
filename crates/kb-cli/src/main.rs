@@ -171,6 +171,11 @@ enum DistillCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// 最後に受入成功したcheckpointを使う継続cadence
+    Cadence {
+        #[command(subcommand)]
+        command: DistillationCadenceCommand,
+    },
     /// planと全input hashを再照合し、既存ノートのsemantic waveをatomicに適用
     Apply {
         /// kb-app.distillation-execution-request/v1 JSON
@@ -185,6 +190,26 @@ enum DistillCommand {
         execution_id: String,
         #[arg(long, default_value = "cli/unknown")]
         client: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DistillationCadenceCommand {
+    /// 現在planとの差分と時間間隔からdue laneを読み取り専用で確認
+    Status {
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// due lane、または明示したlaneの監査を実行して成功時だけcheckpointを進める
+    Run {
+        #[arg(long, value_enum)]
+        lane: Option<DistillationCadenceLaneArg>,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -247,6 +272,25 @@ enum EvalCommand {
 enum ReportFormat {
     Json,
     Markdown,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DistillationCadenceLaneArg {
+    AfterWrite,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl From<DistillationCadenceLaneArg> for kb_core::distillation_cadence::DistillationCadenceLane {
+    fn from(value: DistillationCadenceLaneArg) -> Self {
+        match value {
+            DistillationCadenceLaneArg::AfterWrite => Self::AfterWrite,
+            DistillationCadenceLaneArg::Daily => Self::Daily,
+            DistillationCadenceLaneArg::Weekly => Self::Weekly,
+            DistillationCadenceLaneArg::Monthly => Self::Monthly,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -546,6 +590,56 @@ fn main() -> Result<()> {
                     };
                     write_eval_output(output.as_ref(), &rendered, "Distillation audit")?;
                 }
+                DistillCommand::Cadence { command } => match command {
+                    DistillationCadenceCommand::Status { format, output } => {
+                        let conn = open_db_read_only(&vault)?;
+                        let status = kb_core::distillation_cadence::status(&vault, &conn)?;
+                        let rendered = match format {
+                            ReportFormat::Json => serde_json::to_string_pretty(&status)?,
+                            ReportFormat::Markdown => {
+                                let due = status
+                                    .due_lanes()
+                                    .iter()
+                                    .map(|lane| lane.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                format!(
+                                    "# Distillation cadence status\n\n- checked: {}\n- due: {}\n- current: `{}`\n- accepted: `{}`",
+                                    status.checked_at,
+                                    if due.is_empty() { "none" } else { &due },
+                                    status.current_checkpoint_id,
+                                    status.accepted_checkpoint_id.as_deref().unwrap_or("none"),
+                                )
+                            }
+                        };
+                        write_eval_output(
+                            output.as_ref(),
+                            &rendered,
+                            "Distillation cadence status",
+                        )?;
+                    }
+                    DistillationCadenceCommand::Run {
+                        lane,
+                        format,
+                        output,
+                    } => {
+                        let conn = open_db_read_only(&vault)?;
+                        let report = kb_core::distillation_cadence::run(
+                            &vault,
+                            &conn,
+                            kb_core::distillation_cadence::DistillationCadenceRunArguments {
+                                lane: lane.map(Into::into),
+                            },
+                        )?;
+                        let rendered = match format {
+                            ReportFormat::Json => serde_json::to_string_pretty(&report)?,
+                            ReportFormat::Markdown => {
+                                kb_core::distillation_cadence::render_markdown(&report)
+                            }
+                        };
+                        write_eval_output(output.as_ref(), &rendered, "Distillation cadence run")?;
+                    }
+                },
                 DistillCommand::Apply { input, client } => {
                     let request: kb_core::distillation_executor::DistillationExecutionRequest =
                         serde_json::from_str(&fs::read_to_string(&input).with_context(|| {
@@ -803,7 +897,10 @@ mod tests {
 
     use clap::{CommandFactory, Parser};
 
-    use super::{Cli, Command, DistillCommand, EvalCommand, ReportFormat, RuleDeliveryModeArg};
+    use super::{
+        Cli, Command, DistillCommand, DistillationCadenceCommand, DistillationCadenceLaneArg,
+        EvalCommand, ReportFormat, RuleDeliveryModeArg,
+    };
 
     fn command_paths(command: &clap::Command, prefix: Option<&str>, paths: &mut BTreeSet<String>) {
         for subcommand in command.get_subcommands() {
@@ -833,6 +930,9 @@ mod tests {
             "distill".to_string(),
             "distill apply".to_string(),
             "distill audit".to_string(),
+            "distill cadence".to_string(),
+            "distill cadence run".to_string(),
+            "distill cadence status".to_string(),
             "distill plan".to_string(),
             "distill rollback".to_string(),
             "embed".to_string(),
@@ -978,6 +1078,42 @@ mod tests {
             baseline,
             Some(PathBuf::from("/private/previous-audit.json"))
         );
+        assert!(matches!(format, ReportFormat::Json));
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn distillation_cadence_defaults_to_due_and_accepts_an_explicit_lane() {
+        let status = Cli::try_parse_from(["kb", "distill", "cadence", "status"]).unwrap();
+        let Command::Distill {
+            command:
+                DistillCommand::Cadence {
+                    command: DistillationCadenceCommand::Status { format, output },
+                },
+        } = status.command
+        else {
+            panic!("distill cadence statusとして解釈されなかった");
+        };
+        assert!(matches!(format, ReportFormat::Json));
+        assert!(output.is_none());
+
+        let run =
+            Cli::try_parse_from(["kb", "distill", "cadence", "run", "--lane", "weekly"]).unwrap();
+        let Command::Distill {
+            command:
+                DistillCommand::Cadence {
+                    command:
+                        DistillationCadenceCommand::Run {
+                            lane,
+                            format,
+                            output,
+                        },
+                },
+        } = run.command
+        else {
+            panic!("distill cadence runとして解釈されなかった");
+        };
+        assert!(matches!(lane, Some(DistillationCadenceLaneArg::Weekly)));
         assert!(matches!(format, ReportFormat::Json));
         assert!(output.is_none());
     }

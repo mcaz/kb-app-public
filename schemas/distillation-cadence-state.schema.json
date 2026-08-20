@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/distillation-cadence-state.schema.json",
+  "title": "kb-app local distillation cadence state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "checkpoint", "completed_at", "last_failure"],
+  "properties": {
+    "schema": {"const": "kb-app.distillation-cadence-state/v1"},
+    "checkpoint": {
+      "anyOf": [
+        {"$ref": "distillation-audit.schema.json#/$defs/checkpoint"},
+        {"type": "null"}
+      ]
+    },
+    "completed_at": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["daily", "weekly", "monthly"],
+      "properties": {
+        "daily": {"type": ["string", "null"], "format": "date-time"},
+        "weekly": {"type": ["string", "null"], "format": "date-time"},
+        "monthly": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "last_failure": {
+      "anyOf": [
+        {"$ref": "distillation-cadence.schema.json#/$defs/failure"},
+        {"type": "null"}
+      ]
+    }
+  }
+}

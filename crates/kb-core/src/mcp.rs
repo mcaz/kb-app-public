@@ -1,6 +1,7 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
-//! resolve_markdown_conflict / plan_distillation / audit_distillation / apply_distillation /
+//! resolve_markdown_conflict / plan_distillation / audit_distillation /
+//! distillation_cadence_status / run_distillation_cadence / apply_distillation /
 //! rollback_distillation / propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
@@ -154,7 +155,9 @@ update のrelationsへ対象note_uidを含むtyped relationを設定する。rel
 【authority】proposeでは共通6namespace、canonical/record/proposal role、authority status、\
 同じ主題・適用範囲を示すscopeを必ず指定する。同じnamespace+scopeのactive canonicalを複数作らない。\
 typed relationはnote_uidを端点にし、根拠・更新・矛盾・後継をpath変更から独立して結ぶ。\n\
-【蒸留】継続メンテナンスwaveの前にaudit_distillationを使い、前回checkpointがあれば渡して増分worksetを得る。\
+【蒸留】まずdistillation_cadence_statusで追加直後／日次／週次／月次の期限を確認し、dueがあれば\
+run_distillation_cadenceで最後に受入成功したcheckpointから増分監査する。cadence runは端末ローカルの\
+checkpointだけを更新し、ノートの意味変更は行わない。個別baselineを比較するときはaudit_distillationを使う。\
 audit内のplanは同一DB snapshotへ固定したread-only監査記録で、承認待ちqueueではない。候補ノートはgetで\
 全文確認する。baselineなしのplanだけが必要な場合はplan_distillationを使う。planのnormalize /\
 revise / extractを複数ノートへ反映するときはapply_distillationを使い、plan schema・profile・\
@@ -689,6 +692,48 @@ fn distillation_audit_tool_definition() -> Value {
     })
 }
 
+fn distillation_cadence_tool_definitions() -> [Value; 2] {
+    let status = json!({
+        "name": "distillation_cadence_status",
+        "description": "最後に受入成功したcheckpointと現在planを比較し、追加直後／日次／週次／月次のどの蒸留監査がdueかを返す。KB・checkpointとも変更しない。",
+        "annotations": {
+            "title": "継続蒸留cadenceを確認",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+        }
+    });
+    let run = json!({
+        "name": "run_distillation_cadence",
+        "description": "dueまたは指定laneの増分auditを実行する。gate PASS時だけ端末ローカルcheckpointを進め、失敗時は旧checkpointと失敗理由を保持する。ノートは変更しない。",
+        "annotations": {
+            "title": "継続蒸留cadenceを実行",
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "lane": {
+                    "type": "string",
+                    "enum": ["after_write", "daily", "weekly", "monthly"],
+                    "description": "省略時はdue laneをまとめて実行。指定時はその深度を強制実行"
+                }
+            }
+        }
+    });
+    [status, run]
+}
+
 fn tool_definitions(client: &str) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
@@ -849,8 +894,10 @@ fn tool_definitions(client: &str) -> Value {
         .position(|tool| tool["name"] == "plan_distillation")
         .expect("plan_distillation tool definition exists")
         + 1;
-    tools.insert(insert_at, distillation_audit_tool_definition());
-    tools.splice(insert_at + 1..insert_at + 1, semantic_tool_definitions());
+    let mut distillation_tools = vec![distillation_audit_tool_definition()];
+    distillation_tools.extend(distillation_cadence_tool_definitions());
+    distillation_tools.extend(semantic_tool_definitions());
+    tools.splice(insert_at..insert_at, distillation_tools);
     if !capabilities.current_note_argument_optional {
         let get = definitions
             .as_array_mut()
@@ -950,8 +997,10 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
             "allow_new_tags はAI用MCPでは利用できない。既存語彙を使うか、trusted UI / CLIの別承認を案内する"
         );
     }
-    if name == "plan_distillation" && args.as_object().is_none_or(|args| !args.is_empty()) {
-        anyhow::bail!("plan_distillation は引数を受け取らない");
+    if matches!(name, "plan_distillation" | "distillation_cadence_status")
+        && args.as_object().is_none_or(|args| !args.is_empty())
+    {
+        anyhow::bail!("{name} は引数を受け取らない");
     }
     Ok(())
 }
@@ -996,7 +1045,13 @@ fn call_tool_with_search_options(
     removal_plans: &mut RemovalPlans,
 ) -> Result<ToolOutput> {
     reject_unavailable_mcp_capabilities(client, name, args)?;
-    let distillation_read_only = matches!(name, "plan_distillation" | "audit_distillation");
+    let distillation_closed_world = matches!(
+        name,
+        "plan_distillation"
+            | "audit_distillation"
+            | "distillation_cadence_status"
+            | "run_distillation_cadence"
+    );
     let conflict_operation = matches!(
         name,
         "inspect_markdown_conflict" | "resolve_markdown_conflict"
@@ -1005,12 +1060,12 @@ fn call_tool_with_search_options(
     // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
     // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
     let mut degraded = remote_degradations(
-        remote_sync && !distillation_read_only && !conflict_operation,
+        remote_sync && !distillation_closed_world && !conflict_operation,
         || crate::connect::pull_if_stale(vault),
     );
     let conn = if conflict_operation {
         open_db_recovery(vault)?
-    } else if distillation_read_only {
+    } else if distillation_closed_world {
         open_db_read_only(vault)?
     } else {
         open_db(vault)?
@@ -1134,6 +1189,50 @@ fn call_tool_with_search_options(
             );
             Ok(ToolOutput {
                 text,
+                structured: Some(serde_json::to_value(&report)?),
+            })
+        }
+        "distillation_cadence_status" => {
+            let status = crate::distillation_cadence::status(vault, &conn)?;
+            let due = status
+                .due_lanes()
+                .iter()
+                .map(|lane| lane.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(ToolOutput {
+                text: format!(
+                    "蒸留cadence: due {} / current {} / accepted {}",
+                    if due.is_empty() { "none" } else { &due },
+                    status.current_checkpoint_id,
+                    status.accepted_checkpoint_id.as_deref().unwrap_or("none"),
+                ),
+                structured: Some(serde_json::to_value(&status)?),
+            })
+        }
+        "run_distillation_cadence" => {
+            let arguments: crate::distillation_cadence::DistillationCadenceRunArguments =
+                serde_json::from_value(args.clone())
+                    .context("run_distillation_cadence引数を解釈できない")?;
+            let report = crate::distillation_cadence::run(vault, &conn, arguments)?;
+            let selected = report
+                .selected_lanes
+                .iter()
+                .map(|lane| lane.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(ToolOutput {
+                text: format!(
+                    "蒸留cadence: executed {} / accepted {} / lanes {} / review scope {}",
+                    report.executed,
+                    report.accepted,
+                    if selected.is_empty() {
+                        "none"
+                    } else {
+                        &selected
+                    },
+                    report.review_scope.len(),
+                ),
                 structured: Some(serde_json::to_value(&report)?),
             })
         }
@@ -2444,7 +2543,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 14);
+        assert_eq!(definitions.len(), 16);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -2579,6 +2678,73 @@ mod tests {
             "test/client",
             "audit_distillation",
             &serde_json::json!({"unknown": true}),
+            false,
+        )
+        .unwrap_err();
+        assert!(rejected.to_string().contains("引数を解釈できない"));
+    }
+
+    #[test]
+    fn distillation_cadence_separates_read_only_status_from_local_state_progress() {
+        let tools = tool_definitions("test/client");
+        let definitions = tools.as_array().unwrap();
+        let status_definition = definitions
+            .iter()
+            .find(|definition| definition["name"] == "distillation_cadence_status")
+            .unwrap();
+        let run_definition = definitions
+            .iter()
+            .find(|definition| definition["name"] == "run_distillation_cadence")
+            .unwrap();
+        assert_eq!(status_definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(status_definition["annotations"]["idempotentHint"], true);
+        assert_eq!(run_definition["annotations"]["readOnlyHint"], false);
+        assert_eq!(run_definition["annotations"]["destructiveHint"], false);
+        assert_eq!(run_definition["annotations"]["idempotentHint"], false);
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        drop(open_db(&vault).unwrap());
+        let status = call_tool(
+            &vault,
+            "test/client",
+            "distillation_cadence_status",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(
+            status["schema"],
+            crate::distillation_cadence::CADENCE_STATUS_SCHEMA
+        );
+        assert_eq!(status["state_exists"], false);
+        assert_eq!(status["lanes"].as_array().unwrap().len(), 4);
+
+        let run = call_tool(
+            &vault,
+            "test/client",
+            "run_distillation_cadence",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(
+            run["schema"],
+            crate::distillation_cadence::CADENCE_RUN_SCHEMA
+        );
+        assert_eq!(run["executed"], true);
+        assert_eq!(run["accepted"], true);
+        assert_eq!(run["selected_lanes"].as_array().unwrap().len(), 4);
+
+        let rejected = call_tool(
+            &vault,
+            "test/client",
+            "run_distillation_cadence",
+            &serde_json::json!({"lane": "yearly"}),
             false,
         )
         .unwrap_err();
