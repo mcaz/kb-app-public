@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Toaster } from "@/components/atoms/ui/sonner";
 import { TooltipProvider } from "@/components/atoms/ui/tooltip";
@@ -28,6 +29,7 @@ import {
 import { useSession } from "@/lib/stores/session";
 
 export function App() {
+  const { t } = useTranslation("common");
   const {
     data: setup,
     error: setupError,
@@ -94,8 +96,8 @@ export function App() {
         aria-live="polite"
         style={{
           alignItems: "center",
-          background: "#f8fafc",
-          color: "#0f172a",
+          background: "var(--color-ground)",
+          color: "var(--color-ink)",
           display: "flex",
           fontFamily: "system-ui, sans-serif",
           height: "100vh",
@@ -104,8 +106,8 @@ export function App() {
       >
         <div style={{ textAlign: "center" }}>
           <strong style={{ display: "block", fontSize: 20 }}>kb-app</strong>
-          <span style={{ color: "#64748b", display: "block", marginTop: 8 }}>
-            起動しています…
+          <span style={{ color: "var(--color-muted)", display: "block", marginTop: 8 }}>
+            {t("state.starting")}
           </span>
         </div>
       </main>
@@ -117,8 +119,8 @@ export function App() {
         role="alert"
         style={{
           alignItems: "center",
-          background: "#f8fafc",
-          color: "#0f172a",
+          background: "var(--color-ground)",
+          color: "var(--color-ink)",
           display: "flex",
           fontFamily: "system-ui, sans-serif",
           height: "100vh",
@@ -127,26 +129,24 @@ export function App() {
         }}
       >
         <div style={{ maxWidth: 520, textAlign: "center" }}>
-          <strong style={{ display: "block", fontSize: 20 }}>
-            kb-appを起動できませんでした
-          </strong>
-          <p style={{ color: "#475569", margin: "12px 0 20px" }}>
+          <strong style={{ display: "block", fontSize: 20 }}>{t("state.startupFailed")}</strong>
+          <p style={{ color: "var(--color-muted)", margin: "12px 0 20px" }}>
             {setupError instanceof Error ? setupError.message : String(setupError)}
           </p>
           <button
             type="button"
             onClick={() => void retrySetup()}
             style={{
-              background: "#0f172a",
+              background: "var(--color-ink)",
               border: 0,
               borderRadius: 8,
-              color: "white",
+              color: "var(--color-ground)",
               cursor: "pointer",
               font: "inherit",
               padding: "10px 16px",
             }}
           >
-            再試行
+            {t("action.retry")}
           </button>
         </div>
       </main>
