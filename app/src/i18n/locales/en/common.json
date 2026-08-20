@@ -20,6 +20,7 @@
     "rename": "Rename",
     "delete": "Delete",
     "update": "Update",
+    "retry": "Retry",
     "saveAs": "Save as new"
   },
   "date": {
@@ -43,7 +44,9 @@
   },
   "state": {
     "loading": "Loading…",
-    "checking": "Checking…"
+    "checking": "Checking…",
+    "starting": "Starting…",
+    "startupFailed": "kb-app could not start"
   },
   "settings": {
     "title": "Settings",

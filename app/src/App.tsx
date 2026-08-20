@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Toaster } from "@/components/atoms/ui/sonner";
 import { TooltipProvider } from "@/components/atoms/ui/tooltip";
@@ -28,7 +29,14 @@ import {
 import { useSession } from "@/lib/stores/session";
 
 export function App() {
-  const { data: setup, isPending } = useSetupState();
+  const { t } = useTranslation("common");
+  const {
+    data: setup,
+    error: setupError,
+    isError: setupFailed,
+    isPending,
+    refetch: retrySetup,
+  } = useSetupState();
   const ready = setup !== undefined && !setup.needs_onboarding;
   const { data: home } = useHomeState(ready);
   const { data: categoryData } = useNoteCategories(ready);
@@ -81,7 +89,69 @@ export function App() {
     ]);
   }, [maintenance.dataUpdatedAt, queryClient]);
 
-  if (isPending) return null;
+  if (isPending) {
+    return (
+      <main
+        aria-busy="true"
+        aria-live="polite"
+        style={{
+          alignItems: "center",
+          background: "var(--color-ground)",
+          color: "var(--color-ink)",
+          display: "flex",
+          fontFamily: "system-ui, sans-serif",
+          height: "100vh",
+          justifyContent: "center",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <strong style={{ display: "block", fontSize: 20 }}>kb-app</strong>
+          <span style={{ color: "var(--color-muted)", display: "block", marginTop: 8 }}>
+            {t("state.starting")}
+          </span>
+        </div>
+      </main>
+    );
+  }
+  if (setupFailed) {
+    return (
+      <main
+        role="alert"
+        style={{
+          alignItems: "center",
+          background: "var(--color-ground)",
+          color: "var(--color-ink)",
+          display: "flex",
+          fontFamily: "system-ui, sans-serif",
+          height: "100vh",
+          justifyContent: "center",
+          padding: 32,
+        }}
+      >
+        <div style={{ maxWidth: 520, textAlign: "center" }}>
+          <strong style={{ display: "block", fontSize: 20 }}>{t("state.startupFailed")}</strong>
+          <p style={{ color: "var(--color-muted)", margin: "12px 0 20px" }}>
+            {setupError instanceof Error ? setupError.message : String(setupError)}
+          </p>
+          <button
+            type="button"
+            onClick={() => void retrySetup()}
+            style={{
+              background: "var(--color-ink)",
+              border: 0,
+              borderRadius: 8,
+              color: "var(--color-ground)",
+              cursor: "pointer",
+              font: "inherit",
+              padding: "10px 16px",
+            }}
+          >
+            {t("action.retry")}
+          </button>
+        </div>
+      </main>
+    );
+  }
   if (setup?.needs_onboarding) return <OnboardingPage />;
 
   return (
