@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+last="${!#}"
+if [[ "${KB_FAIL_SIGN:-0}" == "1" && "$*" == *"--sign"* && ! -e "$KB_FAIL_MARKER" ]]; then
+  : >"$KB_FAIL_MARKER"
+  echo "forced candidate signing failure" >&2
+  exit 1
+fi
+if [[ -n "${KB_FAIL_VERIFY_PATH:-}" && "$*" == *"--verify"* \
+  && "$last" == "$KB_FAIL_VERIFY_PATH" && ! -e "$KB_FAIL_MARKER" ]]; then
+  : >"$KB_FAIL_MARKER"
+  echo "forced post-install verification failure" >&2
+  exit 1
+fi
+exec /usr/bin/codesign "$@"
