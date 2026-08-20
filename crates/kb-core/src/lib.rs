@@ -4,6 +4,7 @@
 
 pub use rusqlite;
 
+pub mod action_governance;
 pub mod ai_guard;
 pub mod artifact;
 pub mod artifact_search;
