@@ -137,3 +137,12 @@ jobs:
         run: npm --prefix app run tauri build -- --bundles deb
       - name: deb内の実行ファイル・version・licenseを検査
         run: node scripts/verify-git-lfs-bundle.mjs
+
+  macos-deployment:
+    name: macOS配備(署名・bundle外rollback)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: 実署名bundleで配置成功とrollbackを検査
+        run: bash tests/macos-deploy/run.sh
