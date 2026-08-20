@@ -76,5 +76,6 @@ checkpointは再開用の比較材料であり、`apply_distillation`へ渡す�
 
 - 継続蒸留は会話が中断してもcheckpointから再開できる
 - 平常時にAIが読む集合を差分へ縮めつつ、全体の未処理・派生状態driftを見逃さない
-- schedulingとcheckpointの永続保管はhost側の後続段へ分離できる
+- schedulingとcheckpointの永続保管は[ADR-0013](0013-persistent-distillation-cadence.md)の
+  端末ローカルcadenceへ分離し、audit自体の決定性を維持する
 - 検索Golden Queryの継続評価、active remote health、semantic判断、atomic supersede・moveは別の強制点として残る

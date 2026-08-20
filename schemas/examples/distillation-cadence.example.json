@@ -1,0 +1,37 @@
+{
+  "schema": "kb-app.distillation-cadence-run/v1",
+  "executed": false,
+  "accepted": false,
+  "selected_lanes": [],
+  "status_before": {
+    "schema": "kb-app.distillation-cadence-status/v1",
+    "checked_at": "2026-08-20T10:00:00Z",
+    "state_exists": true,
+    "current_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "accepted_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "lanes": [
+      {"lane": "after_write", "due": false, "last_completed_at": null, "next_due_at": null},
+      {"lane": "daily", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-21T09:00:00Z"},
+      {"lane": "weekly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-27T09:00:00Z"},
+      {"lane": "monthly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-09-19T09:00:00Z"}
+    ],
+    "last_failure": null
+  },
+  "status_after": {
+    "schema": "kb-app.distillation-cadence-status/v1",
+    "checked_at": "2026-08-20T10:00:00Z",
+    "state_exists": true,
+    "current_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "accepted_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "lanes": [
+      {"lane": "after_write", "due": false, "last_completed_at": null, "next_due_at": null},
+      {"lane": "daily", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-21T09:00:00Z"},
+      {"lane": "weekly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-27T09:00:00Z"},
+      {"lane": "monthly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-09-19T09:00:00Z"}
+    ],
+    "last_failure": null
+  },
+  "review_scope": [],
+  "audit": null,
+  "state_persisted": false
+}

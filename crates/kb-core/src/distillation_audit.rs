@@ -118,7 +118,7 @@ pub struct DistillationDelta {
     pub workset: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DistillationAuditCheckCode {
     NoActionableEntries,
@@ -471,7 +471,7 @@ fn check(
     }
 }
 
-fn validate_checkpoint(checkpoint: &DistillationCheckpoint) -> Result<()> {
+pub(crate) fn validate_checkpoint(checkpoint: &DistillationCheckpoint) -> Result<()> {
     if checkpoint.schema != CHECKPOINT_SCHEMA {
         bail!("蒸留checkpoint schemaが一致しない")
     }
