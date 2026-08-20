@@ -32,6 +32,11 @@ table is already covered by fmt/clippy/eslint/tsc/CI — do not restate those ru
 ## Repository workflow
 
 - Inspect `git status` before editing and preserve unrelated user or Claude work.
+- For requested, in-scope kb-app changes, complete the normal handoff without
+  per-step confirmation: stage only the task's paths, commit after relevant
+  validation, push the feature branch, and open or update a merge-ready,
+  non-draft PR. This standing authorization does not cover merging, destructive
+  history rewrites, unrelated external writes, or material scope expansion.
 - Do not assume the local `main` branch is current. Compare feature work against
   the appropriate upstream ref when reviewing it.
 - The live Claude and Codex MCP configurations execute
