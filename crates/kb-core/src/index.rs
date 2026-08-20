@@ -13,7 +13,7 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "5";
+const SCHEMA_VERSION: &str = "6";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let conn = open_db_recovery(vault)?;
@@ -145,7 +145,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             r.get(0)
         })
         .ok();
-    if matches!(ver.as_deref(), Some("3" | "4" | SCHEMA_VERSION)) {
+    if matches!(ver.as_deref(), Some("3" | "4" | "5" | SCHEMA_VERSION)) {
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
         // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
         for (col, ddl) in [
@@ -216,7 +216,28 @@ fn init_schema(conn: &Connection) -> Result<()> {
                  rollback_id TEXT,
                  rolled_back_at TEXT
              );
-             INSERT OR REPLACE INTO meta(key, value) VALUES('schema', '5');",
+             CREATE TABLE IF NOT EXISTS action_receipts(
+                 receipt_id TEXT PRIMARY KEY,
+                 workspace TEXT NOT NULL,
+                 request_hash TEXT NOT NULL UNIQUE,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 capability_id TEXT,
+                 request_json TEXT NOT NULL,
+                 decision_json TEXT NOT NULL,
+                 status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
+                 reserved_at INTEGER NOT NULL,
+                 execution_started_at INTEGER,
+                 completed_at INTEGER,
+                 external_reference TEXT
+             );
+             CREATE INDEX IF NOT EXISTS action_receipts_status
+                 ON action_receipts(status, reserved_at);
+             CREATE TABLE IF NOT EXISTS action_capability_uses(
+                 capability_id TEXT PRIMARY KEY,
+                 issuer TEXT NOT NULL,
+                 receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
+             );
+             INSERT OR REPLACE INTO meta(key, value) VALUES('schema', '6');",
         )?;
         return Ok(());
     }
@@ -272,6 +293,26 @@ fn init_schema(conn: &Connection) -> Result<()> {
             status TEXT NOT NULL CHECK(status IN ('applied', 'rolled_back')),
             rollback_id TEXT,
             rolled_back_at TEXT
+        );
+        CREATE TABLE action_receipts(
+            receipt_id TEXT PRIMARY KEY,
+            workspace TEXT NOT NULL,
+            request_hash TEXT NOT NULL UNIQUE,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            capability_id TEXT,
+            request_json TEXT NOT NULL,
+            decision_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
+            reserved_at INTEGER NOT NULL,
+            execution_started_at INTEGER,
+            completed_at INTEGER,
+            external_reference TEXT
+        );
+        CREATE INDEX action_receipts_status ON action_receipts(status, reserved_at);
+        CREATE TABLE action_capability_uses(
+            capability_id TEXT PRIMARY KEY,
+            issuer TEXT NOT NULL,
+            receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
         );
         "
     ))?;
@@ -815,7 +856,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "5");
+        assert_eq!(schema, "6");
         assert!(migrated.prepare("SELECT note_uid, namespace, authority_role, authority_status, authority_scope FROM notes LIMIT 0").is_ok());
         assert!(
             migrated
@@ -847,6 +888,67 @@ mod tests {
             )
             .unwrap();
         assert_eq!(second_document, first_document, "再起動で再復元しない");
+    }
+
+    /// Action Governanceの実行証跡は既存v5 runtime DBにも非破壊で追加し、
+    /// note本文とsemantic execution履歴を作り直さない。
+    #[test]
+    fn existing_v5_index_adds_action_receipts_without_rebuilding_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "v5から保持するノート",
+                "失わない本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        let document: String = conn
+            .query_row("SELECT document FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE action_capability_uses;
+             DROP TABLE action_receipts;
+             UPDATE meta SET value='5' WHERE key='schema';",
+        )
+        .unwrap();
+        drop(conn);
+
+        let migrated = open_db(&vault).unwrap();
+        let schema: String = migrated
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, "6");
+        assert!(
+            migrated
+                .prepare(
+                    "SELECT receipt_id, workspace, request_hash, idempotency_key, status,
+                            reserved_at, execution_started_at, completed_at
+                     FROM action_receipts LIMIT 0"
+                )
+                .is_ok()
+        );
+        assert!(
+            migrated
+                .prepare(
+                    "SELECT capability_id, issuer, receipt_id
+                     FROM action_capability_uses LIMIT 0"
+                )
+                .is_ok()
+        );
+        let preserved: String = migrated
+            .query_row("SELECT document FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(preserved, document);
     }
 
     /// 2026-08-20、semantic executorのruntime監査表は既存v4 DBにも非破壊で
@@ -883,7 +985,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "5");
+        assert_eq!(schema, "6");
         assert!(
             migrated
                 .prepare(
