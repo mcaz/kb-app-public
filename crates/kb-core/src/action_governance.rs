@@ -3,14 +3,17 @@
 //! このモジュールは実行も権限発行も永続化もしない。外部 adapter が実行前に
 //! [`evaluate`] を呼び、実行後に [`ExecutionReceipt`] を保存するための共通語彙を提供する。
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
+
+use serde::{Deserialize, Serialize};
 
 pub const ACTION_REQUEST_SCHEMA: &str = "kb.action-request.v1";
 pub const ACTION_CAPABILITY_SCHEMA: &str = "kb.action-capability.v1";
 pub const ACTION_DECISION_SCHEMA: &str = "kb.action-decision.v1";
 pub const ACTION_RECEIPT_SCHEMA: &str = "kb.action-receipt.v1";
+pub const SIGNED_CAPABILITY_SCHEMA: &str = "kb.action-signed-capability.v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -37,6 +40,7 @@ pub enum RiskClass {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CostEnvelope {
     /// ISO 4217 currency code。比較時は大文字小文字を区別しない。
     pub currency: String,
@@ -45,6 +49,7 @@ pub struct CostEnvelope {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActionRequest {
     pub schema: String,
     pub actor: String,
@@ -95,6 +100,7 @@ impl ActionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActionPolicy {
     pub allowed_actions: Vec<ActionKind>,
     /// 完全修飾対象に対するprefix allowlist。空なら全対象を拒否する。
@@ -105,6 +111,7 @@ pub struct ActionPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityLease {
     pub schema: String,
     pub grant_id: String,
@@ -117,6 +124,178 @@ pub struct CapabilityLease {
     pub max_cost: Option<CostEnvelope>,
 }
 
+/// secretを含まず、issuerと内容へHMAC-SHA-256で固定したlocal capability。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedCapabilityLease {
+    pub schema: String,
+    pub workspace: String,
+    pub actor: String,
+    pub client_surface: String,
+    pub issuer: String,
+    pub issued_at: i64,
+    pub nonce: String,
+    pub lease: CapabilityLease,
+    pub signature: String,
+}
+
+#[derive(Serialize)]
+struct CapabilitySignaturePayload<'a> {
+    schema: &'a str,
+    workspace: &'a str,
+    actor: &'a str,
+    client_surface: &'a str,
+    issuer: &'a str,
+    issued_at: i64,
+    nonce: &'a str,
+    lease: &'a CapabilityLease,
+}
+
+/// verifierへ明示的に渡したissuerだけを信頼する。鍵はcapabilityへserializeしない。
+#[derive(Clone, Default)]
+pub struct TrustedCapabilityIssuers {
+    hmac_sha256_keys: BTreeMap<String, Vec<u8>>,
+}
+
+impl TrustedCapabilityIssuers {
+    pub fn trust_hmac_sha256(&mut self, issuer: &str, key: &[u8]) -> Result<(), &'static str> {
+        if issuer.trim().is_empty() {
+            return Err("issuer must not be empty");
+        }
+        if key.len() < 32 {
+            return Err("HMAC-SHA-256 key must be at least 32 bytes");
+        }
+        self.hmac_sha256_keys
+            .insert(issuer.to_owned(), key.to_vec());
+        Ok(())
+    }
+
+    pub fn verify(
+        &self,
+        signed: &SignedCapabilityLease,
+        now: i64,
+    ) -> Result<(), CapabilityVerificationFailure> {
+        if signed.schema != SIGNED_CAPABILITY_SCHEMA {
+            return Err(CapabilityVerificationFailure::UnsupportedSchema);
+        }
+        if signed.issuer.trim().is_empty() {
+            return Err(CapabilityVerificationFailure::InvalidIssuer);
+        }
+        if signed.nonce.trim().is_empty() {
+            return Err(CapabilityVerificationFailure::InvalidNonce);
+        }
+        if signed.workspace.trim().is_empty()
+            || signed.actor.trim().is_empty()
+            || signed.client_surface.trim().is_empty()
+        {
+            return Err(CapabilityVerificationFailure::InvalidScope);
+        }
+        if signed.issued_at > now {
+            return Err(CapabilityVerificationFailure::IssuedInFuture);
+        }
+        if signed.lease.expires_at <= signed.issued_at || signed.lease.expires_at <= now {
+            return Err(CapabilityVerificationFailure::Expired);
+        }
+        // exact request hashとidempotency keyへ固定したv1では、複数useはreplay契約と矛盾する。
+        if signed.lease.remaining_uses != 1 {
+            return Err(CapabilityVerificationFailure::NotSingleUse);
+        }
+        let Some(key) = self.hmac_sha256_keys.get(&signed.issuer) else {
+            return Err(CapabilityVerificationFailure::UnknownIssuer);
+        };
+        let signature = decode_hmac_signature(&signed.signature)
+            .ok_or(CapabilityVerificationFailure::InvalidSignature)?;
+        let payload = capability_signature_bytes(signed);
+        let expected = hmac_sha256(key, &payload);
+        let difference = expected
+            .iter()
+            .zip(signature.iter())
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            });
+        if difference == 0 {
+            Ok(())
+        } else {
+            Err(CapabilityVerificationFailure::InvalidSignature)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityVerificationFailure {
+    UnsupportedSchema,
+    InvalidIssuer,
+    UnknownIssuer,
+    InvalidNonce,
+    InvalidScope,
+    IssuedInFuture,
+    Expired,
+    NotSingleUse,
+    InvalidSignature,
+}
+
+impl CapabilityVerificationFailure {
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::UnsupportedSchema => "unsupported_signed_capability_schema",
+            Self::InvalidIssuer => "invalid_capability_issuer",
+            Self::UnknownIssuer => "unknown_capability_issuer",
+            Self::InvalidNonce => "invalid_capability_nonce",
+            Self::InvalidScope => "invalid_capability_scope",
+            Self::IssuedInFuture => "capability_issued_in_future",
+            Self::Expired => "capability_expired",
+            Self::NotSingleUse => "capability_must_be_single_use",
+            Self::InvalidSignature => "invalid_capability_signature",
+        }
+    }
+}
+
+pub fn sign_capability_hmac_sha256(
+    lease: CapabilityLease,
+    request: &ActionRequest,
+    workspace: &str,
+    issuer: &str,
+    issued_at: i64,
+    nonce: &str,
+    key: &[u8],
+) -> Result<SignedCapabilityLease, &'static str> {
+    if workspace.trim().is_empty() {
+        return Err("workspace must not be empty");
+    }
+    if request.actor.trim().is_empty() || request.client_surface.trim().is_empty() {
+        return Err("request actor and client surface must not be empty");
+    }
+    if lease.request_hash != request_hash(request)
+        || lease.action != request.action
+        || lease.target != request.target
+    {
+        return Err("capability lease does not match request");
+    }
+    if issuer.trim().is_empty() {
+        return Err("issuer must not be empty");
+    }
+    if nonce.trim().is_empty() {
+        return Err("nonce must not be empty");
+    }
+    if key.len() < 32 {
+        return Err("HMAC-SHA-256 key must be at least 32 bytes");
+    }
+    let mut signed = SignedCapabilityLease {
+        schema: SIGNED_CAPABILITY_SCHEMA.to_owned(),
+        workspace: workspace.to_owned(),
+        actor: request.actor.clone(),
+        client_surface: request.client_surface.clone(),
+        issuer: issuer.to_owned(),
+        issued_at,
+        nonce: nonce.to_owned(),
+        lease,
+        signature: String::new(),
+    };
+    signed.signature =
+        encode_hmac_signature(&hmac_sha256(key, &capability_signature_bytes(&signed)));
+    Ok(signed)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionOutcome {
@@ -125,6 +304,7 @@ pub enum ExecutionOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionReceipt {
     pub schema: String,
     pub request_hash: String,
@@ -153,6 +333,7 @@ pub enum AuthorizationSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyDecision {
     pub schema: String,
     pub decision: DecisionKind,
@@ -162,6 +343,19 @@ pub struct PolicyDecision {
     pub authorization: Option<AuthorizationSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability_id: Option<String>,
+}
+
+impl PolicyDecision {
+    pub fn denied(request: &ActionRequest, reason: impl Into<String>) -> Self {
+        Self {
+            schema: ACTION_DECISION_SCHEMA.to_owned(),
+            decision: DecisionKind::Deny,
+            reason: reason.into(),
+            request_hash: request_hash(request),
+            authorization: None,
+            capability_id: None,
+        }
+    }
 }
 
 /// 副作用を起こさず、同じ入力には常に同じ判定を返す。
@@ -313,6 +507,80 @@ pub fn request_hash(request: &ActionRequest) -> String {
         write!(&mut hash, "{byte:02x}").expect("writing to String is infallible");
     }
     hash
+}
+
+fn capability_signature_bytes(signed: &SignedCapabilityLease) -> Vec<u8> {
+    let payload = CapabilitySignaturePayload {
+        schema: &signed.schema,
+        workspace: &signed.workspace,
+        actor: &signed.actor,
+        client_surface: &signed.client_surface,
+        issuer: &signed.issuer,
+        issued_at: signed.issued_at,
+        nonce: &signed.nonce,
+        lease: &signed.lease,
+    };
+    let canonical =
+        serde_json::to_value(payload).expect("capability payload serialization is infallible");
+    serde_json::to_vec(&canonical).expect("capability payload serialization is infallible")
+}
+
+fn encode_hmac_signature(bytes: &[u8]) -> String {
+    let mut signature = String::with_capacity(76);
+    signature.push_str("hmac-sha256:");
+    for byte in bytes {
+        write!(&mut signature, "{byte:02x}").expect("writing to String is infallible");
+    }
+    signature
+}
+
+fn decode_hmac_signature(signature: &str) -> Option<[u8; 32]> {
+    let hex = signature.strip_prefix("hmac-sha256:")?;
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut decoded = [0_u8; 32];
+    for (output, pair) in decoded.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
+        *output = hex_value(pair[0])? * 16 + hex_value(pair[1])?;
+    }
+    Some(decoded)
+}
+
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// RFC 2104 HMAC。追加crypto依存を持ち込まず、SHA-256の標準block sizeへ固定する。
+fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
+    const BLOCK_SIZE: usize = 64;
+    let mut normalized = [0_u8; BLOCK_SIZE];
+    if key.len() > BLOCK_SIZE {
+        normalized[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        normalized[..key.len()].copy_from_slice(key);
+    }
+    let mut inner_pad = [0x36_u8; BLOCK_SIZE];
+    let mut outer_pad = [0x5c_u8; BLOCK_SIZE];
+    for ((inner, outer), key_byte) in inner_pad
+        .iter_mut()
+        .zip(outer_pad.iter_mut())
+        .zip(normalized)
+    {
+        *inner ^= key_byte;
+        *outer ^= key_byte;
+    }
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update(message);
+    let inner_digest = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner_digest);
+    outer.finalize().into()
 }
 
 fn minimum_risk(action: ActionKind, reversible: bool) -> RiskClass {
@@ -560,6 +828,50 @@ mod tests {
         assert_eq!(
             request_hash(&request),
             "sha256:13cd8a9f292351b620273a294bea706af75cd21dcc48eb2f93d973f81f6daf43"
+        );
+    }
+
+    #[test]
+    fn hmac_sha256_matches_rfc_4231_test_case_1() {
+        let key = [0x0b_u8; 20];
+        assert_eq!(
+            encode_hmac_signature(&hmac_sha256(&key, b"Hi There")),
+            "hmac-sha256:b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
+
+    #[test]
+    fn signed_capability_serializes_bound_scope_and_rejects_a_mismatched_lease() {
+        let request = request(ActionKind::Delete, RiskClass::Destructive, true);
+        let lease = capability(&request);
+        let signed = sign_capability_hmac_sha256(
+            lease.clone(),
+            &request,
+            "workspace:test",
+            "local:owner",
+            NOW - 1,
+            "nonce:test",
+            b"0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let document = serde_json::to_value(&signed).unwrap();
+        assert_eq!(document["workspace"], "workspace:test");
+        assert_eq!(document["actor"], request.actor);
+        assert_eq!(document["client_surface"], request.client_surface);
+
+        let mut mismatched = lease;
+        mismatched.target = "github:mcaz/other:issue/72".to_owned();
+        assert!(
+            sign_capability_hmac_sha256(
+                mismatched,
+                &request,
+                "workspace:test",
+                "local:owner",
+                NOW - 1,
+                "nonce:test",
+                b"0123456789abcdef0123456789abcdef",
+            )
+            .is_err()
         );
     }
 }

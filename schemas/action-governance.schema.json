@@ -6,8 +6,10 @@
   "oneOf": [
     { "$ref": "#/$defs/action_request" },
     { "$ref": "#/$defs/capability" },
+    { "$ref": "#/$defs/signed_capability" },
     { "$ref": "#/$defs/decision" },
-    { "$ref": "#/$defs/receipt" }
+    { "$ref": "#/$defs/receipt" },
+    { "$ref": "#/$defs/persisted_receipt" }
   ],
   "$defs": {
     "action": {
@@ -59,6 +61,22 @@
         "max_cost": { "$ref": "#/$defs/cost" }
       }
     },
+    "signed_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "workspace", "actor", "client_surface", "issuer", "issued_at", "nonce", "lease", "signature"],
+      "properties": {
+        "schema": { "const": "kb.action-signed-capability.v1" },
+        "workspace": { "type": "string", "minLength": 1 },
+        "actor": { "type": "string", "minLength": 1 },
+        "client_surface": { "type": "string", "minLength": 1 },
+        "issuer": { "type": "string", "minLength": 1 },
+        "issued_at": { "type": "integer" },
+        "nonce": { "type": "string", "minLength": 1 },
+        "lease": { "$ref": "#/$defs/capability" },
+        "signature": { "type": "string", "pattern": "^hmac-sha256:[0-9a-f]{64}$" }
+      }
+    },
     "decision": {
       "type": "object",
       "additionalProperties": false,
@@ -84,6 +102,24 @@
         "outcome": { "enum": ["succeeded", "failed"] },
         "external_reference": { "type": "string", "minLength": 1 },
         "executed_at": { "type": "integer" }
+      }
+    },
+    "persisted_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "receipt_id", "workspace", "request", "decision", "status", "reserved_at"],
+      "properties": {
+        "schema": { "const": "kb.action-persisted-receipt.v1" },
+        "receipt_id": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "workspace": { "type": "string", "minLength": 1 },
+        "request": { "$ref": "#/$defs/action_request" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "capability_id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["pending", "succeeded", "failed"] },
+        "reserved_at": { "type": "integer" },
+        "execution_started_at": { "type": "integer" },
+        "completed_at": { "type": "integer" },
+        "external_reference": { "type": "string", "minLength": 1 }
       }
     }
   }
