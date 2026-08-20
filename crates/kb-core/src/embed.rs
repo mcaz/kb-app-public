@@ -252,7 +252,7 @@ pub fn from_blob(b: &[u8]) -> Vec<f32> {
     b.as_chunks::<4>()
         .0
         .iter()
-        .map(|&bytes| f32::from_le_bytes(bytes))
+        .map(|bytes| f32::from_le_bytes(*bytes))
         .collect()
 }
 

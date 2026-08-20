@@ -1,0 +1,13 @@
+{
+  "schema": "kb.action-request.v1",
+  "actor": "human:owner",
+  "client_surface": "codex",
+  "action": "update",
+  "resource_type": "github.issue",
+  "target": "github:mcaz/kb-app:issue/72",
+  "risk": "reversible_write",
+  "reversible": true,
+  "idempotency_key": "issue-72-wave-1",
+  "expires_at": 1800000300,
+  "justification": "Action Governance wave 1"
+}
