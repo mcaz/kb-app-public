@@ -160,6 +160,17 @@ enum DistillCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// 前回checkpointとの差分worksetと現在の受入gateをread-onlyで監査
+    Audit {
+        /// 前回audit reportまたはkb-app.distillation-checkpoint/v1 JSON
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// planと全input hashを再照合し、既存ノートのsemantic waveをatomicに適用
     Apply {
         /// kb-app.distillation-execution-request/v1 JSON
@@ -515,6 +526,26 @@ fn main() -> Result<()> {
                     };
                     write_eval_output(output.as_ref(), &rendered, "Distillation plan")?;
                 }
+                DistillCommand::Audit {
+                    baseline,
+                    format,
+                    output,
+                } => {
+                    let baseline = baseline
+                        .as_ref()
+                        .map(read_distillation_checkpoint)
+                        .transpose()?;
+                    let conn = open_db_read_only(&vault)?;
+                    let report =
+                        kb_core::distillation_audit::audit(&vault, &conn, baseline.as_ref())?;
+                    let rendered = match format {
+                        ReportFormat::Json => serde_json::to_string_pretty(&report)?,
+                        ReportFormat::Markdown => {
+                            kb_core::distillation_audit::render_markdown(&report)
+                        }
+                    };
+                    write_eval_output(output.as_ref(), &rendered, "Distillation audit")?;
+                }
                 DistillCommand::Apply { input, client } => {
                     let request: kb_core::distillation_executor::DistillationExecutionRequest =
                         serde_json::from_str(&fs::read_to_string(&input).with_context(|| {
@@ -753,6 +784,18 @@ fn write_eval_output(output: Option<&PathBuf>, rendered: &str, label: &str) -> R
     Ok(())
 }
 
+fn read_distillation_checkpoint(
+    path: &PathBuf,
+) -> Result<kb_core::distillation_audit::DistillationCheckpoint> {
+    let input = fs::read_to_string(path)
+        .with_context(|| format!("Distillation baselineを読めない: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&input)
+        .with_context(|| format!("Distillation baseline JSONが不正: {}", path.display()))?;
+    let checkpoint = value.get("checkpoint").cloned().unwrap_or(value);
+    serde_json::from_value(checkpoint)
+        .with_context(|| format!("Distillation checkpointが不正: {}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -789,6 +832,7 @@ mod tests {
             "care list".to_string(),
             "distill".to_string(),
             "distill apply".to_string(),
+            "distill audit".to_string(),
             "distill plan".to_string(),
             "distill rollback".to_string(),
             "embed".to_string(),
@@ -903,6 +947,37 @@ mod tests {
         else {
             panic!("distill planとして解釈されなかった");
         };
+        assert!(matches!(format, ReportFormat::Json));
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn distillation_audit_accepts_an_optional_checkpoint_and_defaults_to_json() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "--vault",
+            "work",
+            "distill",
+            "audit",
+            "--baseline",
+            "/private/previous-audit.json",
+        ])
+        .unwrap();
+        let Command::Distill {
+            command:
+                DistillCommand::Audit {
+                    baseline,
+                    format,
+                    output,
+                },
+        } = cli.command
+        else {
+            panic!("distill auditとして解釈されなかった");
+        };
+        assert_eq!(
+            baseline,
+            Some(PathBuf::from("/private/previous-audit.json"))
+        );
         assert!(matches!(format, ReportFormat::Json));
         assert!(output.is_none());
     }

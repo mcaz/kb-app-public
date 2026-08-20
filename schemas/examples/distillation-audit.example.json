@@ -1,0 +1,86 @@
+{
+  "schema": "kb-app.distillation-audit/v1",
+  "audit_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "read_only": true,
+  "plan": {
+    "schema": "kb-app.distillation-plan/v1",
+    "planner_profile": "mechanical-v1",
+    "plan_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "read_only": true,
+    "snapshot": {
+      "schema": "kb-app.distillation-snapshot/v1",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "note_count": 0
+    },
+    "summary": {
+      "operations": {
+        "keep": 0,
+        "normalize": 0,
+        "revise": 0,
+        "extract": 0,
+        "split_canonical": 0,
+        "merge_candidate": 0,
+        "supersede_candidate": 0,
+        "unresolved": 0
+      },
+      "risks": {
+        "none": 0,
+        "low": 0,
+        "medium": 0,
+        "high": 0,
+        "blocked": 0
+      },
+      "actionable": 0
+    },
+    "entries": []
+  },
+  "checkpoint": {
+    "schema": "kb-app.distillation-checkpoint/v1",
+    "checkpoint_id": "sha256:0d08fc87492a21829a630372cd60638a2d1c6a54e36f1ce2d995ce2ce00409e4",
+    "plan_schema": "kb-app.distillation-plan/v1",
+    "planner_profile": "mechanical-v1",
+    "plan_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "snapshot_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "snapshot_note_count": 0,
+    "entries": []
+  },
+  "delta": {
+    "mode": "full",
+    "baseline_plan_id": null,
+    "added": [],
+    "changed": [],
+    "removed": [],
+    "moved": [],
+    "unchanged": 0,
+    "workset": []
+  },
+  "gate": {
+    "passed": true,
+    "checks": [
+      {"code": "no_actionable_entries", "passed": true, "violations": 0, "detail": null},
+      {"code": "no_unresolved_entries", "passed": true, "violations": 0, "detail": null},
+      {"code": "no_non_none_risk_entries", "passed": true, "violations": 0, "detail": null},
+      {"code": "no_pending_markdown_exports", "passed": true, "violations": 0, "detail": null},
+      {"code": "storage_contract_valid", "passed": true, "violations": 0, "detail": null},
+      {"code": "remote_backup_current_or_local_only", "passed": true, "violations": 0, "detail": null}
+    ]
+  },
+  "pending_markdown_exports": 0,
+  "storage_contract": {
+    "valid": true,
+    "report": {
+      "schema": "kb-app.repository-snapshot/v1",
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "notes": 0,
+      "artifacts": 0,
+      "artifact_refs": 0,
+      "legacy_files": 0
+    },
+    "error": null
+  },
+  "remote_backup": {
+    "configured": false,
+    "pending_commits": 0,
+    "error": null
+  }
+}

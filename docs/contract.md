@@ -19,6 +19,7 @@
 | 9 | **現行の正本・記録・候補をpathや本文推測ではなくauthority envelopeで一意に判定する**(2026-08-20追加) | 新規proposeはcore発行の不変`note_uid`と、共通6namespace (`entities` / `initiatives` / `decisions` / `procedures` / `records` / `knowledge`)、role (`canonical` / `record` / `proposal`)、status (`active` / `historical` / `superseded`)、安定scopeを必須化 / legacyノートは明示移行までenvelope不在の読み取りを許す / 同じnamespace+scopeのactive canonicalはSQLiteの部分unique indexとStorage Contractの両方で1件に固定 / `note_uid`の差し替えを拒否 / typed relation (`derived_from` / `supports` / `updates` / `contradicts` / `supersedes` / `mentions`) は存在する`note_uid`だけを端点にし、自己参照・重複・参照切れを拒否 / `supersedes`は同じnamespace+scopeのactive canonicalからsuperseded canonicalへだけ結び、後継のないsupersededを拒否 / typed relationで参照中のノートは、参照元を整理するまで削除しない / 検索は候補集合を変えずactive canonicalをrecord・proposal・supersededより優先 |
 | 10 | **継続蒸留の候補planは同一snapshotへ固定し、previewだけでは一切書き込まない**(2026-08-20追加) | plannerは既存schemaのSQLiteをread-only + query-onlyで開き、単一read transactionの全DB documentから各input SHA-256、snapshot digest、決定的plan IDを生成 / schema作成・migration・Markdown復元・pull・sync・care・outbox・埋め込み追従を行わない / authorityとtyped relationで機械的に証明できる候補だけを出し、本文意味が必要なlegacy分類・proposal判断・splitはunresolvedまたは予約値に留める / planは承認キューや実行権限にせず、将来executorは実行直前にsnapshotと全input hashを再照合して不一致なら拒否 / 複数ノートの正本遷移は専用transactionでatomicに行い、単一updateの連続で代替しない |
 | 11 | **semantic蒸留waveはplan全体を再照合し、全件成功または0件に固定する**(2026-08-20追加) | executorは同じwrite transaction内でplan schema・profile・ID、snapshot digest・note count、全対象input hash・operationを再計算し、不一致をwrite前に拒否 / request SHA-256のexecution IDとSQLite一意制約で二重実行を拒否 / v1はauthority付きAIノートの`normalize`(descriptionのみ)、active canonicalの`revise`、recordの`extract`(description・relationsのみ)へ能力を限定し、record本文・note UID・authorityを不変にする / 全note・索引・durable outbox・実行前後document・audit rowを1 transactionへ積み、途中失敗は全rollback / rollbackは現在の全snapshotと対象documentがexecution直後から不変の場合だけ全件を実行前planへ戻し、二重rollbackと後続変更後のrollbackを拒否 / create・delete・merge・supersede・split・legacy backfillは入力能力として公開せず、削除は対象固定型二段階操作を維持 |
+| 12 | **継続蒸留の再開集合は増分化しても、受入判定は現在の全体状態へかける**(2026-08-20追加) | auditは自己digestを再照合したcheckpointと現在planを不変`note_uid`（legacyだけpath fallback）で比較し、追加・変更・削除・移動を分離 / worksetは現存差分、全non-keep・risk候補、`depends_on`の双方向閉包に固定し、baseline無しは全件 / gateはworksetだけでなく現在の全plan、unresolved・risk、Markdown outbox、Storage Contract、local Gitの未backup commitを検査 / auditはread-only DBを使い、pull・network I/O・migration・索引・care・outbox更新を行わない / checkpointとgate PASSは実行権限ではなく、executorの全snapshot再照合を省略しない |
 
 - タグ無しノートは契約違反状態として**お手入れの気づき**に出す(修復は Claude への依頼で)
 - 契約5 の「新しい版は前の版の区分を引き継ぐ」は、確認を1段置いても
@@ -60,6 +61,9 @@
 - 契約11のexecutionも人間承認状態ではない。AIが候補全文と方針を確認して構造化requestを作り、
   stale plan拒否とatomic rollbackを機構で受け持つ。destructive annotationは確認UIの要求ではなく、
   clientが書き込み能力を正しく分類するために付ける。
+- 契約12のremote backup検査は、remote設定の有無とlocal Gitのaheadだけを読む。監査の決定性と
+  closed-world性を保つため、fetch・pull・GitHub APIによるprivate性、到達性、remote側最新性の能動確認は
+  行わない。それらはupload直前の契約7と、後続のactive remote health評価で別に強制する。
 - 契約の変更はこの文書の改定+コアの強制点の変更として行う(instructions だけの変更は不可)
 - **語彙の正本は設定ファイルでなく「タグ運用」ノートの `## 語彙` 節**。
   どの語を使うかは運用(会話で合意し KB のノートに記録する)であり、この文書は
