@@ -103,6 +103,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     全documentへ入力hashを付け、snapshot digestと決定的plan IDを返す。previewはpull・sync・migration・
     care・outbox・KB本文を変更せず、承認キューにも実行権限にもならない。意味判断と複数ノートの変更は、
     stale-plan拒否とatomic操作を備える後続semantic executorへ分離する。
+12. **継続蒸留は差分から再開し、全体で閉じる**。前回checkpointとのstable identity差分からAIが読む
+    worksetを縮めても、受入gateは現在の全plan、未解決・risk、Markdown outbox、Storage Contract、
+    local Git backupへ毎回かける。checkpointとgate PASSは実行権限にせず、executorのsnapshot再照合を
+    省略しない。
 
 ## システム構成(3層)
 
@@ -161,7 +165,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `note_uid`は作成後に変更できず、同じnamespace+scopeのactive canonical重複、参照切れrelation、
   typed relationで参照中の削除をcoreで拒否する。複数ノートを一括遷移するatomic supersedeと
   path移動は次のsemantic executor段で実装し、それまでは半端なsuperseded状態を作らない
-- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / propose に加え、**update / prepare_remove /
+- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / audit_distillation / propose に加え、**update / prepare_remove /
   commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
   新規添付・16MiB上限)**を公開。confirm / draft状態は持たない。
@@ -187,6 +191,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   - `plan_distillation`は準備済みDBをread-onlyで開き、同一snapshotの全ノートへinput hashを付けた
     mechanical-v1候補planを返す。remote pull、索引同期、schema migration、care/outbox更新を行わず、
     MCP annotationもread-only / idempotentに固定する。同じsnapshotのJSONはbyte-identicalとする
+  - `audit_distillation`は自己digestを再照合した任意の前回checkpointと現在planを`note_uid`（legacyはnote ID）で比較し、
+    追加・変更・削除・移動と、non-keep／risk候補を`depends_on`の双方向閉包へ広げたworksetを返す。
+    baseline無しは全件監査。受入gateは全plan、unresolved・risk、pending Markdown export、Storage Contract、
+    local Gitの未backup commitを検査する。read-only / idempotentで、remote pull・network I/Oを行わない
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
   構造(2026-08-19実装)。`ClientSurface`はClaude Code / Codex CLI / Claude Desktop /
   ChatGPT / 評価harness / unknownをactor先頭segmentから厳密に判定し、同じmodel familyでも
@@ -226,12 +234,14 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     公開し、path・policy・role・media type・origin・by・at・supersedesを受け取らない。
     既存ノートの実在を確認してから、server管理の一時file経由で同じstore / ledgerへ合流する
   - ファイルの中身検索(PDF 抽出等)、dataset の複数ファイル管理、実削除を伴う GC は将来
-- **FR-C7 お手入れ(ライフサイクルの自動運転)— 2026-08-20 semantic executor v1段まで実装**:
+- **FR-C7 お手入れ(ライフサイクルの自動運転)— 2026-08-20 増分audit gate段まで実装**:
   authorityとtyped relationから、正本更新・記録抽出・proposal統合・legacy未解決・description正規化の
   候補をsnapshot固定で列挙する。executor v1は候補ノートを全文取得したAIから構造化targetを受け、
   plan schema/profile/ID、snapshot、全input hashとoperationを同じwrite transactionで再照合する。
   既存authority付きAIノートのnormalize、active canonical revise、record lineage extractを全件成功または0件で
   実行し、request hashによる二重実行拒否、実行前後document監査、後続変更前のatomic rollbackを備える。
+  read-only auditは前回checkpointからの増分worksetを作る一方、受入判定を現在の全planとStorage Contract、
+  Markdown outbox、local Git backupへかけ、中断後の再開コスト削減と全体drift検出を両立する。
   record本文・UID・authorityは不変とし、create、semantic merge、atomic supersede、新規extract／split、
   legacy backfill、別端末自動rollbackは次段。planとexecutionは人間の承認キューを作らない。方針内のAI管理ノートは
   update・atomic supersede・対象固定型二段階削除で自律メンテナンスし、ユーザーへwaveごとの承認作業を

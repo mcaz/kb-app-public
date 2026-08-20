@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mcaz/kb-app/schemas/distillation-audit.schema.json",
+  "title": "kb-app incremental read-only distillation audit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "audit_id", "read_only", "plan", "checkpoint", "delta", "gate", "pending_markdown_exports", "storage_contract", "remote_backup"],
+  "properties": {
+    "schema": {"const": "kb-app.distillation-audit/v1"},
+    "audit_id": {"$ref": "#/$defs/hash"},
+    "read_only": {"const": true},
+    "plan": {"$ref": "distillation-plan.schema.json"},
+    "checkpoint": {"$ref": "#/$defs/checkpoint"},
+    "delta": {"$ref": "#/$defs/delta"},
+    "gate": {"$ref": "#/$defs/gate"},
+    "pending_markdown_exports": {"type": "integer", "minimum": 0},
+    "storage_contract": {"$ref": "#/$defs/storage_contract"},
+    "remote_backup": {"$ref": "#/$defs/remote_backup"}
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "note_uid": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "checkpoint_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "note_uid", "input_hash"],
+      "properties": {
+        "note": {"type": "string", "minLength": 1},
+        "note_uid": {
+          "anyOf": [
+            {"$ref": "#/$defs/note_uid"},
+            {"type": "null"}
+          ]
+        },
+        "input_hash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "checkpoint_id", "plan_schema", "planner_profile", "plan_id", "snapshot_digest", "snapshot_note_count", "entries"],
+      "properties": {
+        "schema": {"const": "kb-app.distillation-checkpoint/v1"},
+        "checkpoint_id": {"$ref": "#/$defs/hash"},
+        "plan_schema": {"const": "kb-app.distillation-plan/v1"},
+        "planner_profile": {"const": "mechanical-v1"},
+        "plan_id": {"$ref": "#/$defs/hash"},
+        "snapshot_digest": {"$ref": "#/$defs/hash"},
+        "snapshot_note_count": {"type": "integer", "minimum": 0},
+        "entries": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/checkpoint_entry"}
+        }
+      }
+    },
+    "move": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note_uid", "from", "to"],
+      "properties": {
+        "note_uid": {"$ref": "#/$defs/note_uid"},
+        "from": {"type": "string", "minLength": 1},
+        "to": {"type": "string", "minLength": 1}
+      }
+    },
+    "note_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "delta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "baseline_plan_id", "added", "changed", "removed", "moved", "unchanged", "workset"],
+      "properties": {
+        "mode": {"enum": ["full", "incremental"]},
+        "baseline_plan_id": {
+          "anyOf": [
+            {"$ref": "#/$defs/hash"},
+            {"type": "null"}
+          ]
+        },
+        "added": {"$ref": "#/$defs/note_ids"},
+        "changed": {"$ref": "#/$defs/note_ids"},
+        "removed": {"$ref": "#/$defs/note_ids"},
+        "moved": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/move"}
+        },
+        "unchanged": {"type": "integer", "minimum": 0},
+        "workset": {"$ref": "#/$defs/note_ids"}
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "passed", "violations", "detail"],
+      "properties": {
+        "code": {
+          "enum": ["no_actionable_entries", "no_unresolved_entries", "no_non_none_risk_entries", "no_pending_markdown_exports", "storage_contract_valid", "remote_backup_current_or_local_only"]
+        },
+        "passed": {"type": "boolean"},
+        "violations": {"type": "integer", "minimum": 0},
+        "detail": {"type": ["string", "null"]}
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "checks"],
+      "properties": {
+        "passed": {"type": "boolean"},
+        "checks": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {"$ref": "#/$defs/check"}
+        }
+      }
+    },
+    "storage_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "digest", "notes", "artifacts", "artifact_refs", "legacy_files"],
+      "properties": {
+        "schema": {"const": "kb-app.repository-snapshot/v1"},
+        "digest": {"$ref": "#/$defs/hash"},
+        "notes": {"type": "integer", "minimum": 0},
+        "artifacts": {"type": "integer", "minimum": 0},
+        "artifact_refs": {"type": "integer", "minimum": 0},
+        "legacy_files": {"type": "integer", "minimum": 0}
+      }
+    },
+    "storage_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "report", "error"],
+      "properties": {
+        "valid": {"type": "boolean"},
+        "report": {
+          "anyOf": [
+            {"$ref": "#/$defs/storage_report"},
+            {"type": "null"}
+          ]
+        },
+        "error": {"type": ["string", "null"]}
+      }
+    },
+    "remote_backup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configured", "pending_commits", "error"],
+      "properties": {
+        "configured": {"type": "boolean"},
+        "pending_commits": {"type": ["integer", "null"], "minimum": 0},
+        "error": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

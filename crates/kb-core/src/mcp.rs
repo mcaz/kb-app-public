@@ -1,6 +1,6 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
-//! resolve_markdown_conflict / plan_distillation / apply_distillation /
+//! resolve_markdown_conflict / plan_distillation / audit_distillation / apply_distillation /
 //! rollback_distillation / propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
@@ -154,8 +154,9 @@ update のrelationsへ対象note_uidを含むtyped relationを設定する。rel
 【authority】proposeでは共通6namespace、canonical/record/proposal role、authority status、\
 同じ主題・適用範囲を示すscopeを必ず指定する。同じnamespace+scopeのactive canonicalを複数作らない。\
 typed relationはnote_uidを端点にし、根拠・更新・矛盾・後継をpath変更から独立して結ぶ。\n\
-【蒸留】継続メンテナンスwaveの前にplan_distillationを使う。planは同一DB snapshotへ固定した\
-read-only監査記録で、承認待ちqueueではない。候補ノートはgetで全文確認する。planのnormalize /\
+【蒸留】継続メンテナンスwaveの前にaudit_distillationを使い、前回checkpointがあれば渡して増分worksetを得る。\
+audit内のplanは同一DB snapshotへ固定したread-only監査記録で、承認待ちqueueではない。候補ノートはgetで\
+全文確認する。baselineなしのplanだけが必要な場合はplan_distillationを使う。planのnormalize /\
 revise / extractを複数ノートへ反映するときはapply_distillationを使い、plan schema・profile・\
 snapshot・input hashをそのまま渡す。executorは全対象を1 transactionで更新し、古いplan・二重実行・\
 record本文改変を拒否する。失敗したwaveは対象が変わる前にrollback_distillationで一括復元する。\
@@ -639,6 +640,55 @@ fn semantic_tool_definitions() -> [Value; 2] {
     [apply, rollback]
 }
 
+fn distillation_audit_tool_definition() -> Value {
+    let checkpoint_entry = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "note": {"type": "string", "minLength": 1},
+            "note_uid": {
+                "type": ["string", "null"],
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "input_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        },
+        "required": ["note", "note_uid", "input_hash"]
+    });
+    let checkpoint = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "schema": {"type": "string", "const": "kb-app.distillation-checkpoint/v1"},
+            "checkpoint_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "plan_schema": {"type": "string", "const": "kb-app.distillation-plan/v1"},
+            "planner_profile": {"type": "string", "const": "mechanical-v1"},
+            "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "snapshot_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "snapshot_note_count": {"type": "integer", "minimum": 0},
+            "entries": {"type": "array", "items": checkpoint_entry}
+        },
+        "required": ["schema", "checkpoint_id", "plan_schema", "planner_profile", "plan_id", "snapshot_digest", "snapshot_note_count", "entries"]
+    });
+    json!({
+        "name": "audit_distillation",
+        "description": "現在の決定的planを前回checkpointと比較し、追加・変更・移動・削除と依存閉包workset、Storage Contract・Markdown outbox・local Git backupを含む受入gateを返す。pull・network I/O・KB更新は行わない。",
+        "annotations": {
+            "title": "継続蒸留を増分監査",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "baseline": checkpoint
+            }
+        }
+    })
+}
+
 fn tool_definitions(client: &str) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
@@ -799,7 +849,8 @@ fn tool_definitions(client: &str) -> Value {
         .position(|tool| tool["name"] == "plan_distillation")
         .expect("plan_distillation tool definition exists")
         + 1;
-    tools.splice(insert_at..insert_at, semantic_tool_definitions());
+    tools.insert(insert_at, distillation_audit_tool_definition());
+    tools.splice(insert_at + 1..insert_at + 1, semantic_tool_definitions());
     if !capabilities.current_note_argument_optional {
         let get = definitions
             .as_array_mut()
@@ -945,7 +996,7 @@ fn call_tool_with_search_options(
     removal_plans: &mut RemovalPlans,
 ) -> Result<ToolOutput> {
     reject_unavailable_mcp_capabilities(client, name, args)?;
-    let distillation_plan = name == "plan_distillation";
+    let distillation_read_only = matches!(name, "plan_distillation" | "audit_distillation");
     let conflict_operation = matches!(
         name,
         "inspect_markdown_conflict" | "resolve_markdown_conflict"
@@ -954,12 +1005,12 @@ fn call_tool_with_search_options(
     // スロットリング付き・失敗は劣化情報(fail-open)。自動retrievalの短命processは
     // remote_sync=falseで、発話ごとのKeychainアクセスとremote I/Oを行わない。
     let mut degraded = remote_degradations(
-        remote_sync && !distillation_plan && !conflict_operation,
+        remote_sync && !distillation_read_only && !conflict_operation,
         || crate::connect::pull_if_stale(vault),
     );
     let conn = if conflict_operation {
         open_db_recovery(vault)?
-    } else if distillation_plan {
+    } else if distillation_read_only {
         open_db_read_only(vault)?
     } else {
         open_db(vault)?
@@ -1058,6 +1109,32 @@ fn call_tool_with_search_options(
             Ok(ToolOutput {
                 text,
                 structured: Some(serde_json::to_value(&plan)?),
+            })
+        }
+        "audit_distillation" => {
+            let arguments: crate::distillation_audit::DistillationAuditArguments =
+                serde_json::from_value(args.clone())
+                    .context("audit_distillation引数を解釈できない")?;
+            let report =
+                crate::distillation_audit::audit(vault, &conn, arguments.baseline.as_ref())?;
+            let text = format!(
+                "蒸留audit(read-only): gate {} / workset {} / added {} / changed {} / moved {} / removed {}\naudit: {}\nplan: {}\n",
+                if report.gate.passed {
+                    "PASS"
+                } else {
+                    "ATTENTION"
+                },
+                report.delta.workset.len(),
+                report.delta.added.len(),
+                report.delta.changed.len(),
+                report.delta.moved.len(),
+                report.delta.removed.len(),
+                report.audit_id,
+                report.plan.plan_id,
+            );
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&report)?),
             })
         }
         "apply_distillation" => {
@@ -2367,7 +2444,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 13);
+        assert_eq!(definitions.len(), 14);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -2436,6 +2513,76 @@ mod tests {
         )
         .unwrap_err();
         assert!(rejected.to_string().contains("引数を受け取らない"));
+    }
+
+    #[test]
+    fn distillation_audit_is_incremental_read_only_and_suppresses_remote_sync() {
+        let tools = tool_definitions("test/client");
+        let definition = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["name"] == "audit_distillation")
+            .unwrap();
+        assert_eq!(definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(definition["annotations"]["destructiveHint"], false);
+        assert_eq!(definition["annotations"]["idempotentHint"], true);
+        assert_eq!(definition["inputSchema"]["additionalProperties"], false);
+        assert!(definition["inputSchema"]["required"].is_null());
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        drop(open_db(&vault).unwrap());
+        let before = std::fs::metadata(vault.index_db_path())
+            .unwrap()
+            .modified()
+            .unwrap();
+        let first = call_tool(
+            &vault,
+            "test/client",
+            "audit_distillation",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+
+        assert_eq!(first["schema"], crate::distillation_audit::AUDIT_SCHEMA);
+        assert_eq!(first["read_only"], true);
+        assert_eq!(first["delta"]["mode"], "full");
+        assert_eq!(first["gate"]["passed"], true);
+        assert_eq!(first["remote_backup"]["configured"], false);
+
+        let second = call_tool(
+            &vault,
+            "test/client",
+            "audit_distillation",
+            &serde_json::json!({"baseline": first["checkpoint"].clone()}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(second["delta"]["mode"], "incremental");
+        assert!(second["delta"]["workset"].as_array().unwrap().is_empty());
+        assert_eq!(
+            std::fs::metadata(vault.index_db_path())
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
+
+        let rejected = call_tool(
+            &vault,
+            "test/client",
+            "audit_distillation",
+            &serde_json::json!({"unknown": true}),
+            false,
+        )
+        .unwrap_err();
+        assert!(rejected.to_string().contains("引数を解釈できない"));
     }
 
     #[test]
