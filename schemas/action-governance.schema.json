@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-app.local/schemas/action-governance.schema.json",
+  "title": "Action Governance messages",
+  "$comment": "request_hash is sha256 of the UTF-8 compact JSON ActionRequest with object keys sorted lexicographically and no trailing newline.",
+  "oneOf": [
+    { "$ref": "#/$defs/action_request" },
+    { "$ref": "#/$defs/capability" },
+    { "$ref": "#/$defs/decision" },
+    { "$ref": "#/$defs/receipt" }
+  ],
+  "$defs": {
+    "action": {
+      "enum": ["read", "create", "update", "delete", "purchase", "contract", "publish", "deploy"]
+    },
+    "risk": {
+      "enum": ["read_only", "reversible_write", "destructive", "billable", "legal_contractual", "public_security_sensitive"]
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "max_minor_units"],
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Za-z]{3}$" },
+        "max_minor_units": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "action_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "actor", "client_surface", "action", "resource_type", "target", "risk", "reversible", "idempotency_key", "expires_at", "justification"],
+      "properties": {
+        "schema": { "const": "kb.action-request.v1" },
+        "actor": { "type": "string", "minLength": 1 },
+        "client_surface": { "type": "string", "minLength": 1 },
+        "action": { "$ref": "#/$defs/action" },
+        "resource_type": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "risk": { "$ref": "#/$defs/risk" },
+        "reversible": { "type": "boolean" },
+        "cost": { "$ref": "#/$defs/cost" },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "expires_at": { "type": "integer" },
+        "justification": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "grant_id", "request_hash", "action", "target", "expires_at", "remaining_uses"],
+      "properties": {
+        "schema": { "const": "kb.action-capability.v1" },
+        "grant_id": { "type": "string", "minLength": 1 },
+        "request_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "action": { "$ref": "#/$defs/action" },
+        "target": { "type": "string", "minLength": 1 },
+        "expires_at": { "type": "integer" },
+        "remaining_uses": { "type": "integer", "minimum": 0 },
+        "max_cost": { "$ref": "#/$defs/cost" }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "decision", "reason", "request_hash"],
+      "properties": {
+        "schema": { "const": "kb.action-decision.v1" },
+        "decision": { "enum": ["allow", "deny", "require_human"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "request_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "authorization": { "enum": ["standing_policy", "capability"] },
+        "capability_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "request_hash", "idempotency_key", "outcome", "executed_at"],
+      "properties": {
+        "schema": { "const": "kb.action-receipt.v1" },
+        "request_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "idempotency_key": { "type": "string", "minLength": 1 },
+        "capability_id": { "type": "string", "minLength": 1 },
+        "outcome": { "enum": ["succeeded", "failed"] },
+        "external_reference": { "type": "string", "minLength": 1 },
+        "executed_at": { "type": "integer" }
+      }
+    }
+  }
+}
