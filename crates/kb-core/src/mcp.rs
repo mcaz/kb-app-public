@@ -1,8 +1,13 @@
+Warning: truncated output (original token count: 36276)
+Total output lines: 3561
+
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
 //! resolve_markdown_conflict / plan_distillation / audit_distillation /
 //! distillation_cadence_status / run_distillation_cadence / apply_distillation /
-//! rollback_distillation / propose / update / prepare_remove / commit_remove / attach。
+//! rollback_distillation / plan_legacy_artifact_promotions /
+//! apply_legacy_artifact_promotion / rollback_legacy_artifact_promotion /
+//! propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
@@ -164,6 +169,10 @@ revise / extractを複数ノートへ反映するときはapply_distillationを�
 snapshot・input hashをそのまま渡す。executorは全対象を1 transactionで更新し、古いplan・二重実行・\
 record本文改変を拒否する。失敗したwaveは対象が変わる前にrollback_distillationで一括復元する。\
 create・delete・merge・supersede・splitはexecutor v1へ混ぜず、削除は既存の二段階removeを使う。\n\
+【旧Artifact移行】物理再配置はplan_legacy_artifact_promotionsで1件単位のread-only planを取り、\
+plan全体をapply_legacy_artifact_promotionへそのまま渡す。uploadとhash確認前にはlocatorを切り替えず、\
+各件の直後にplanとgetを取り直す。失敗時はLegacyGitのまま停止し、apply直後から戻す必要がある場合だけ\
+result全体をrollback_legacy_artifact_promotionへ渡す。VaultやCLIを代替経路にしない。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
@@ -734,6 +743,105 @@ fn distillation_cadence_tool_definitions() -> [Value; 2] {
     [status, run]
 }
 
+fn legacy_promotion_plan_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "schema": {"type": "string", "const": "kb-app.legacy-artifact-promotion-plan/v1"},
+            "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "artifact_id": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+            "manifest_version": {"type": "integer", "minimum": 1},
+            "note_id": {"type": "string", "minLength": 1},
+            "file_name": {"type": "string", "minLength": 1},
+            "legacy_path": {"type": "string", "minLength": 1},
+            "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "size": {"type": "integer", "minimum": 0},
+            "destination": {"type": "string", "minLength": 1},
+            "reference": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "revision": {"type": "integer", "minimum": 1}
+                },
+                "required": ["name", "revision"]
+            },
+            "aliases": {
+                "type": "array",
+                "items": {
+                    "type": "array",
+                    "prefixItems": [{"type": "string"}, {"type": "string"}],
+                    "minItems": 2,
+                    "maxItems": 2
+                }
+            }
+        },
+        "required": ["schema", "plan_id", "artifact_id", "manifest_version", "note_id", "file_name", "legacy_path", "hash", "size", "destination", "reference", "aliases"]
+    })
+}
+
+fn legacy_promotion_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "schema": {"type": "string", "const": "kb-app.legacy-artifact-promotion-result/v1"},
+            "result_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "artifact_id": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+            "before_version": {"type": "integer", "minimum": 1},
+            "after_version": {"type": "integer", "minimum": 2},
+            "note_id": {"type": "string", "minLength": 1},
+            "file_name": {"type": "string", "minLength": 1},
+            "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "old_path_retained": {"type": "boolean", "const": true},
+            "already_applied": {"type": "boolean"}
+        },
+        "required": ["schema", "result_id", "plan_id", "artifact_id", "before_version", "after_version", "note_id", "file_name", "hash", "old_path_retained", "already_applied"]
+    })
+}
+
+fn legacy_promotion_tool_definitions() -> [Value; 3] {
+    let plan = json!({
+        "name": "plan_legacy_artifact_promotions",
+        "description": "LegacyGit Artifactを1件ずつManagedへ昇格する決定的planを読み取り専用で返す。bytes hash・manifest version・ref revision・aliasを固定し、network I/OもKB更新も行わない。",
+        "annotations": {
+            "title": "旧Artifactの昇格を計画",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}}
+    });
+    let apply = json!({
+        "name": "apply_legacy_artifact_promotion",
+        "description": "planを現在状態と再照合し、LFS objectのhashとorigin upload成功後にだけ1 Artifactのprimary locatorをManagedへ昇格する。旧パスは削除しない。",
+        "annotations": {
+            "title": "旧Artifactを昇格",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true
+        },
+        "inputSchema": legacy_promotion_plan_schema()
+    });
+    let rollback = json!({
+        "name": "rollback_legacy_artifact_promotion",
+        "description": "apply直後の対象固定resultを再照合し、primary locatorをLegacyGitへ補償復元する。旧実体・LFS object・pointerは削除しない。",
+        "annotations": {
+            "title": "旧Artifactの昇格をrollback",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true
+        },
+        "inputSchema": legacy_promotion_result_schema()
+    });
+    [plan, apply, rollback]
+}
+
 fn tool_definitions(client: &str) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
@@ -897,6 +1005,7 @@ fn tool_definitions(client: &str) -> Value {
     let mut distillation_tools = vec![distillation_audit_tool_definition()];
     distillation_tools.extend(distillation_cadence_tool_definitions());
     distillation_tools.extend(semantic_tool_definitions());
+    distillation_tools.extend(legacy_promotion_tool_definitions());
     tools.splice(insert_at..insert_at, distillation_tools);
     if !capabilities.current_note_argument_optional {
         let get = definitions
@@ -997,8 +1106,10 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
             "allow_new_tags はAI用MCPでは利用できない。既存語彙を使うか、trusted UI / CLIの別承認を案内する"
         );
     }
-    if matches!(name, "plan_distillation" | "distillation_cadence_status")
-        && args.as_object().is_none_or(|args| !args.is_empty())
+    if matches!(
+        name,
+        "plan_distillation" | "distillation_cadence_status" | "plan_legacy_artifact_promotions"
+    ) && args.as_object().is_none_or(|args| !args.is_empty())
     {
         anyhow::bail!("{name} は引数を受け取らない");
     }
@@ -1051,6 +1162,7 @@ fn call_tool_with_search_options(
             | "audit_distillation"
             | "distillation_cadence_status"
             | "run_distillation_cadence"
+            | "plan_legacy_artifact_promotions"
     );
     let conflict_operation = matches!(
         name,
@@ -1086,6 +1198,95 @@ fn call_tool_with_search_options(
         }
     }
     match name {
+        "plan_legacy_artifact_promotions" => {
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let plans = crate::migrate::plan_promotions(vault, &ledger)?;
+            Ok(ToolOutput {
+                text: format!(
+                    "Legacy Artifact promotion plan(read-only): {}件。1件ずつapplyし、各件の直後に再監査する",
+                    plans.len()
+                ),
+                structured: Some(json!({
+                    "schema": "kb-app.legacy-artifact-promotion-plans/v1",
+                    "read_only": true,
+                    "plans": plans,
+                })),
+            })
+        }
+        "apply_legacy_artifact_promotion" => {
+            let plan: crate::migrate::PromotionPlan = serde_json::from_value(args.clone())
+                .context("Legacy Artifact promotion planを解釈できない")?;
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let result = crate::migrate::apply_promotion(
+                vault,
+                &ledger,
+                &plan,
+                &crate::frontmatter::now_iso(),
+            )?;
+            let mut structured = serde_json::to_value(&result)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "legacy_artifact_promoted",
+                    "event": "legacy_artifact_promoted",
+                    "required": true,
+                    "artifact_id": &result.artifact_id,
+                    "plan_id": &result.plan_id,
+                    "result_id": &result.result_id,
+                    "old_path_retained": result.old_path_retained,
+                    "already_applied": result.already_applied,
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "Legacy ArtifactをManagedへ昇格した: {} / version {} / 旧パス保持 {}",
+                        result.artifact_id, result.after_version, result.old_path_retained
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "rollback_legacy_artifact_promotion" => {
+            let applied: crate::migrate::PromotionResult = serde_json::from_value(args.clone())
+                .context("Legacy Artifact promotion resultを解釈できない")?;
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let result = crate::migrate::rollback_promotion(
+                vault,
+                &ledger,
+                &applied,
+                &crate::frontmatter::now_iso(),
+            )?;
+            let mut structured = serde_json::to_value(&result)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "legacy_artifact_promotion_rolled_back",
+                    "event": "legacy_artifact_promotion_rolled_back",
+                    "required": true,
+                    "artifact_id": &result.artifact_id,
+                    "plan_id": &result.plan_id,
+                    "result_id": &result.result_id,
+                    "old_path_retained": result.old_path_retained,
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "Legacy Artifact promotionをrollbackした: {} / version {} / 実体は削除していない",
+                        result.artifact_id, result.after_version
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
         "inspect_markdown_conflict" => {
             let note = args
                 .get("note")
@@ -1107,573 +1308,7 @@ fn call_tool_with_search_options(
                 .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
             let strategy = args
                 .get("strategy")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("strategy が必要"))?;
-            if strategy != "keep_db" {
-                anyhow::bail!("strategy v1はkeep_dbのみ");
-            }
-            let markdown_hash = args
-                .get("markdown_hash")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("markdown_hash が必要"))?;
-            let pending_document_hash =
-                args.get("pending_document_hash")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("pending_document_hash が必要"))?;
-            let report = vault.resolve_markdown_export_keep_db(
-                &conn,
-                note,
-                markdown_hash,
-                pending_document_hash,
-            )?;
-            let mut structured = serde_json::to_value(&report)?;
-            structured["conversation_events"] = json!([{
-                "type": "markdown_conflict_resolved",
-                "event": "markdown_conflict_resolved",
-                "required": true,
-                "note_id": &report.note,
-                "strategy": report.strategy,
-                "pending_exports": report.pending_exports,
-            }]);
-            Ok(ToolOutput {
-                text: format!(
-                    "Markdown出力競合を解消した: {} / strategy keep_db / pending exports {}",
-                    report.note, report.pending_exports
-                ),
-                structured: Some(structured),
-            })
-        }
-        "plan_distillation" => {
-            let plan = crate::distillation::plan(&conn)?;
-            let counts = &plan.summary.operations;
-            let text = format!(
-                "蒸留plan(read-only): {} notes / {} actionable\nplan: {}\nsnapshot: {}\nkeep {} / normalize {} / revise {} / extract {} / split候補 {} / merge候補 {} / supersede候補 {} / unresolved {}\n",
-                plan.snapshot.note_count,
-                plan.summary.actionable,
-                plan.plan_id,
-                plan.snapshot.digest,
-                counts.keep,
-                counts.normalize,
-                counts.revise,
-                counts.extract,
-                counts.split_canonical,
-                counts.merge_candidate,
-                counts.supersede_candidate,
-                counts.unresolved,
-            );
-            Ok(ToolOutput {
-                text,
-                structured: Some(serde_json::to_value(&plan)?),
-            })
-        }
-        "audit_distillation" => {
-            let arguments: crate::distillation_audit::DistillationAuditArguments =
-                serde_json::from_value(args.clone())
-                    .context("audit_distillation引数を解釈できない")?;
-            let report =
-                crate::distillation_audit::audit(vault, &conn, arguments.baseline.as_ref())?;
-            let text = format!(
-                "蒸留audit(read-only): gate {} / workset {} / added {} / changed {} / moved {} / removed {}\naudit: {}\nplan: {}\n",
-                if report.gate.passed {
-                    "PASS"
-                } else {
-                    "ATTENTION"
-                },
-                report.delta.workset.len(),
-                report.delta.added.len(),
-                report.delta.changed.len(),
-                report.delta.moved.len(),
-                report.delta.removed.len(),
-                report.audit_id,
-                report.plan.plan_id,
-            );
-            Ok(ToolOutput {
-                text,
-                structured: Some(serde_json::to_value(&report)?),
-            })
-        }
-        "distillation_cadence_status" => {
-            let status = crate::distillation_cadence::status(vault, &conn)?;
-            let due = status
-                .due_lanes()
-                .iter()
-                .map(|lane| lane.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Ok(ToolOutput {
-                text: format!(
-                    "蒸留cadence: due {} / current {} / accepted {}",
-                    if due.is_empty() { "none" } else { &due },
-                    status.current_checkpoint_id,
-                    status.accepted_checkpoint_id.as_deref().unwrap_or("none"),
-                ),
-                structured: Some(serde_json::to_value(&status)?),
-            })
-        }
-        "run_distillation_cadence" => {
-            let arguments: crate::distillation_cadence::DistillationCadenceRunArguments =
-                serde_json::from_value(args.clone())
-                    .context("run_distillation_cadence引数を解釈できない")?;
-            let report = crate::distillation_cadence::run(vault, &conn, arguments)?;
-            let selected = report
-                .selected_lanes
-                .iter()
-                .map(|lane| lane.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Ok(ToolOutput {
-                text: format!(
-                    "蒸留cadence: executed {} / accepted {} / lanes {} / review scope {}",
-                    report.executed,
-                    report.accepted,
-                    if selected.is_empty() {
-                        "none"
-                    } else {
-                        &selected
-                    },
-                    report.review_scope.len(),
-                ),
-                structured: Some(serde_json::to_value(&report)?),
-            })
-        }
-        "apply_distillation" => {
-            let request: crate::distillation_executor::DistillationExecutionRequest =
-                serde_json::from_value(args.clone())
-                    .context("apply_distillation引数を解釈できない")?;
-            let report = crate::distillation_executor::execute(vault, &conn, request, client)?;
-            if let Some(detail) = &report.markdown_export_error {
-                degraded.push(crate::degradation::Degradation::MarkdownExport {
-                    detail: detail.clone(),
-                });
-            }
-            let mut structured = serde_json::to_value(&report)?;
-            structured["degraded"] = serde_json::to_value(&degraded)?;
-            structured["conversation_events"] = conversation_events(
-                Some(json!({
-                    "type": "distillation_applied",
-                    "event": "distillation_applied",
-                    "required": true,
-                    "execution_id": &report.execution_id,
-                    "plan_id": &report.plan_id,
-                    "changed_notes": report.changes.len(),
-                })),
-                &degraded,
-            );
-            Ok(ToolOutput {
-                text: with_degradations(
-                    format!(
-                        "蒸留waveを適用した: {}件 / execution {} / after snapshot {}",
-                        report.changes.len(),
-                        report.execution_id,
-                        report.after_snapshot_digest
-                    ),
-                    &degraded,
-                ),
-                structured: Some(structured),
-            })
-        }
-        "rollback_distillation" => {
-            let execution_id = args
-                .get("execution_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("execution_id が必要"))?;
-            let report =
-                crate::distillation_executor::rollback(vault, &conn, execution_id, client)?;
-            if let Some(detail) = &report.markdown_export_error {
-                degraded.push(crate::degradation::Degradation::MarkdownExport {
-                    detail: detail.clone(),
-                });
-            }
-            let mut structured = serde_json::to_value(&report)?;
-            structured["degraded"] = serde_json::to_value(&degraded)?;
-            structured["conversation_events"] = conversation_events(
-                Some(json!({
-                    "type": "distillation_rolled_back",
-                    "event": "distillation_rolled_back",
-                    "required": true,
-                    "execution_id": &report.execution_id,
-                    "rollback_id": &report.rollback_id,
-                    "restored_notes": report.restored_notes.len(),
-                })),
-                &degraded,
-            );
-            Ok(ToolOutput {
-                text: with_degradations(
-                    format!(
-                        "蒸留waveをrollbackした: {}件 / execution {} / snapshot {}",
-                        report.restored_notes.len(),
-                        report.execution_id,
-                        report.after_snapshot_digest
-                    ),
-                    &degraded,
-                ),
-                structured: Some(structured),
-            })
-        }
-        "search" => {
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
-            let any = args.get("any").and_then(|v| v.as_bool()).unwrap_or(false);
-            let include_documents = args
-                .get("include_documents")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            // Ranking・リンク展開・本文選択の間で別processの更新を挟まない。
-            // include_documentsはこのread transactionの同じSQLite snapshotから組み立てる。
-            let snapshot = conn.unchecked_transaction()?;
-            let mut out = if any {
-                crate::search::search_mode(&snapshot, query, limit, true)
-            } else {
-                search(&snapshot, query, limit)
-            };
-            out.degraded.extend(degraded);
-            let retrieval = if include_documents {
-                let hit_ids = out
-                    .hits
-                    .iter()
-                    .map(|hit| hit.id.clone())
-                    .collect::<Vec<_>>();
-                let options = crate::retrieval::RetrievalOptions::default();
-                match crate::retrieval::context_documents(&snapshot, &hit_ids, options) {
-                    Ok(bundle) => Some(bundle),
-                    Err(error) => {
-                        // リンク表だけが壊れても検索seed本文は返す。正常な0リンクとは
-                        // ContextRetrieval degradationで区別する。
-                        out.degraded
-                            .push(crate::degradation::Degradation::ContextRetrieval {
-                                detail: error.to_string(),
-                            });
-                        Some(crate::retrieval::context_documents(
-                            &snapshot,
-                            &hit_ids,
-                            crate::retrieval::RetrievalOptions {
-                                max_depth: 0,
-                                include_incoming: false,
-                                ..options
-                            },
-                        )?)
-                    }
-                }
-            } else {
-                None
-            };
-            let mut text = String::new();
-            if out.hits.is_empty() {
-                text.push_str("該当なし。\n");
-            }
-            for h in &out.hits {
-                text.push_str(&format!(
-                    "- {} [{}]: {}\n",
-                    h.id,
-                    h.title.as_deref().unwrap_or("無題"),
-                    h.snippet
-                ));
-            }
-            if !out.related.is_empty() {
-                text.push_str("関連(リンク1ホップ): ");
-                let rel: Vec<String> = out
-                    .related
-                    .iter()
-                    .map(|(id, t)| format!("{id} [{}]", t.as_deref().unwrap_or("無題")))
-                    .collect();
-                text.push_str(&rel.join(", "));
-                text.push('\n');
-            }
-            text.push_str(&degradation_text(&out.degraded));
-            let mut structured = serde_json::to_value(&out)?;
-            if let Some(retrieval) = retrieval {
-                structured["documents"] = serde_json::to_value(&retrieval.documents)?;
-                structured["retrieval_candidates"] = serde_json::to_value(&retrieval.candidates)?;
-                structured["retrieval"] = serde_json::to_value(&retrieval.stats)?;
-            }
-            structured["conversation_events"] = conversation_events(None, &out.degraded);
-            snapshot.commit()?;
-            Ok(ToolOutput {
-                text,
-                structured: Some(structured),
-            })
-        }
-        "get" => {
-            let id = match args.get("note").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                // 引数なし =「このノート」(アプリでいま開いているノート。FR-A5 の文脈受け渡し)
-                None => crate::connect::current_note(vault).ok_or_else(|| {
-                    anyhow::anyhow!("いま開いているノートが無い(note 引数で ID を指定)")
-                })?,
-            };
-            let note = vault.read_note_from_db(&conn, &id)?;
-            let title = note.front.title.as_deref().unwrap_or("無題");
-            let identity = note_conversation_identity(vault, &id, title)?;
-            let attachments = vault.list_attachments(&id)?;
-            let workspace_id = crate::workspace::workspace_id(vault)?;
-            let stores = crate::store::Stores::open(&workspace_id)?;
-            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
-            let managed = ledger.list_for_note(&id);
-            let legacy_line = if attachments.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "(旧添付: {} — 本文からは /{id}.files/<名前> で参照)\n",
-                    attachments
-                        .iter()
-                        .map(|(n, _)| n.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            };
-            let managed_line = if managed.is_empty() {
-                String::new()
-            } else {
-                let rows = managed
-                    .iter()
-                    .map(|manifest| {
-                        let reference = ledger
-                            .ref_for(&manifest.id)
-                            .map(|r| format!(", ref={}", r.name))
-                            .unwrap_or_default();
-                        let availability = crate::store::availability(vault, &stores, manifest);
-                        format!(
-                            "{} [artifact={}, v={}, {}, {} bytes, role={:?}, {:?}/{:?}, {:?}{}]",
-                            manifest.display_name,
-                            manifest.id,
-                            manifest.version,
-                            manifest.created.media_type,
-                            manifest.created.size,
-                            manifest.role,
-                            manifest.policy.sensitivity,
-                            manifest.policy.sync,
-                            availability,
-                            reference
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("(ファイル: {rows})\n")
-            };
-            // 関連を決めるのは AI(2026-08-11 方針)。判断材料として近いノートを添える
-            let similar = match crate::search::similar_notes(&conn, &id, 5) {
-                Ok(similar) => similar,
-                Err(error) => {
-                    degraded.push(crate::degradation::Degradation::SimilarNotes {
-                        detail: error.to_string(),
-                    });
-                    Vec::new()
-                }
-            };
-            let sim_line = if similar.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "(近いノート — まだリンクされていない: {})\n",
-                    similar
-                        .iter()
-                        .map(|(sid, t, d)| format!(
-                            "{sid}[{}] {d:.2}",
-                            t.as_deref().unwrap_or("無題")
-                        ))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            };
-            let artifact_rows = managed
-                .iter()
-                .map(|manifest| {
-                    let reference = ledger.ref_for(&manifest.id).map(|r| r.name.to_string());
-                    json!({
-                        "artifact_id": manifest.id,
-                        "version": manifest.version,
-                        "display_name": manifest.display_name,
-                        "media_type": manifest.created.media_type,
-                        "size": manifest.created.size,
-                        "role": manifest.role,
-                        "policy": manifest.policy,
-                        "ref_name": reference,
-                        "availability": crate::store::availability(vault, &stores, manifest),
-                    })
-                })
-                .collect::<Vec<_>>();
-            let legacy_names = attachments
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .collect::<Vec<_>>();
-            let note_text = note.to_file_string()?;
-            let note_description = note.front.description.clone();
-            let note_tags = note.front.tags.clone();
-            let note_status = note.front.effective_status().to_string();
-            let note_origin = note.front.origin.clone();
-            let note_uid = note.front.note_uid.clone();
-            let note_authority = note.front.authority.clone();
-            let note_relations = note.front.relations.clone();
-            let note_body = note.body.clone();
-            let link_text = note_markdown_link(&identity);
-            Ok(ToolOutput {
-                text: format!(
-                    "(note: {id})\nリンク: {link_text}\n{legacy_line}{managed_line}{sim_line}{}{}",
-                    degradation_text(&degraded),
-                    note_text
-                ),
-                structured: Some(json!({
-                    "note": &id,
-                    "note_id": identity["note_id"],
-                    "title": identity["title"],
-                    "description": note_description,
-                    "tags": note_tags,
-                    "status": note_status,
-                    "origin": note_origin,
-                    "note_uid": note_uid,
-                    "authority": note_authority,
-                    "relations": note_relations,
-                    "body": note_body,
-                    "conversation_link": identity["conversation_link"],
-                    "artifacts": artifact_rows,
-                    "legacy_attachments": legacy_names,
-                    "degraded": degraded,
-                    "conversation_events": conversation_events(
-                        Some(note_conversation_event(&identity, "note_read")),
-                        &degraded,
-                    ),
-                })),
-            })
-        }
-        "attach" => {
-            let note_id = args
-                .get("note")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
-            let file_name = args
-                .get("file_name")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("file_name が必要"))?;
-            let content = decode_attachment_content(args)?;
-            let ref_name = args
-                .get("ref_name")
-                .and_then(|v| v.as_str())
-                .map(crate::artifact::RefName::from_str)
-                .transpose()?;
-
-            let workspace_id = crate::workspace::workspace_id(vault)?;
-            let stores = crate::store::Stores::open(&workspace_id)?;
-            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
-            let taken = crate::intake::take_content(
-                vault,
-                &stores,
-                &ledger,
-                &workspace_id,
-                crate::intake::ContentRequest {
-                    note_id,
-                    display_name: file_name,
-                    content: &content,
-                    ref_name,
-                    client,
-                },
-            )?;
-            let reference = taken
-                .artifact_ref
-                .as_ref()
-                .map(|artifact_ref| artifact_ref.name.as_str());
-            let availability = crate::store::availability(vault, &stores, &taken.manifest);
-            let note = vault.read_note_from_db(&conn, note_id)?;
-            let identity = note_conversation_identity(
-                vault,
-                note_id,
-                note.front.title.as_deref().unwrap_or("無題"),
-            )?;
-            let structured = json!({
-                "note": note_id,
-                "note_id": identity["note_id"],
-                "title": identity["title"],
-                "conversation_link": identity["conversation_link"],
-                "file_name": taken.manifest.display_name,
-                "artifact_id": taken.manifest.id,
-                "version": taken.manifest.version,
-                "media_type": taken.manifest.created.media_type,
-                "size": taken.manifest.created.size,
-                "role": taken.manifest.role,
-                "policy": taken.manifest.policy,
-                "ref_name": reference,
-                "locator": "managed",
-                "availability": availability,
-                "delivery": taken.delivery,
-                "warn_over_bytes": taken.warn_over,
-                "degraded": degraded,
-                "conversation_events": conversation_events(
-                    Some(note_conversation_event(&identity, "artifact_attached")),
-                    &degraded,
-                ),
-            });
-            Ok(ToolOutput {
-                text: with_degradations(
-                    format!(
-                        "添付した: {} → {} (artifact {})",
-                        file_name,
-                        note_markdown_link(&identity),
-                        taken.manifest.id
-                    ),
-                    &degraded,
-                ),
-                structured: Some(structured),
-            })
-        }
-        "recent" => {
-            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-            let hits = recent(&conn, limit)?;
-            let text = hits
-                .iter()
-                .map(|h| {
-                    format!(
-                        "- {} [{}]: {}",
-                        h.id,
-                        h.title.as_deref().unwrap_or("無題"),
-                        h.snippet
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            Ok(ToolOutput {
-                text: with_degradations(text, &degraded),
-                structured: Some(json!({
-                    "hits": hits,
-                    "degraded": degraded,
-                    "conversation_events": conversation_events(None, &degraded),
-                })),
-            })
-        }
-        "propose" => {
-            let title = args
-                .get("title")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("title が必要"))?;
-            let body = args
-                .get("body")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("body が必要"))?;
-            let description = args.get("description").and_then(|v| v.as_str());
-            let tags: Vec<String> = args
-                .get("tags")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|t| t.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            // 語彙外タグは**書く前に**弾く(契約1の強制点)。以前は起票後に
-            // 「新しいタグを導入した」と教えるだけだったため語彙が膨らみ続けた
-            // (60ノートに112語・1回きり61%)。2026-08-12 に事前拒否へ引き上げ。
-            let id = vault.propose(
-                &conn,
-                NoteProposal {
-                    title,
-                    body,
-                    description,
-                    tags: &tags,
-                    authority: authority_argument(args, true)?.expect("required above"),
-                    relations: relations_argument(args)?.unwrap_or_default(),
-                    allow_new_tags: false,
-                    client,
-                },
-            )?;
-            let mut structured = note_conversation_identity(vault, &id, title)?;
+   …6276 tokens truncated…let mut structured = note_conversation_identity(vault, &id, title)?;
             let created = vault.read_note_from_db(&conn, &id)?;
             structured["note_uid"] = serde_json::to_value(&created.front.note_uid)?;
             structured["authority"] = serde_json::to_value(&created.front.authority)?;
@@ -1953,6 +1588,9 @@ mod tests {
         for params in [
             serde_json::json!({"name": "search", "arguments": {"query": "known"}}),
             serde_json::json!({"name": "get", "arguments": {"note": "notes/secret"}}),
+            serde_json::json!({"name": "plan_legacy_artifact_promotions", "arguments": {}}),
+            serde_json::json!({"name": "apply_legacy_artifact_promotion", "arguments": {"plan_id": "secret"}}),
+            serde_json::json!({"name": "rollback_legacy_artifact_promotion", "arguments": {"result_id": "secret"}}),
             serde_json::json!({"name": "unknown", "arguments": {"anything": true}}),
             serde_json::json!({}),
         ] {
@@ -2543,7 +2181,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 16);
+        assert_eq!(definitions.len(), 19);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -2556,6 +2194,102 @@ mod tests {
             attach["inputSchema"]["required"],
             serde_json::json!(["note", "file_name", "content_base64"])
         );
+    }
+
+    #[test]
+    fn legacy_promotion_tools_expose_exact_plan_apply_and_rollback_contracts() {
+        let tools = tool_definitions("test/client");
+        let definitions = tools.as_array().unwrap();
+        let plan_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "plan_legacy_artifact_promotions")
+            .unwrap();
+        let apply_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "apply_legacy_artifact_promotion")
+            .unwrap();
+        let rollback_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "rollback_legacy_artifact_promotion")
+            .unwrap();
+        assert_eq!(plan_definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(plan_definition["annotations"]["idempotentHint"], true);
+        assert_eq!(apply_definition["annotations"]["destructiveHint"], true);
+        assert_eq!(apply_definition["annotations"]["idempotentHint"], true);
+        assert_eq!(apply_definition["annotations"]["openWorldHint"], true);
+        assert_eq!(rollback_definition["annotations"]["destructiveHint"], true);
+        assert_eq!(rollback_definition["annotations"]["idempotentHint"], false);
+        assert_eq!(
+            apply_definition["inputSchema"]["properties"]["schema"]["const"],
+            crate::migrate::PROMOTION_PLAN_SCHEMA
+        );
+        assert_eq!(
+            rollback_definition["inputSchema"]["properties"]["schema"]["const"],
+            crate::migrate::PROMOTION_RESULT_SCHEMA
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        drop(open_db(&vault).unwrap());
+        let note_id = vault
+            .propose_for_test(
+                "Legacy promotion MCP",
+                "本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let attachment_dir = vault.attach_dir(&note_id).unwrap();
+        std::fs::create_dir_all(&attachment_dir).unwrap();
+        std::fs::write(attachment_dir.join("legacy.bin"), b"legacy bytes").unwrap();
+        let workspace_id = crate::workspace::workspace_id(&vault).unwrap();
+        let ledger = crate::ledger::Ledger::open(&vault, &workspace_id).unwrap();
+        crate::migrate::migrate(&vault, &ledger, &workspace_id, "2026-08-21T02:00:00Z").unwrap();
+        let manifest_before = ledger.list().remove(0);
+
+        let first = call_tool(
+            &vault,
+            "test/client",
+            "plan_legacy_artifact_promotions",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let second = call_tool(
+            &vault,
+            "test/client",
+            "plan_legacy_artifact_promotions",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(first, second, "連続planはbyte-equivalent");
+        assert_eq!(first["read_only"], true);
+        assert_eq!(first["plans"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            first["plans"][0]["schema"],
+            crate::migrate::PROMOTION_PLAN_SCHEMA
+        );
+        assert_eq!(
+            ledger.list().remove(0),
+            manifest_before,
+            "planは台帳を変更しない"
+        );
+
+        let rejected = call_tool(
+            &vault,
+            "test/client",
+            "plan_legacy_artifact_promotions",
+            &serde_json::json!({"limit": 1}),
+            false,
+        )
+        .unwrap_err();
+        assert!(rejected.to_string().contains("引数を受け取らない"));
     }
 
     #[test]
@@ -3067,7 +2801,12 @@ mod tests {
             .unwrap();
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(commit["annotations"]["destructiveHint"], true);
-        for name in ["apply_distillation", "rollback_distillation"] {
+        for name in [
+            "apply_distillation",
+            "rollback_distillation",
+            "apply_legacy_artifact_promotion",
+            "rollback_legacy_artifact_promotion",
+        ] {
             let semantic = definitions
                 .iter()
                 .find(|tool| tool["name"] == name)
