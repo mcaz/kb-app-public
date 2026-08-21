@@ -1,12 +1,23 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "2.0.0",
+  "stability_runs": 3,
   "cases": [
     {
-      "id": "one-hop-policy",
-      "query": "認証経路を一本化した理由",
-      "required": ["notes/authentication-decision"],
-      "relevant": ["notes/github-policy"],
-      "excluded": ["notes/obsolete-token-setup"]
+      "id": "github-execution-policy",
+      "queries": {
+        "codex": "この実装をGitHubで最後まで進めて",
+        "claude_code": "GitHubの実装作業を最後まで進めて",
+        "chatgpt": "GitHubでこの変更を最後まで進めて"
+      },
+      "required": ["notes/github-policy"],
+      "relevant": ["notes/pull-request-procedure"],
+      "excluded": ["notes/obsolete-token-setup"],
+      "body_requirements": [
+        { "id": "task-source", "all_terms": ["GitHub", "task state"] },
+        { "id": "ready-pr", "all_terms": ["Ready for review", "Draft"] },
+        { "id": "ci", "any_terms": ["CI完走", "失敗診断"] },
+        { "id": "merge-boundary", "all_terms": ["merge", "separate authority"] }
+      ]
     }
   ]
 }
