@@ -169,6 +169,17 @@ enum DistillCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// 全文監査で選んだ既存ノートのoperationをsnapshot固定planへ載せる
+    PlanTargeted {
+        /// {"changes":[{"note":"...","operation":"revise","reason":"..."}]} JSON
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// 前回checkpointとの差分worksetと現在の受入gateをread-onlyで監査
     Audit {
         /// 前回audit reportまたはkb-app.distillation-checkpoint/v1 JSON
@@ -581,6 +592,24 @@ fn main() -> Result<()> {
                         ReportFormat::Markdown => kb_core::distillation::render_markdown(&plan),
                     };
                     write_eval_output(output.as_ref(), &rendered, "Distillation plan")?;
+                }
+                DistillCommand::PlanTargeted {
+                    input,
+                    format,
+                    output,
+                } => {
+                    let arguments: kb_core::distillation::TargetedDistillationArguments =
+                        serde_json::from_str(&fs::read_to_string(&input).with_context(|| {
+                            format!("Targeted distillation入力を読めない: {}", input.display())
+                        })?)
+                        .context("Targeted distillation入力JSONを解釈できない")?;
+                    let conn = open_db_read_only(&vault)?;
+                    let plan = kb_core::distillation::plan_targeted(&conn, arguments)?;
+                    let rendered = match format {
+                        ReportFormat::Json => serde_json::to_string_pretty(&plan)?,
+                        ReportFormat::Markdown => kb_core::distillation::render_markdown(&plan),
+                    };
+                    write_eval_output(output.as_ref(), &rendered, "Targeted distillation plan")?;
                 }
                 DistillCommand::Audit {
                     baseline,
@@ -1003,6 +1032,7 @@ mod tests {
             "distill cadence run".to_string(),
             "distill cadence status".to_string(),
             "distill plan".to_string(),
+            "distill plan-targeted".to_string(),
             "distill rollback".to_string(),
             "embed".to_string(),
             "embed enable".to_string(),
@@ -1118,6 +1148,34 @@ mod tests {
         else {
             panic!("distill planとして解釈されなかった");
         };
+        assert!(matches!(format, ReportFormat::Json));
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn targeted_distillation_plan_requires_an_input_and_defaults_to_json() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "--vault",
+            "work",
+            "distill",
+            "plan-targeted",
+            "--input",
+            "/private/targeted.json",
+        ])
+        .unwrap();
+        let Command::Distill {
+            command:
+                DistillCommand::PlanTargeted {
+                    input,
+                    format,
+                    output,
+                },
+        } = cli.command
+        else {
+            panic!("distill plan-targetedとして解釈されなかった");
+        };
+        assert_eq!(input, PathBuf::from("/private/targeted.json"));
         assert!(matches!(format, ReportFormat::Json));
         assert!(output.is_none());
     }

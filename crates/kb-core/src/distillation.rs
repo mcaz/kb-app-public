@@ -8,15 +8,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace, RelationKind};
 use crate::frontmatter::Note;
+use crate::note_id::NoteId;
 
 pub const PLAN_SCHEMA: &str = "kb-app.distillation-plan/v1";
 pub const SNAPSHOT_SCHEMA: &str = "kb-app.distillation-snapshot/v1";
 pub const PLANNER_PROFILE: &str = "mechanical-v1";
+pub const TARGETED_PLANNER_PROFILE: &str = "targeted-v1";
+const MAX_TARGETED_CHANGES: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +84,47 @@ pub enum DistillationSignal {
     CanonicalHasPendingUpdate,
     CanonicalHasContradiction,
     HistoricalCanonicalHasActiveSuccessor,
+    TargetedSemanticChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetedDistillationOperation {
+    Normalize,
+    Revise,
+    Extract,
+}
+
+impl TargetedDistillationOperation {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normalize => "normalize",
+            Self::Revise => "revise",
+            Self::Extract => "extract",
+        }
+    }
+
+    pub const fn planned(self) -> DistillationOperation {
+        match self {
+            Self::Normalize => DistillationOperation::Normalize,
+            Self::Revise => DistillationOperation::Revise,
+            Self::Extract => DistillationOperation::Extract,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetedDistillationChange {
+    pub note: String,
+    pub operation: TargetedDistillationOperation,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetedDistillationArguments {
+    pub changes: Vec<TargetedDistillationChange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -213,6 +257,27 @@ pub fn plan(conn: &Connection) -> Result<DistillationPlan> {
     let planned = plan_in_transaction(&transaction)?;
     transaction.rollback()?;
     Ok(planned)
+}
+
+/// 全文監査などで呼び出し側が見つけた既存ノートのsemantic変更を、通常planと
+/// 同じDB snapshot・input hashへ固定する。target本文はapply側で別途検証する。
+pub fn plan_targeted(
+    conn: &Connection,
+    arguments: TargetedDistillationArguments,
+) -> Result<DistillationPlan> {
+    let transaction = conn.unchecked_transaction()?;
+    let planned = plan_targeted_in_transaction(&transaction, arguments)?;
+    transaction.rollback()?;
+    Ok(planned)
+}
+
+pub(crate) fn plan_targeted_in_transaction(
+    conn: &Connection,
+    mut arguments: TargetedDistillationArguments,
+) -> Result<DistillationPlan> {
+    validate_targeted_arguments(&mut arguments)?;
+    let notes = read_notes(conn)?;
+    build_targeted_plan(&notes, &arguments.changes)
 }
 
 /// executorがwrite transactionの内側でTOCTOUなしに同じplanを再計算するための入口。
@@ -400,6 +465,119 @@ fn build_plan(notes: &[IndexedNote]) -> Result<DistillationPlan> {
         summary,
         entries,
     })
+}
+
+fn build_targeted_plan(
+    notes: &[IndexedNote],
+    requested: &[TargetedDistillationChange],
+) -> Result<DistillationPlan> {
+    let mechanical = build_plan(notes)?;
+    let mut entries = Vec::with_capacity(requested.len());
+    for request in requested {
+        let (indexed, mut entry) = notes
+            .iter()
+            .zip(mechanical.entries.iter())
+            .find(|(note, _)| note.id == request.note)
+            .map(|(note, entry)| (note, entry.clone()))
+            .with_context(|| format!("targeted planの対象ノートがない: {}", request.note))?;
+        if indexed.note.front.origin.as_deref() != Some("agent") {
+            bail!(
+                "targeted planはAI管理ノートだけを対象にする: {}",
+                request.note
+            );
+        }
+        if indexed.note.front.note_uid.is_none() || indexed.note.front.authority.is_none() {
+            bail!(
+                "targeted planはauthorityとnote_uidを持つノートだけを対象にする: {}",
+                request.note
+            );
+        }
+        let authority = indexed
+            .note
+            .front
+            .authority
+            .as_ref()
+            .expect("直前に検証済み");
+        match request.operation {
+            TargetedDistillationOperation::Normalize => {}
+            TargetedDistillationOperation::Revise if !authority.is_active_canonical() => {
+                bail!(
+                    "targeted reviseはactive canonicalだけを対象にする: {}",
+                    request.note
+                )
+            }
+            TargetedDistillationOperation::Extract if authority.role != AuthorityRole::Record => {
+                bail!("targeted extractはrecordだけを対象にする: {}", request.note)
+            }
+            TargetedDistillationOperation::Revise | TargetedDistillationOperation::Extract => {}
+        }
+        entry.operation = request.operation.planned();
+        entry.risk = match request.operation {
+            TargetedDistillationOperation::Normalize => DistillationRisk::Low,
+            TargetedDistillationOperation::Revise | TargetedDistillationOperation::Extract => {
+                DistillationRisk::Medium
+            }
+        };
+        entry.signals = vec![DistillationSignal::TargetedSemanticChange];
+        entry.reason = request.reason.clone();
+        entry.depends_on.clear();
+        entries.push(entry);
+    }
+
+    let mut operations = OperationCounts::default();
+    let mut risks = RiskCounts::default();
+    for entry in &entries {
+        operations.add(entry.operation);
+        risks.add(entry.risk);
+    }
+    let summary = DistillationSummary {
+        operations,
+        risks,
+        actionable: entries.len(),
+    };
+    let snapshot = mechanical.snapshot;
+    let plan_id = sha256(
+        &serde_json::to_vec(&PlanMaterial {
+            schema: PLAN_SCHEMA,
+            planner_profile: TARGETED_PLANNER_PROFILE,
+            snapshot: &snapshot,
+            entries: &entries,
+        })
+        .context("targeted蒸留plan materialのserialize")?,
+    );
+    Ok(DistillationPlan {
+        schema: PLAN_SCHEMA,
+        planner_profile: TARGETED_PLANNER_PROFILE,
+        plan_id,
+        read_only: true,
+        snapshot,
+        summary,
+        entries,
+    })
+}
+
+fn validate_targeted_arguments(arguments: &mut TargetedDistillationArguments) -> Result<()> {
+    if arguments.changes.is_empty() || arguments.changes.len() > MAX_TARGETED_CHANGES {
+        bail!("targeted planは1〜{MAX_TARGETED_CHANGES}変更にする");
+    }
+    arguments
+        .changes
+        .sort_by(|left, right| left.note.cmp(&right.note));
+    let mut notes = BTreeSet::new();
+    for change in &arguments.changes {
+        NoteId::parse(&change.note)?;
+        if !notes.insert(change.note.clone()) {
+            bail!("targeted plan内で対象が重複している: {}", change.note);
+        }
+        if change.reason.trim() != change.reason
+            || change.reason.is_empty()
+            || change.reason.chars().count() > 500
+            || change.reason.contains(['\n', '\r'])
+        {
+            bail!("targeted変更理由は1〜500文字の一行で指定する");
+        }
+    }
+    Ok(())
 }
 
 fn snapshot(notes: &[IndexedNote]) -> Result<DistillationSnapshot> {
@@ -903,6 +1081,107 @@ mod tests {
         assert_ne!(before.snapshot.digest, after.snapshot.digest);
         assert_ne!(before.plan_id, after.plan_id);
         assert_ne!(before.entries[0].input_hash, after.entries[0].input_hash);
+    }
+
+    #[test]
+    fn targeted_plan_promotes_keep_to_requested_revise_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("vault")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        insert(
+            &vault,
+            &conn,
+            "notes/target",
+            Some(NoteUid::at(1)),
+            Some(authority(
+                NoteNamespace::Knowledge,
+                AuthorityRole::Canonical,
+                AuthorityStatus::Active,
+                "test/targeted",
+            )),
+            Some("現行正本"),
+            Vec::new(),
+        );
+        let mechanical = plan(&conn).unwrap();
+        assert_eq!(mechanical.entries[0].operation, DistillationOperation::Keep);
+        let before_changes = conn.total_changes();
+        let arguments = TargetedDistillationArguments {
+            changes: vec![TargetedDistillationChange {
+                note: "notes/target".into(),
+                operation: TargetedDistillationOperation::Revise,
+                reason: "全文監査で欠落参照への意味依存を検出した".into(),
+            }],
+        };
+
+        let first = plan_targeted(&conn, arguments.clone()).unwrap();
+        let second = plan_targeted(&conn, arguments).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.planner_profile, TARGETED_PLANNER_PROFILE);
+        assert_eq!(first.snapshot, mechanical.snapshot);
+        assert_ne!(first.plan_id, mechanical.plan_id);
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.entries[0].operation, DistillationOperation::Revise);
+        assert_eq!(
+            first.entries[0].signals,
+            vec![DistillationSignal::TargetedSemanticChange]
+        );
+        assert_eq!(conn.total_changes(), before_changes);
+    }
+
+    #[test]
+    fn targeted_plan_rejects_invalid_role_duplicate_and_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("vault")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        insert(
+            &vault,
+            &conn,
+            "notes/record",
+            Some(NoteUid::at(1)),
+            Some(authority(
+                NoteNamespace::Records,
+                AuthorityRole::Record,
+                AuthorityStatus::Active,
+                "test/record",
+            )),
+            Some("原記録"),
+            Vec::new(),
+        );
+        let revise_record = TargetedDistillationArguments {
+            changes: vec![TargetedDistillationChange {
+                note: "notes/record".into(),
+                operation: TargetedDistillationOperation::Revise,
+                reason: "recordを書き換えようとした".into(),
+            }],
+        };
+        assert!(
+            plan_targeted(&conn, revise_record)
+                .unwrap_err()
+                .to_string()
+                .contains("active canonical")
+        );
+
+        let duplicate = TargetedDistillationArguments {
+            changes: vec![
+                TargetedDistillationChange {
+                    note: "notes/record".into(),
+                    operation: TargetedDistillationOperation::Extract,
+                    reason: "一件目".into(),
+                },
+                TargetedDistillationChange {
+                    note: "notes/record".into(),
+                    operation: TargetedDistillationOperation::Extract,
+                    reason: "二件目".into(),
+                },
+            ],
+        };
+        assert!(
+            plan_targeted(&conn, duplicate)
+                .unwrap_err()
+                .to_string()
+                .contains("重複")
+        );
     }
 
     #[test]

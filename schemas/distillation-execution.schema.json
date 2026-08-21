@@ -16,7 +16,7 @@
   "properties": {
     "schema": { "const": "kb-app.distillation-execution-request/v1" },
     "plan_schema": { "const": "kb-app.distillation-plan/v1" },
-    "planner_profile": { "const": "mechanical-v1" },
+    "planner_profile": { "enum": ["mechanical-v1", "targeted-v1"] },
     "plan_id": { "$ref": "#/$defs/hash" },
     "snapshot_digest": { "$ref": "#/$defs/hash" },
     "snapshot_note_count": { "type": "integer", "minimum": 0 },

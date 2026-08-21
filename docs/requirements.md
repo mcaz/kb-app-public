@@ -165,7 +165,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `note_uid`は作成後に変更できず、同じnamespace+scopeのactive canonical重複、参照切れrelation、
   typed relationで参照中の削除をcoreで拒否する。複数ノートを一括遷移するatomic supersedeと
   path移動は次のsemantic executor段で実装し、それまでは半端なsuperseded状態を作らない
-- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / audit_distillation /
+- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / plan_targeted_distillation / audit_distillation /
   plan_legacy_artifact_promotions / apply_legacy_artifact_promotion /
   rollback_legacy_artifact_promotion / propose に加え、**update / prepare_remove / commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
@@ -192,6 +192,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   - `plan_distillation`は準備済みDBをread-onlyで開き、同一snapshotの全ノートへinput hashを付けた
     mechanical-v1候補planを返す。remote pull、索引同期、schema migration、care/outbox更新を行わず、
     MCP annotationもread-only / idempotentに固定する。同じsnapshotのJSONはbyte-identicalとする
+  - `plan_targeted_distillation`は、全文監査で見つけた既存AIノートのnormalize / revise / extractを
+    note・operation・一行理由へ固定したtargeted-v1 planとして返す。plan IDは全DB snapshot、対象input hash、
+    requested operation・理由を含み、applyは同じ入力からplanを再構成する。`keep`の任意昇格は許可しない
   - `audit_distillation`は自己digestを再照合した任意の前回checkpointと現在planを`note_uid`（legacyはnote ID）で比較し、
     追加・変更・削除・移動と、non-keep／risk候補を`depends_on`の双方向閉包へ広げたworksetを返す。
     baseline無しは全件監査。受入gateは全plan、unresolved・risk、pending Markdown export、Storage Contract、
