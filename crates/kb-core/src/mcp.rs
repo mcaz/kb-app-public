@@ -2,7 +2,8 @@
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
 //! resolve_markdown_conflict / plan_distillation / plan_targeted_distillation / audit_distillation /
 //! distillation_cadence_status / run_distillation_cadence / apply_distillation /
-//! rollback_distillation / plan_legacy_artifact_promotions /
+//! rollback_distillation / plan_initiative_closure / apply_initiative_closure /
+//! rollback_initiative_closure / plan_legacy_artifact_promotions /
 //! apply_legacy_artifact_promotion / rollback_legacy_artifact_promotion /
 //! propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
@@ -166,6 +167,8 @@ plan_targeted_distillationで対象・operation・理由を先に固定する。
 revise / extractを複数ノートへ反映するときはapply_distillationを使い、plan schema・profile・\
 snapshot・input hashをそのまま渡す。executorは全対象を1 transactionで更新し、古いplan・二重実行・\
 record本文改変を拒否する。失敗したwaveは対象が変わる前にrollback_distillationで一括復元する。\
+完了したactive canonical initiativeのstatusだけをhistoricalへ変える場合はplan_initiative_closureの\
+全出力をapply_initiative_closureへ渡し、失敗時はrollback_initiative_closureで一括復元する。\
 create・delete・merge・supersede・splitはexecutor v1へ混ぜず、削除は既存の二段階removeを使う。\n\
 【旧Artifact移行】物理再配置はplan_legacy_artifact_promotionsで1件単位のread-only planを取り、\
 plan全体をapply_legacy_artifact_promotionへそのまま渡す。uploadとhash確認前にはlocatorを切り替えず、\
@@ -686,6 +689,95 @@ fn targeted_distillation_tool_definition() -> Value {
     })
 }
 
+fn initiative_closure_tool_definitions() -> [Value; 3] {
+    let plan_change = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "note": {"type": "string", "minLength": 1, "description": "完了内容を全文確認済みのactive canonical initiative note ID"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$", "description": "initiativeを完了扱いにする根拠(一行)"}
+        },
+        "required": ["note", "reason"]
+    });
+    let execution_change = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "note": {"type": "string", "minLength": 1},
+            "note_uid": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+            "input_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "from_status": {"type": "string", "const": "active"},
+            "to_status": {"type": "string", "const": "historical"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$"}
+        },
+        "required": ["note", "note_uid", "input_hash", "from_status", "to_status", "reason"]
+    });
+    let plan = json!({
+        "name": "plan_initiative_closure",
+        "description": "全文確認済みのAI管理active canonical initiativeをhistoricalへ閉じるwaveを、対象・note_uid・input hash・DB snapshot・理由へ固定するread-only plan。本文やidentityは変更しない。",
+        "annotations": {
+            "title": "initiative完了waveを計画",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "changes": {"type": "array", "minItems": 1, "maxItems": 100, "items": plan_change}
+            },
+            "required": ["changes"]
+        }
+    });
+    let apply = json!({
+        "name": "apply_initiative_closure",
+        "description": "initiative-close-v1 planの全対象を同一snapshotへ再照合し、authority statusのactive→historicalだけを1 transactionで反映する。",
+        "annotations": {
+            "title": "initiative完了waveを実行",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "schema": {"type": "string", "const": "kb-app.initiative-closure-execution-request/v1"},
+                "plan_schema": {"type": "string", "const": "kb-app.initiative-closure-plan/v1"},
+                "planner_profile": {"type": "string", "const": "initiative-close-v1"},
+                "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "snapshot_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "snapshot_note_count": {"type": "integer", "minimum": 0},
+                "changes": {"type": "array", "minItems": 1, "maxItems": 100, "items": execution_change}
+            },
+            "required": ["schema", "plan_schema", "planner_profile", "plan_id", "snapshot_digest", "snapshot_note_count", "changes"]
+        }
+    });
+    let rollback = json!({
+        "name": "rollback_initiative_closure",
+        "description": "適用済みinitiative完了waveの全対象が直後snapshotのままなら、同じtransactionで実行前のactive状態へ復元する。",
+        "annotations": {
+            "title": "initiative完了waveをrollback",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "execution_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            },
+            "required": ["execution_id"]
+        }
+    });
+    [plan, apply, rollback]
+}
+
 fn distillation_audit_tool_definition() -> Value {
     let checkpoint_entry = json!({
         "type": "object",
@@ -1042,6 +1134,7 @@ fn tool_definitions(client: &str) -> Value {
     ];
     distillation_tools.extend(distillation_cadence_tool_definitions());
     distillation_tools.extend(semantic_tool_definitions());
+    distillation_tools.extend(initiative_closure_tool_definitions());
     distillation_tools.extend(legacy_promotion_tool_definitions());
     tools.splice(insert_at..insert_at, distillation_tools);
     if !capabilities.current_note_argument_optional {
@@ -1197,6 +1290,7 @@ fn call_tool_with_search_options(
         name,
         "plan_distillation"
             | "plan_targeted_distillation"
+            | "plan_initiative_closure"
             | "audit_distillation"
             | "distillation_cadence_status"
             | "run_distillation_cadence"
@@ -1421,6 +1515,22 @@ fn call_tool_with_search_options(
                 structured: Some(serde_json::to_value(&plan)?),
             })
         }
+        "plan_initiative_closure" => {
+            let arguments: crate::initiative_lifecycle::InitiativeClosureArguments =
+                serde_json::from_value(args.clone())
+                    .context("plan_initiative_closure引数を解釈できない")?;
+            let plan = crate::initiative_lifecycle::plan(&conn, arguments)?;
+            let text = format!(
+                "initiative完了plan(read-only): {} changes / plan {} / snapshot {}",
+                plan.changes.len(),
+                plan.plan_id,
+                plan.snapshot.digest,
+            );
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&plan)?),
+            })
+        }
         "audit_distillation" => {
             let arguments: crate::distillation_audit::DistillationAuditArguments =
                 serde_json::from_value(args.clone())
@@ -1559,6 +1669,79 @@ fn call_tool_with_search_options(
                         report.restored_notes.len(),
                         report.execution_id,
                         report.after_snapshot_digest
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "apply_initiative_closure" => {
+            let request: crate::initiative_lifecycle::InitiativeClosureExecutionRequest =
+                serde_json::from_value(args.clone())
+                    .context("apply_initiative_closure引数を解釈できない")?;
+            let report = crate::initiative_lifecycle::execute(vault, &conn, request, client)?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "initiative_closure_applied",
+                    "event": "initiative_closure_applied",
+                    "required": true,
+                    "execution_id": &report.execution_id,
+                    "plan_id": &report.plan_id,
+                    "changed_notes": report.changes.len(),
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "initiative完了waveを適用した: {}件 / execution {} / after snapshot {}",
+                        report.changes.len(),
+                        report.execution_id,
+                        report.after_snapshot_digest,
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "rollback_initiative_closure" => {
+            let execution_id = args
+                .get("execution_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("execution_id が必要"))?;
+            let report = crate::initiative_lifecycle::rollback(vault, &conn, execution_id, client)?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "initiative_closure_rolled_back",
+                    "event": "initiative_closure_rolled_back",
+                    "required": true,
+                    "execution_id": &report.execution_id,
+                    "rollback_id": &report.rollback_id,
+                    "restored_notes": report.restored_notes.len(),
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "initiative完了waveをrollbackした: {}件 / execution {} / snapshot {}",
+                        report.restored_notes.len(),
+                        report.execution_id,
+                        report.after_snapshot_digest,
                     ),
                     &degraded,
                 ),
@@ -2801,7 +2984,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 20);
+        assert_eq!(definitions.len(), 23);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -3306,6 +3489,125 @@ mod tests {
     }
 
     #[test]
+    fn initiative_closure_tools_plan_apply_and_rollback_exact_active_initiative() {
+        use crate::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace};
+
+        let tools = tool_definitions("test/client");
+        let definitions = tools.as_array().unwrap();
+        let plan_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "plan_initiative_closure")
+            .unwrap();
+        assert_eq!(plan_definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(plan_definition["annotations"]["destructiveHint"], false);
+        for name in ["apply_initiative_closure", "rollback_initiative_closure"] {
+            let definition = definitions
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap();
+            assert_eq!(definition["annotations"]["readOnlyHint"], false);
+            assert_eq!(definition["annotations"]["destructiveHint"], true);
+            assert_eq!(definition["annotations"]["idempotentHint"], false);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "MCP initiative closure target",
+                    body: "完了した作業",
+                    description: Some("MCPで閉じるinitiative"),
+                    tags: &["test".to_string()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Initiatives,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "test/mcp-initiative-close".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let planned = call_tool(
+            &vault,
+            "test/client",
+            "plan_initiative_closure",
+            &serde_json::json!({
+                "changes": [{
+                    "note": id,
+                    "reason": "完了条件と最終監査を満たした"
+                }]
+            }),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(planned["read_only"], true);
+        assert_eq!(planned["planner_profile"], "initiative-close-v1");
+        assert_eq!(planned["changes"][0]["from_status"], "active");
+        assert_eq!(planned["changes"][0]["to_status"], "historical");
+
+        let applied = call_tool(
+            &vault,
+            "test/client",
+            "apply_initiative_closure",
+            &serde_json::json!({
+                "schema": "kb-app.initiative-closure-execution-request/v1",
+                "plan_schema": planned["schema"],
+                "planner_profile": planned["planner_profile"],
+                "plan_id": planned["plan_id"],
+                "snapshot_digest": planned["snapshot"]["digest"],
+                "snapshot_note_count": planned["snapshot"]["note_count"],
+                "changes": planned["changes"],
+            }),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(applied["status"], "applied");
+        assert_eq!(applied["conversation_events"][0]["required"], true);
+        assert_eq!(
+            vault
+                .read_note_from_db(&open_db(&vault).unwrap(), &id)
+                .unwrap()
+                .front
+                .authority
+                .unwrap()
+                .status,
+            AuthorityStatus::Historical
+        );
+
+        let rolled_back = call_tool(
+            &vault,
+            "test/client",
+            "rollback_initiative_closure",
+            &serde_json::json!({"execution_id": applied["execution_id"]}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(rolled_back["status"], "rolled_back");
+        assert_eq!(
+            vault
+                .read_note_from_db(&open_db(&vault).unwrap(), &id)
+                .unwrap()
+                .front
+                .authority
+                .unwrap()
+                .status,
+            AuthorityStatus::Active
+        );
+    }
+
+    #[test]
     fn autonomous_remove_uses_a_short_lived_target_bound_plan() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
@@ -3496,6 +3798,8 @@ mod tests {
         for name in [
             "apply_distillation",
             "rollback_distillation",
+            "apply_initiative_closure",
+            "rollback_initiative_closure",
             "apply_legacy_artifact_promotion",
             "rollback_legacy_artifact_promotion",
         ] {

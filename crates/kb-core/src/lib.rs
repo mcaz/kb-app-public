@@ -28,6 +28,7 @@ pub mod github;
 pub mod github_auth;
 pub mod import;
 pub mod index;
+pub mod initiative_lifecycle;
 pub mod intake;
 pub mod ledger;
 pub mod lfs;

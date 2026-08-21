@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kb-app.local/schemas/initiative-closure-execution.schema.json",
+  "title": "kb-app initiative closure execution request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "plan_schema", "planner_profile", "plan_id", "snapshot_digest", "snapshot_note_count", "changes"],
+  "properties": {
+    "schema": {"const": "kb-app.initiative-closure-execution-request/v1"},
+    "plan_schema": {"const": "kb-app.initiative-closure-plan/v1"},
+    "planner_profile": {"const": "initiative-close-v1"},
+    "plan_id": {"$ref": "#/$defs/hash"},
+    "snapshot_digest": {"$ref": "#/$defs/hash"},
+    "snapshot_note_count": {"type": "integer", "minimum": 0},
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/change"}
+    }
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["note", "note_uid", "input_hash", "from_status", "to_status", "reason"],
+      "properties": {
+        "note": {"type": "string", "minLength": 1},
+        "note_uid": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+        "input_hash": {"$ref": "#/$defs/hash"},
+        "from_status": {"const": "active"},
+        "to_status": {"const": "historical"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$"}
+      }
+    }
+  }
+}
