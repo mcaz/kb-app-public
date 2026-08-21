@@ -28,7 +28,9 @@ use std::io::Read;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::artifact::{
     ArtifactId, ArtifactRef, ContentHash, Created, Hasher, Locator, Manifest, Policy, RefName, Role,
@@ -53,6 +55,350 @@ pub struct Migrated {
     pub file_name: String,
     pub id: ArtifactId,
     pub ref_name: RefName,
+}
+
+pub const PROMOTION_PLAN_SCHEMA: &str = "kb-app.legacy-artifact-promotion-plan/v1";
+pub const PROMOTION_RESULT_SCHEMA: &str = "kb-app.legacy-artifact-promotion-result/v1";
+
+/// 1 Artifact だけを対象にする小規模 promotion plan。
+/// read-only の棚卸し時点に見えた入力をすべて固定し、apply 時に再照合する。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionPlan {
+    pub schema: String,
+    pub plan_id: String,
+    pub artifact_id: ArtifactId,
+    pub manifest_version: u64,
+    pub note_id: String,
+    pub file_name: String,
+    pub legacy_path: String,
+    pub hash: ContentHash,
+    pub size: u64,
+    pub destination: String,
+    pub reference: Option<PromotionRefSnapshot>,
+    pub aliases: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionRefSnapshot {
+    pub name: RefName,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionResult {
+    pub schema: String,
+    pub result_id: String,
+    pub plan_id: String,
+    pub artifact_id: ArtifactId,
+    pub before_version: u64,
+    pub after_version: u64,
+    pub note_id: String,
+    pub file_name: String,
+    pub hash: ContentHash,
+    pub old_path_retained: bool,
+    pub already_applied: bool,
+}
+
+/// LegacyGit 台帳を1件ずつ deterministic plan にする。**書き込みも network I/O もない。**
+pub fn plan_promotions(vault: &Vault, ledger: &Ledger) -> Result<Vec<PromotionPlan>> {
+    let mut out = Vec::new();
+    for manifest in ledger.list() {
+        let Locator::LegacyGit { note_id, file_name } = &manifest.locator else {
+            continue;
+        };
+        let path = vault.legacy_attachment_path(note_id, file_name)?;
+        let (hash, size) = hash_file(&path)?;
+        if hash != manifest.hash || size != manifest.created.size {
+            bail!("旧実体が台帳と一致しない: {}", manifest.id);
+        }
+        let reference = ledger.ref_for(&manifest.id).map(|r| PromotionRefSnapshot {
+            name: r.name,
+            revision: r.revision,
+        });
+        let mut aliases: Vec<(String, String)> = reference
+            .as_ref()
+            .map(|r| {
+                ledger
+                    .aliases()
+                    .into_iter()
+                    .filter(|(_, name)| name == &r.name.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        aliases.sort();
+        let mut plan = PromotionPlan {
+            schema: PROMOTION_PLAN_SCHEMA.to_string(),
+            plan_id: String::new(),
+            artifact_id: manifest.id,
+            manifest_version: manifest.version,
+            note_id: note_id.clone(),
+            file_name: file_name.clone(),
+            legacy_path: format!("/{note_id}.files/{file_name}"),
+            hash,
+            size,
+            destination: format!(".kb-artifacts/lfs/{}", manifest.hash),
+            reference,
+            aliases,
+        };
+        plan.plan_id = promotion_plan_id(&plan)?;
+        out.push(plan);
+    }
+    out.sort_by(|a, b| a.artifact_id.cmp(&b.artifact_id));
+    Ok(out)
+}
+
+fn promotion_plan_id(plan: &PromotionPlan) -> Result<String> {
+    let mut fixed = plan.clone();
+    fixed.plan_id.clear();
+    let bytes = serde_json::to_vec(&fixed)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+trait PromotionTransport {
+    fn stage_and_upload(
+        &mut self,
+        vault: &Vault,
+        source: &Path,
+        expected_hash: &ContentHash,
+        expected_size: u64,
+    ) -> Result<()>;
+}
+
+struct LfsPromotionTransport;
+
+impl PromotionTransport for LfsPromotionTransport {
+    fn stage_and_upload(
+        &mut self,
+        vault: &Vault,
+        source: &Path,
+        expected_hash: &ContentHash,
+        expected_size: u64,
+    ) -> Result<()> {
+        let (hash, size) = crate::lfs::import(vault, source)?;
+        if &hash != expected_hash || size != expected_size {
+            bail!("LFS staging後のhash/sizeがplanと一致しない");
+        }
+        if crate::lfs::verify(vault, &hash)? != crate::store::Verified::Ok {
+            bail!("LFS objectをlocalで照合できない: {hash}");
+        }
+        // この成功を確認するまでは manifest を一切変更しない。
+        crate::lfs::push_object(vault, &hash)
+    }
+}
+
+/// LFS upload 確認後にだけ LegacyGit を Managed へ切り替える。
+pub fn apply_promotion(
+    vault: &Vault,
+    ledger: &Ledger,
+    plan: &PromotionPlan,
+    at: &str,
+) -> Result<PromotionResult> {
+    let mut transport = LfsPromotionTransport;
+    apply_promotion_with(vault, ledger, plan, at, &mut transport, true)
+}
+
+fn apply_promotion_with(
+    vault: &Vault,
+    ledger: &Ledger,
+    plan: &PromotionPlan,
+    at: &str,
+    transport: &mut impl PromotionTransport,
+    push_git: bool,
+) -> Result<PromotionResult> {
+    if plan.schema != PROMOTION_PLAN_SCHEMA || promotion_plan_id(plan)? != plan.plan_id {
+        bail!("promotion planのschemaまたはplan_idが不正");
+    }
+    let _lock = crate::connect::sync_lock(vault)?;
+    let current = ledger
+        .get(&plan.artifact_id)?
+        .with_context(|| format!("Artifactがない: {}", plan.artifact_id))?;
+
+    // crash/retry: uploadとswitchが済んだ同じplanだけは、Git pushを再試行して成功扱いにする。
+    if matches!(&current.locator, Locator::Managed { hash } if hash == &plan.hash)
+        && current.version == plan.manifest_version + 1
+        && current
+            .events
+            .iter()
+            .any(|event| event.kind == "legacy-promoted" && event.detail.contains(&plan.plan_id))
+    {
+        validate_ref_alias_snapshot(ledger, plan)?;
+        if crate::lfs::verify(vault, &plan.hash)? != crate::store::Verified::Ok {
+            bail!("promotion済み台帳に対応するLFS objectを照合できない");
+        }
+        if push_git {
+            crate::connect::push_now_locked(vault)?;
+        }
+        return Ok(promotion_result(plan, current.version, true));
+    }
+
+    validate_plan_inputs(vault, ledger, plan, &current)?;
+    let source = vault.legacy_attachment_path(&plan.note_id, &plan.file_name)?;
+    transport.stage_and_upload(vault, &source, &plan.hash, plan.size)?;
+
+    // upload 中の並行変更も切替直前に再照合する。
+    let before = ledger
+        .get(&plan.artifact_id)?
+        .context("upload後にArtifactが見つからない")?;
+    validate_plan_inputs(vault, ledger, plan, &before)?;
+    let mut after = before.clone();
+    after.promote_legacy_locator(plan.manifest_version, &plan.note_id, &plan.file_name)?;
+    after.record(
+        at,
+        "legacy-promoted",
+        &format!("{}; LFS upload確認後にManagedへ昇格", plan.plan_id),
+    );
+    let outcome = ledger.put_with_outcome(vault, &after)?;
+    if let Some(error) = outcome.sync_error {
+        // commitできない変更はprimaryにしない。旧実体もLFS objectも残る。
+        let _ = ledger.put(vault, &before);
+        bail!("promotion commitに失敗しLegacyGitへ復元した: {error}");
+    }
+    if push_git {
+        crate::connect::push_now_locked(vault)?;
+    }
+    Ok(promotion_result(plan, after.version, false))
+}
+
+/// apply 結果に固定された直後versionからだけ LegacyGit へ戻す。
+/// LFS object/pointerも旧実体も削除しない。
+pub fn rollback_promotion(
+    vault: &Vault,
+    ledger: &Ledger,
+    result: &PromotionResult,
+    at: &str,
+) -> Result<PromotionResult> {
+    rollback_promotion_with(vault, ledger, result, at, true)
+}
+
+fn rollback_promotion_with(
+    vault: &Vault,
+    ledger: &Ledger,
+    result: &PromotionResult,
+    at: &str,
+    push_git: bool,
+) -> Result<PromotionResult> {
+    if result.schema != PROMOTION_RESULT_SCHEMA
+        || promotion_result_id(result)? != result.result_id
+        || !result.old_path_retained
+    {
+        bail!("promotion resultがrollback可能な形式ではない");
+    }
+    let _lock = crate::connect::sync_lock(vault)?;
+    let mut current = ledger
+        .get(&result.artifact_id)?
+        .context("rollback対象のArtifactがない")?;
+    if current.version != result.after_version || current.hash != result.hash {
+        bail!("promotion後にArtifactが変更されているためrollbackできない");
+    }
+    let path = vault.legacy_attachment_path(&result.note_id, &result.file_name)?;
+    let (hash, _) = hash_file(&path)?;
+    if hash != result.hash {
+        bail!("旧実体が変更されているためrollbackできない");
+    }
+    let before = current.clone();
+    current.rollback_legacy_locator(result.after_version, &result.note_id, &result.file_name)?;
+    current.record(
+        at,
+        "legacy-promotion-rolled-back",
+        &format!("{} をLegacyGitへ復元", result.plan_id),
+    );
+    let outcome = ledger.put_with_outcome(vault, &current)?;
+    if let Some(error) = outcome.sync_error {
+        let _ = ledger.put(vault, &before);
+        bail!("rollback commitに失敗しManagedへ復元した: {error}");
+    }
+    if push_git {
+        crate::connect::push_now_locked(vault)?;
+    }
+    let mut rolled_back = PromotionResult {
+        after_version: current.version,
+        already_applied: false,
+        ..result.clone()
+    };
+    rolled_back.result_id = promotion_result_id(&rolled_back)?;
+    Ok(rolled_back)
+}
+
+fn promotion_result(
+    plan: &PromotionPlan,
+    after_version: u64,
+    already_applied: bool,
+) -> PromotionResult {
+    let mut result = PromotionResult {
+        schema: PROMOTION_RESULT_SCHEMA.to_string(),
+        result_id: String::new(),
+        plan_id: plan.plan_id.clone(),
+        artifact_id: plan.artifact_id.clone(),
+        before_version: plan.manifest_version,
+        after_version,
+        note_id: plan.note_id.clone(),
+        file_name: plan.file_name.clone(),
+        hash: plan.hash.clone(),
+        old_path_retained: true,
+        already_applied,
+    };
+    result.result_id = promotion_result_id(&result).expect("PromotionResultはserializeできる");
+    result
+}
+
+fn promotion_result_id(result: &PromotionResult) -> Result<String> {
+    let mut fixed = result.clone();
+    fixed.result_id.clear();
+    let bytes = serde_json::to_vec(&fixed)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn validate_plan_inputs(
+    vault: &Vault,
+    ledger: &Ledger,
+    plan: &PromotionPlan,
+    manifest: &Manifest,
+) -> Result<()> {
+    if manifest.version != plan.manifest_version
+        || manifest.hash != plan.hash
+        || manifest.created.size != plan.size
+        || !matches!(
+            &manifest.locator,
+            Locator::LegacyGit { note_id, file_name }
+                if note_id == &plan.note_id && file_name == &plan.file_name
+        )
+    {
+        bail!("promotion planが現在のmanifestと一致しない。planを取り直す");
+    }
+    let path = vault.legacy_attachment_path(&plan.note_id, &plan.file_name)?;
+    let (hash, size) = hash_file(&path)?;
+    if hash != plan.hash || size != plan.size {
+        bail!("旧実体がpromotion planと一致しない。planを取り直す");
+    }
+    validate_ref_alias_snapshot(ledger, plan)
+}
+
+fn validate_ref_alias_snapshot(ledger: &Ledger, plan: &PromotionPlan) -> Result<()> {
+    let current_ref = ledger
+        .ref_for(&plan.artifact_id)
+        .map(|r| PromotionRefSnapshot {
+            name: r.name,
+            revision: r.revision,
+        });
+    if current_ref != plan.reference {
+        bail!("Artifact refがpromotion planから変更されている");
+    }
+    let mut aliases: Vec<(String, String)> = plan
+        .reference
+        .as_ref()
+        .map(|r| {
+            ledger
+                .aliases()
+                .into_iter()
+                .filter(|(_, name)| name == &r.name.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    aliases.sort();
+    if aliases != plan.aliases {
+        bail!("legacy aliasがpromotion planから変更されている");
+    }
+    Ok(())
 }
 
 /// 棚卸し。**何も書かない。**
@@ -237,6 +583,48 @@ mod tests {
 
     const AT: &str = "2026-08-13T09:00:00Z";
 
+    #[derive(Default)]
+    struct MockUpload {
+        fail: bool,
+        calls: usize,
+    }
+
+    impl PromotionTransport for MockUpload {
+        fn stage_and_upload(
+            &mut self,
+            vault: &Vault,
+            source: &Path,
+            expected_hash: &ContentHash,
+            expected_size: u64,
+        ) -> Result<()> {
+            self.calls += 1;
+            if self.fail {
+                bail!("simulated upload failure");
+            }
+            crate::connect::ensure_vault_config(vault)?;
+            let repo = git2::Repository::open(&vault.root)?;
+            let storage = repo.config()?.get_string("lfs.storage")?;
+            let oid = expected_hash.as_str();
+            let dest = Path::new(&storage)
+                .join("objects")
+                .join(&oid[0..2])
+                .join(&oid[2..4])
+                .join(oid);
+            fs::create_dir_all(dest.parent().unwrap())?;
+            fs::copy(source, &dest)?;
+            let (hash, size) = hash_file(&dest)?;
+            assert_eq!(&hash, expected_hash);
+            assert_eq!(size, expected_size);
+            Ok(())
+        }
+    }
+
+    fn migrated_legacy(e: &Env, bytes: &[u8]) -> (String, Migrated) {
+        let note_id = legacy(&e.vault, "設計メモ", "図.png", bytes);
+        let migrated = migrate(&e.vault, &e.ledger, "ws-a", AT).unwrap().remove(0);
+        (note_id, migrated)
+    }
+
     #[test]
     fn survey_reads_without_writing() {
         let e = env();
@@ -358,5 +746,129 @@ mod tests {
         let names: Vec<String> = done.iter().map(|d| d.ref_name.to_string()).collect();
         assert_eq!(names.len(), 2);
         assert_ne!(names[0], names[1], "参照名は保管庫の中で一意: {names:?}");
+    }
+
+    #[test]
+    fn promotion_plan_is_read_only_deterministic_and_snapshot_bound() {
+        let e = env();
+        let (_note_id, migrated) = migrated_legacy(&e, b"legacy bytes");
+        let before = e.ledger.get(&migrated.id).unwrap().unwrap();
+
+        let first = plan_promotions(&e.vault, &e.ledger).unwrap();
+        let second = plan_promotions(&e.vault, &e.ledger).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].artifact_id, migrated.id);
+        assert_eq!(first[0].manifest_version, before.version);
+        assert_eq!(first[0].hash, before.hash);
+        assert_eq!(first[0].size, before.created.size);
+        assert!(first[0].destination.ends_with(first[0].hash.as_str()));
+        assert_eq!(e.ledger.get(&migrated.id).unwrap().unwrap(), before);
+    }
+
+    #[test]
+    fn upload_failure_never_switches_primary_locator() {
+        let e = env();
+        let (_note_id, migrated) = migrated_legacy(&e, b"legacy bytes");
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let mut upload = MockUpload {
+            fail: true,
+            ..Default::default()
+        };
+
+        assert!(apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).is_err());
+        let current = e.ledger.get(&migrated.id).unwrap().unwrap();
+        assert!(matches!(current.locator, Locator::LegacyGit { .. }));
+        assert_eq!(current.version, plan.manifest_version);
+    }
+
+    #[test]
+    fn stale_manifest_ref_or_alias_rejects_the_plan_before_upload() {
+        let e = env();
+        let (_note_id, migrated) = migrated_legacy(&e, b"legacy bytes");
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let mut manifest = e.ledger.get(&migrated.id).unwrap().unwrap();
+        manifest
+            .apply(
+                manifest.version,
+                crate::artifact::Change {
+                    display_name: Some("changed.png".into()),
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        e.ledger.put(&e.vault, &manifest).unwrap();
+        let mut upload = MockUpload::default();
+
+        assert!(apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).is_err());
+        assert_eq!(upload.calls, 0);
+    }
+
+    #[test]
+    fn successful_promotion_is_locator_only_idempotent_and_keeps_old_links() {
+        let e = env();
+        let (note_id, migrated) = migrated_legacy(&e, b"legacy bytes");
+        let old_path = e.vault.legacy_attachment_path(&note_id, "図.png").unwrap();
+        let before = e.ledger.get(&migrated.id).unwrap().unwrap();
+        let before_ref = e.ledger.ref_for(&migrated.id).unwrap();
+        let before_aliases = e.ledger.aliases();
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let mut upload = MockUpload::default();
+
+        let applied =
+            apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).unwrap();
+        let after = e.ledger.get(&migrated.id).unwrap().unwrap();
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.hash, before.hash);
+        assert_eq!(after.created, before.created);
+        assert_eq!(after.policy, before.policy);
+        assert_eq!(after.notes, before.notes);
+        assert!(matches!(after.locator, Locator::Managed { .. }));
+        assert!(old_path.is_file(), "旧実体はfallbackとして残す");
+        assert_eq!(e.ledger.ref_for(&migrated.id).unwrap(), before_ref);
+        assert_eq!(e.ledger.aliases(), before_aliases);
+
+        let retried =
+            apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).unwrap();
+        assert!(retried.already_applied);
+        assert_eq!(upload.calls, 1, "retryで再uploadしない");
+        assert_eq!(retried.after_version, applied.after_version);
+
+        let old_link = format!("/{note_id}.files/図.png");
+        let resolved = parse_and_resolve(&e, &old_link);
+        assert_eq!(resolved.manifest.id, migrated.id);
+        let mut opened = resolved.open(&e.vault, &e.stores).unwrap().unwrap();
+        let mut bytes = Vec::new();
+        opened.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"legacy bytes");
+    }
+
+    #[test]
+    fn rollback_requires_the_exact_post_apply_version_and_keeps_both_copies() {
+        let e = env();
+        let (note_id, migrated) = migrated_legacy(&e, b"legacy bytes");
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let mut upload = MockUpload::default();
+        let applied =
+            apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).unwrap();
+
+        let rolled_back =
+            rollback_promotion_with(&e.vault, &e.ledger, &applied, AT, false).unwrap();
+        let current = e.ledger.get(&migrated.id).unwrap().unwrap();
+        assert!(matches!(current.locator, Locator::LegacyGit { .. }));
+        assert!(
+            e.vault
+                .legacy_attachment_path(&note_id, "図.png")
+                .unwrap()
+                .is_file()
+        );
+        assert_eq!(
+            crate::lfs::verify(&e.vault, &plan.hash).unwrap(),
+            crate::store::Verified::Ok
+        );
+        assert!(rollback_promotion_with(&e.vault, &e.ledger, &applied, AT, false).is_err());
+        assert_eq!(rolled_back.after_version, applied.after_version + 1);
     }
 }

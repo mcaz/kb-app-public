@@ -572,6 +572,50 @@ impl Manifest {
         Ok(())
     }
 
+    /// 旧 Git 添付の実体を、内容・identity・来歴を変えず Managed へ昇格する。
+    ///
+    /// locator を通常の [`Change`] に含めると任意の置き場へ差し替えられてしまうため、
+    /// LegacyGit → 同じ content hash の Managed だけを専用操作として許可する。
+    pub fn promote_legacy_locator(
+        &mut self,
+        expected_version: u64,
+        expected_note_id: &str,
+        expected_file_name: &str,
+    ) -> Result<()> {
+        self.check_version(expected_version)?;
+        match &self.locator {
+            Locator::LegacyGit { note_id, file_name }
+                if note_id == expected_note_id && file_name == expected_file_name => {}
+            _ => return Err(ArtifactError::UnstableLocator),
+        }
+        self.locator = Locator::Managed {
+            hash: self.hash.clone(),
+        };
+        self.version += 1;
+        Ok(())
+    }
+
+    /// promotion の補償操作。旧実体が照合済みであることは I/O 層が保証し、
+    /// モデル層は Managed → 指定された LegacyGit 以外を許可しない。
+    pub fn rollback_legacy_locator(
+        &mut self,
+        expected_version: u64,
+        expected_note_id: &str,
+        expected_file_name: &str,
+    ) -> Result<()> {
+        self.check_version(expected_version)?;
+        match &self.locator {
+            Locator::Managed { hash } if hash == &self.hash => {}
+            _ => return Err(ArtifactError::UnstableLocator),
+        }
+        self.locator = Locator::LegacyGit {
+            note_id: expected_note_id.to_string(),
+            file_name: expected_file_name.to_string(),
+        };
+        self.version += 1;
+        Ok(())
+    }
+
     /// 内容の差し替え = **新しい台帳**。元は書き換えない(不変)。
     pub fn succeed(&self, id: ArtifactId, hash: ContentHash, created: Created) -> Self {
         let mut next = Manifest::new(
