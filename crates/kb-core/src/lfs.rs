@@ -96,8 +96,9 @@ pub fn import(vault: &Vault, src: &Path) -> Result<(ContentHash, u64)> {
     if let Some(dir) = dest.parent() {
         fs::create_dir_all(dir)?;
     }
-    // 内容は不変。同じ hash が既にあるなら置き直さない
-    if !has(vault, &hash) {
+    // object が既にあっても、このhashをfresh cloneへ知らせるtracked pointerが無ければ作る。
+    // objectの存在だけで省くと、別Artifactからdedupeされた実体をremoteから取得できない。
+    if !dest.is_file() {
         fs::copy(src, &dest).with_context(|| format!("複製できない: {}", dest.display()))?;
         let rel = rel(&hash);
         // **ここは git CLI で通す。** `Vault::commit` は libgit2 で、libgit2 は
@@ -107,7 +108,15 @@ pub fn import(vault: &Vault, src: &Path) -> Result<(ContentHash, u64)> {
         if !add.status.success() {
             bail!("git add: {}", String::from_utf8_lossy(&add.stderr).trim());
         }
-        commit_via_cli(vault, "vault: ファイルの実体を追加")?;
+        let staged = git(vault, &["diff", "--cached", "--quiet", "--", &rel])?;
+        match staged.status.code() {
+            Some(0) => {} // 同じpointerが既に履歴にある。作業ツリーの再構成だけでよい
+            Some(1) => commit_via_cli(vault, "vault: ファイルの実体を追加")?,
+            _ => bail!(
+                "LFS pointerの差分を確認できない: {}",
+                String::from_utf8_lossy(&staged.stderr).trim()
+            ),
+        }
         // Git に入ったのが pointer であることを確かめる。属性が効いていないと
         // 実体がそのまま履歴に入り、あとから剥がすのは破壊的な作業になる
         let stored = git(vault, &["cat-file", "-p", &format!(":{rel}")])?;
@@ -155,8 +164,11 @@ fn shrink_to_pointer(vault: &Vault, hash: &ContentHash) -> Result<()> {
     if !path.is_file() {
         return Ok(());
     }
-    // pointer のままなら何もしない(2度目の呼び出し)
-    if fs::metadata(&path)?.len() < 1024 {
+    // pointer のままなら何もしない(2度目の呼び出し)。sizeだけで判定すると、
+    // 1KiB未満のraw添付をpointerと誤認してVault作業ツリーへ残してしまう。
+    let mut prefix = [0u8; 64];
+    let read = std::io::Read::read(&mut fs::File::open(&path)?, &mut prefix)?;
+    if prefix[..read].starts_with(b"version https://git-lfs") {
         return Ok(());
     }
     fs::remove_file(&path)?;
@@ -462,6 +474,34 @@ mod tests {
         assert_eq!(h1, h2);
         let tracked = tracked_path(&vault, &h1);
         assert!(fs::metadata(&tracked).unwrap().len() < 1024);
+    }
+
+    #[test]
+    fn small_and_preexisting_objects_still_leave_a_tracked_pointer() {
+        if !lfs_ready() {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        ensure_vault_config(&vault).unwrap();
+        let src = dir.path().join("small.bin");
+        fs::write(&src, b"small legacy bytes").unwrap();
+
+        let (hash, _) = import(&vault, &src).unwrap();
+        let tracked = tracked_path(&vault, &hash);
+        let pointer = fs::read(&tracked).unwrap();
+        assert!(pointer.starts_with(b"version https://git-lfs"));
+        assert_ne!(pointer, b"small legacy bytes");
+
+        // local objectだけが残りtracked pathが失われた状態でもpointerを再構成する。
+        fs::remove_file(&tracked).unwrap();
+        assert!(has(&vault, &hash));
+        import(&vault, &src).unwrap();
+        assert!(
+            fs::read(&tracked)
+                .unwrap()
+                .starts_with(b"version https://git-lfs")
+        );
     }
 
     #[test]
