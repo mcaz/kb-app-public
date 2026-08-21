@@ -98,6 +98,15 @@ enum Command {
         /// 実際に書き込む。付けなければ何も書かない
         #[arg(long)]
         apply: bool,
+        /// LegacyGit→Managedのread-only planをJSONで出す(1 Artifact = 1 plan)
+        #[arg(long)]
+        promotion_plan: bool,
+        /// promotion plan JSON 1件を再照合し、LFS upload確認後に適用
+        #[arg(long, value_name = "PLAN_JSON")]
+        promotion_apply: Option<PathBuf>,
+        /// promotion result JSON 1件を再照合し、旧locatorへ補償復元
+        #[arg(long, value_name = "RESULT_JSON")]
+        promotion_rollback: Option<PathBuf>,
     },
     /// 索引の増分 sync
     Sync,
@@ -669,10 +678,60 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Command::MigrateFiles { apply } => {
+        Command::MigrateFiles {
+            apply,
+            promotion_plan,
+            promotion_apply,
+            promotion_rollback,
+        } => {
             let vault = open_vault(cli.vault.as_deref())?;
             let workspace_id = kb_core::workspace::workspace_id(&vault)?;
             let ledger = kb_core::ledger::Ledger::open(&vault, &workspace_id)?;
+
+            let selected = usize::from(apply)
+                + usize::from(promotion_plan)
+                + usize::from(promotion_apply.is_some())
+                + usize::from(promotion_rollback.is_some());
+            if selected > 1 {
+                anyhow::bail!(
+                    "--apply / --promotion-plan / --promotion-apply / --promotion-rollback は同時指定できない"
+                );
+            }
+            if promotion_plan {
+                let plans = kb_core::migrate::plan_promotions(&vault, &ledger)?;
+                println!("{}", serde_json::to_string_pretty(&plans)?);
+                return Ok(());
+            }
+            if let Some(input) = promotion_apply {
+                let plan: kb_core::migrate::PromotionPlan =
+                    serde_json::from_str(&fs::read_to_string(&input).with_context(|| {
+                        format!("promotion planを読めない: {}", input.display())
+                    })?)
+                    .context("promotion plan JSONを解釈できない")?;
+                let result = kb_core::migrate::apply_promotion(
+                    &vault,
+                    &ledger,
+                    &plan,
+                    &kb_core::frontmatter::now_iso(),
+                )?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                return Ok(());
+            }
+            if let Some(input) = promotion_rollback {
+                let result: kb_core::migrate::PromotionResult =
+                    serde_json::from_str(&fs::read_to_string(&input).with_context(|| {
+                        format!("promotion resultを読めない: {}", input.display())
+                    })?)
+                    .context("promotion result JSONを解釈できない")?;
+                let rolled_back = kb_core::migrate::rollback_promotion(
+                    &vault,
+                    &ledger,
+                    &result,
+                    &kb_core::frontmatter::now_iso(),
+                )?;
+                println!("{}", serde_json::to_string_pretty(&rolled_back)?);
+                return Ok(());
+            }
 
             let pending = kb_core::migrate::survey(&vault, &ledger)?;
             if pending.is_empty() {
