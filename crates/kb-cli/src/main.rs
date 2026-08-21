@@ -233,6 +233,9 @@ enum EvalCommand {
         /// 省略時はstdoutへ出力
         #[arg(long)]
         output: Option<PathBuf>,
+        /// linked_v1の本文・欠落・劣化・安定性gateがFAILなら終了コードを非0にする
+        #[arg(long)]
+        gate: bool,
     },
     /// 固定20ケースについて4方式のRule配信contextを生成する
     RuleDeliveryPlan {
@@ -760,6 +763,7 @@ fn main() -> Result<()> {
                 cases,
                 format,
                 output,
+                gate,
             } => {
                 let vault = open_vault(cli.vault.as_deref())?;
                 let conn = open_db(&vault)?;
@@ -780,6 +784,12 @@ fn main() -> Result<()> {
                     println!("{}", path.display());
                 } else {
                     println!("{}", rendered.trim_end());
+                }
+                if gate && !report.gate.passed {
+                    anyhow::bail!(
+                        "retrieval gateがFAIL: {}",
+                        report.gate.failed_cases.join(", ")
+                    );
                 }
             }
             EvalCommand::RuleDeliveryPlan {
@@ -998,6 +1008,7 @@ mod tests {
                     cases,
                     format,
                     output,
+                    gate,
                 },
         } = cli.command
         else {
@@ -1006,6 +1017,7 @@ mod tests {
         assert_eq!(cases, PathBuf::from("/private/golden.json"));
         assert!(matches!(format, ReportFormat::Markdown));
         assert!(output.is_none());
+        assert!(!gate);
     }
 
     #[test]
