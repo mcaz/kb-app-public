@@ -2,59 +2,55 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mcaz/kb-app/schemas/retrieval-eval.schema.json",
   "title": "kb-app retrieval Golden Query suite",
-  "description": "Local-only cases for comparing the evaluation-only top3 baseline with linked_v1 retrieval.",
+  "description": "Local-only surface matrix for comparing top3 with linked_v1 and gating selected document bodies.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "cases"],
   "properties": {
-    "schema_version": {
-      "const": "1.0.0"
-    },
-    "cases": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/case"
-      }
-    }
+    "schema_version": { "const": "2.0.0" },
+    "stability_runs": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1 },
+    "cases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/case" } }
   },
   "$defs": {
-    "note_ids": {
+    "trimmed_strings": {
       "type": "array",
       "uniqueItems": true,
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "pattern": "^\\S(?:.*\\S)?$"
-      }
+      "items": { "type": "string", "minLength": 1, "pattern": "^\\S(?:.*\\S)?$" }
+    },
+    "body_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^\\S(?:.*\\S)?$" },
+        "all_terms": { "$ref": "#/$defs/trimmed_strings" },
+        "any_terms": { "$ref": "#/$defs/trimmed_strings" }
+      },
+      "anyOf": [
+        { "required": ["all_terms"], "properties": { "all_terms": { "minItems": 1 } } },
+        { "required": ["any_terms"], "properties": { "any_terms": { "minItems": 1 } } }
+      ]
     },
     "case": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "query", "required"],
+      "required": ["id", "queries", "required"],
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1,
-          "pattern": "^\\S(?:.*\\S)?$"
+        "id": { "type": "string", "minLength": 1, "pattern": "^\\S(?:.*\\S)?$" },
+        "queries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["codex", "claude_code", "chatgpt"],
+          "properties": {
+            "codex": { "type": "string", "minLength": 1 },
+            "claude_code": { "type": "string", "minLength": 1 },
+            "chatgpt": { "type": "string", "minLength": 1 }
+          }
         },
-        "query": {
-          "type": "string",
-          "minLength": 1
-        },
-        "required": {
-          "$ref": "#/$defs/note_ids",
-          "minItems": 1,
-          "description": "Notes required as answer evidence. They are also considered relevant for precision."
-        },
-        "relevant": {
-          "$ref": "#/$defs/note_ids",
-          "description": "Additional acceptable notes. Do not repeat required IDs."
-        },
-        "excluded": {
-          "$ref": "#/$defs/note_ids",
-          "description": "Notes whose selection is an explicit violation."
-        }
+        "required": { "$ref": "#/$defs/trimmed_strings", "minItems": 1 },
+        "relevant": { "$ref": "#/$defs/trimmed_strings" },
+        "excluded": { "$ref": "#/$defs/trimmed_strings" },
+        "body_requirements": { "type": "array", "items": { "$ref": "#/$defs/body_requirement" } }
       }
     }
   }
