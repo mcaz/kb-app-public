@@ -2,7 +2,9 @@
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
 //! resolve_markdown_conflict / plan_distillation / audit_distillation /
 //! distillation_cadence_status / run_distillation_cadence / apply_distillation /
-//! rollback_distillation / propose / update / prepare_remove / commit_remove / attach。
+//! rollback_distillation / plan_legacy_artifact_promotions /
+//! apply_legacy_artifact_promotion / rollback_legacy_artifact_promotion /
+//! propose / update / prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
 //!
 //! v0.1 は手組みの最小実装(依存最小・同期 I/O)。リモート化(Streamable HTTP)の
@@ -164,6 +166,10 @@ revise / extractを複数ノートへ反映するときはapply_distillationを�
 snapshot・input hashをそのまま渡す。executorは全対象を1 transactionで更新し、古いplan・二重実行・\
 record本文改変を拒否する。失敗したwaveは対象が変わる前にrollback_distillationで一括復元する。\
 create・delete・merge・supersede・splitはexecutor v1へ混ぜず、削除は既存の二段階removeを使う。\n\
+【旧Artifact移行】物理再配置はplan_legacy_artifact_promotionsで1件単位のread-only planを取り、\
+plan全体をapply_legacy_artifact_promotionへそのまま渡す。uploadとhash確認前にはlocatorを切り替えず、\
+各件の直後にplanとgetを取り直す。失敗時はLegacyGitのまま停止し、apply直後から戻す必要がある場合だけ\
+result全体をrollback_legacy_artifact_promotionへ渡す。VaultやCLIを代替経路にしない。\n\
 【タグ】体系は会話でユーザーと合意して育てる(暫定・要確認といった扱いもタグで表す — \
 アプリに下書き状態は無い)。合意済み(「タグ運用」ノート。無ければ起票を\
 提案)は勝手に変えない。MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
@@ -734,6 +740,105 @@ fn distillation_cadence_tool_definitions() -> [Value; 2] {
     [status, run]
 }
 
+fn legacy_promotion_plan_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "schema": {"type": "string", "const": "kb-app.legacy-artifact-promotion-plan/v1"},
+            "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "artifact_id": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+            "manifest_version": {"type": "integer", "minimum": 1},
+            "note_id": {"type": "string", "minLength": 1},
+            "file_name": {"type": "string", "minLength": 1},
+            "legacy_path": {"type": "string", "minLength": 1},
+            "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "size": {"type": "integer", "minimum": 0},
+            "destination": {"type": "string", "minLength": 1},
+            "reference": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "revision": {"type": "integer", "minimum": 1}
+                },
+                "required": ["name", "revision"]
+            },
+            "aliases": {
+                "type": "array",
+                "items": {
+                    "type": "array",
+                    "prefixItems": [{"type": "string"}, {"type": "string"}],
+                    "minItems": 2,
+                    "maxItems": 2
+                }
+            }
+        },
+        "required": ["schema", "plan_id", "artifact_id", "manifest_version", "note_id", "file_name", "legacy_path", "hash", "size", "destination", "reference", "aliases"]
+    })
+}
+
+fn legacy_promotion_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "schema": {"type": "string", "const": "kb-app.legacy-artifact-promotion-result/v1"},
+            "result_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "artifact_id": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+            "before_version": {"type": "integer", "minimum": 1},
+            "after_version": {"type": "integer", "minimum": 2},
+            "note_id": {"type": "string", "minLength": 1},
+            "file_name": {"type": "string", "minLength": 1},
+            "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "old_path_retained": {"type": "boolean", "const": true},
+            "already_applied": {"type": "boolean"}
+        },
+        "required": ["schema", "result_id", "plan_id", "artifact_id", "before_version", "after_version", "note_id", "file_name", "hash", "old_path_retained", "already_applied"]
+    })
+}
+
+fn legacy_promotion_tool_definitions() -> [Value; 3] {
+    let plan = json!({
+        "name": "plan_legacy_artifact_promotions",
+        "description": "LegacyGit Artifactを1件ずつManagedへ昇格する決定的planを読み取り専用で返す。bytes hash・manifest version・ref revision・aliasを固定し、network I/OもKB更新も行わない。",
+        "annotations": {
+            "title": "旧Artifactの昇格を計画",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}}
+    });
+    let apply = json!({
+        "name": "apply_legacy_artifact_promotion",
+        "description": "planを現在状態と再照合し、LFS objectのhashとorigin upload成功後にだけ1 Artifactのprimary locatorをManagedへ昇格する。旧パスは削除しない。",
+        "annotations": {
+            "title": "旧Artifactを昇格",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true
+        },
+        "inputSchema": legacy_promotion_plan_schema()
+    });
+    let rollback = json!({
+        "name": "rollback_legacy_artifact_promotion",
+        "description": "apply直後の対象固定resultを再照合し、primary locatorをLegacyGitへ補償復元する。旧実体・LFS object・pointerは削除しない。",
+        "annotations": {
+            "title": "旧Artifactの昇格をrollback",
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true
+        },
+        "inputSchema": legacy_promotion_result_schema()
+    });
+    [plan, apply, rollback]
+}
+
 fn tool_definitions(client: &str) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
@@ -897,6 +1002,7 @@ fn tool_definitions(client: &str) -> Value {
     let mut distillation_tools = vec![distillation_audit_tool_definition()];
     distillation_tools.extend(distillation_cadence_tool_definitions());
     distillation_tools.extend(semantic_tool_definitions());
+    distillation_tools.extend(legacy_promotion_tool_definitions());
     tools.splice(insert_at..insert_at, distillation_tools);
     if !capabilities.current_note_argument_optional {
         let get = definitions
@@ -997,8 +1103,10 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
             "allow_new_tags はAI用MCPでは利用できない。既存語彙を使うか、trusted UI / CLIの別承認を案内する"
         );
     }
-    if matches!(name, "plan_distillation" | "distillation_cadence_status")
-        && args.as_object().is_none_or(|args| !args.is_empty())
+    if matches!(
+        name,
+        "plan_distillation" | "distillation_cadence_status" | "plan_legacy_artifact_promotions"
+    ) && args.as_object().is_none_or(|args| !args.is_empty())
     {
         anyhow::bail!("{name} は引数を受け取らない");
     }
@@ -1051,6 +1159,7 @@ fn call_tool_with_search_options(
             | "audit_distillation"
             | "distillation_cadence_status"
             | "run_distillation_cadence"
+            | "plan_legacy_artifact_promotions"
     );
     let conflict_operation = matches!(
         name,
@@ -1086,6 +1195,95 @@ fn call_tool_with_search_options(
         }
     }
     match name {
+        "plan_legacy_artifact_promotions" => {
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let plans = crate::migrate::plan_promotions(vault, &ledger)?;
+            Ok(ToolOutput {
+                text: format!(
+                    "Legacy Artifact promotion plan(read-only): {}件。1件ずつapplyし、各件の直後に再監査する",
+                    plans.len()
+                ),
+                structured: Some(json!({
+                    "schema": "kb-app.legacy-artifact-promotion-plans/v1",
+                    "read_only": true,
+                    "plans": plans,
+                })),
+            })
+        }
+        "apply_legacy_artifact_promotion" => {
+            let plan: crate::migrate::PromotionPlan = serde_json::from_value(args.clone())
+                .context("Legacy Artifact promotion planを解釈できない")?;
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let result = crate::migrate::apply_promotion(
+                vault,
+                &ledger,
+                &plan,
+                &crate::frontmatter::now_iso(),
+            )?;
+            let mut structured = serde_json::to_value(&result)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "legacy_artifact_promoted",
+                    "event": "legacy_artifact_promoted",
+                    "required": true,
+                    "artifact_id": &result.artifact_id,
+                    "plan_id": &result.plan_id,
+                    "result_id": &result.result_id,
+                    "old_path_retained": result.old_path_retained,
+                    "already_applied": result.already_applied,
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "Legacy ArtifactをManagedへ昇格した: {} / version {} / 旧パス保持 {}",
+                        result.artifact_id, result.after_version, result.old_path_retained
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "rollback_legacy_artifact_promotion" => {
+            let applied: crate::migrate::PromotionResult = serde_json::from_value(args.clone())
+                .context("Legacy Artifact promotion resultを解釈できない")?;
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let result = crate::migrate::rollback_promotion(
+                vault,
+                &ledger,
+                &applied,
+                &crate::frontmatter::now_iso(),
+            )?;
+            let mut structured = serde_json::to_value(&result)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "legacy_artifact_promotion_rolled_back",
+                    "event": "legacy_artifact_promotion_rolled_back",
+                    "required": true,
+                    "artifact_id": &result.artifact_id,
+                    "plan_id": &result.plan_id,
+                    "result_id": &result.result_id,
+                    "old_path_retained": result.old_path_retained,
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "Legacy Artifact promotionをrollbackした: {} / version {} / 実体は削除していない",
+                        result.artifact_id, result.after_version
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
         "inspect_markdown_conflict" => {
             let note = args
                 .get("note")
@@ -1953,6 +2151,9 @@ mod tests {
         for params in [
             serde_json::json!({"name": "search", "arguments": {"query": "known"}}),
             serde_json::json!({"name": "get", "arguments": {"note": "notes/secret"}}),
+            serde_json::json!({"name": "plan_legacy_artifact_promotions", "arguments": {}}),
+            serde_json::json!({"name": "apply_legacy_artifact_promotion", "arguments": {"plan_id": "secret"}}),
+            serde_json::json!({"name": "rollback_legacy_artifact_promotion", "arguments": {"result_id": "secret"}}),
             serde_json::json!({"name": "unknown", "arguments": {"anything": true}}),
             serde_json::json!({}),
         ] {
@@ -2543,7 +2744,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 16);
+        assert_eq!(definitions.len(), 19);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -2556,6 +2757,102 @@ mod tests {
             attach["inputSchema"]["required"],
             serde_json::json!(["note", "file_name", "content_base64"])
         );
+    }
+
+    #[test]
+    fn legacy_promotion_tools_expose_exact_plan_apply_and_rollback_contracts() {
+        let tools = tool_definitions("test/client");
+        let definitions = tools.as_array().unwrap();
+        let plan_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "plan_legacy_artifact_promotions")
+            .unwrap();
+        let apply_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "apply_legacy_artifact_promotion")
+            .unwrap();
+        let rollback_definition = definitions
+            .iter()
+            .find(|tool| tool["name"] == "rollback_legacy_artifact_promotion")
+            .unwrap();
+        assert_eq!(plan_definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(plan_definition["annotations"]["idempotentHint"], true);
+        assert_eq!(apply_definition["annotations"]["destructiveHint"], true);
+        assert_eq!(apply_definition["annotations"]["idempotentHint"], true);
+        assert_eq!(apply_definition["annotations"]["openWorldHint"], true);
+        assert_eq!(rollback_definition["annotations"]["destructiveHint"], true);
+        assert_eq!(rollback_definition["annotations"]["idempotentHint"], false);
+        assert_eq!(
+            apply_definition["inputSchema"]["properties"]["schema"]["const"],
+            crate::migrate::PROMOTION_PLAN_SCHEMA
+        );
+        assert_eq!(
+            rollback_definition["inputSchema"]["properties"]["schema"]["const"],
+            crate::migrate::PROMOTION_RESULT_SCHEMA
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        drop(open_db(&vault).unwrap());
+        let note_id = vault
+            .propose_for_test(
+                "Legacy promotion MCP",
+                "本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let attachment_dir = vault.attach_dir(&note_id).unwrap();
+        std::fs::create_dir_all(&attachment_dir).unwrap();
+        std::fs::write(attachment_dir.join("legacy.bin"), b"legacy bytes").unwrap();
+        let workspace_id = crate::workspace::workspace_id(&vault).unwrap();
+        let ledger = crate::ledger::Ledger::open(&vault, &workspace_id).unwrap();
+        crate::migrate::migrate(&vault, &ledger, &workspace_id, "2026-08-21T02:00:00Z").unwrap();
+        let manifest_before = ledger.list().remove(0);
+
+        let first = call_tool(
+            &vault,
+            "test/client",
+            "plan_legacy_artifact_promotions",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let second = call_tool(
+            &vault,
+            "test/client",
+            "plan_legacy_artifact_promotions",
+            &serde_json::json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(first, second, "連続planはbyte-equivalent");
+        assert_eq!(first["read_only"], true);
+        assert_eq!(first["plans"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            first["plans"][0]["schema"],
+            crate::migrate::PROMOTION_PLAN_SCHEMA
+        );
+        assert_eq!(
+            ledger.list().remove(0),
+            manifest_before,
+            "planは台帳を変更しない"
+        );
+
+        let rejected = call_tool(
+            &vault,
+            "test/client",
+            "plan_legacy_artifact_promotions",
+            &serde_json::json!({"limit": 1}),
+            false,
+        )
+        .unwrap_err();
+        assert!(rejected.to_string().contains("引数を受け取らない"));
     }
 
     #[test]
@@ -3067,7 +3364,12 @@ mod tests {
             .unwrap();
         assert_eq!(prepare["annotations"]["destructiveHint"], false);
         assert_eq!(commit["annotations"]["destructiveHint"], true);
-        for name in ["apply_distillation", "rollback_distillation"] {
+        for name in [
+            "apply_distillation",
+            "rollback_distillation",
+            "apply_legacy_artifact_promotion",
+            "rollback_legacy_artifact_promotion",
+        ] {
             let semantic = definitions
                 .iter()
                 .find(|tool| tool["name"] == name)

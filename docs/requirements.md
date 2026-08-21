@@ -165,8 +165,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `note_uid`は作成後に変更できず、同じnamespace+scopeのactive canonical重複、参照切れrelation、
   typed relationで参照中の削除をcoreで拒否する。複数ノートを一括遷移するatomic supersedeと
   path移動は次のsemantic executor段で実装し、それまでは半端なsuperseded状態を作らない
-- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / audit_distillation / propose に加え、**update / prepare_remove /
-  commit_remove
+- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / audit_distillation /
+  plan_legacy_artifact_promotions / apply_legacy_artifact_promotion /
+  rollback_legacy_artifact_promotion / propose に加え、**update / prepare_remove / commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
   新規添付・16MiB上限)**を公開。confirm / draft状態は持たない。
   所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
@@ -195,6 +196,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     追加・変更・削除・移動と、non-keep／risk候補を`depends_on`の双方向閉包へ広げたworksetを返す。
     baseline無しは全件監査。受入gateは全plan、unresolved・risk、pending Markdown export、Storage Contract、
     local Gitの未backup commitを検査する。read-only / idempotentで、remote pull・network I/Oを行わない
+  - Legacy Artifactの物理再配置はMCPだけで完結させる。`plan_legacy_artifact_promotions`は
+    1 Artifact単位のdeterministic read-only planを返し、applyはmanifest・bytes・ref・aliasを
+    再照合してLFS upload成功後だけManagedへ切り替える。rollbackはapply直後の対象固定resultだけを
+    受理する。どの経路も旧パス・pointer・LFS objectを削除せず、VaultやCLIへの迂回を要求しない
 - **FR-C6 プロバイダ別プロファイル**: instructions・ツール説明をクライアント別に出し分けられる
   構造(2026-08-19実装)。`ClientSurface`はClaude Code / Codex CLI / Claude Desktop /
   ChatGPT / 評価harness / unknownをactor先頭segmentから厳密に判定し、同じmodel familyでも
