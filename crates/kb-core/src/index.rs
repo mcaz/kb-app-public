@@ -13,7 +13,7 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "6";
+const SCHEMA_VERSION: &str = "7";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let conn = open_db_recovery(vault)?;
@@ -145,7 +145,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
             r.get(0)
         })
         .ok();
-    if matches!(ver.as_deref(), Some("3" | "4" | "5" | SCHEMA_VERSION)) {
+    if matches!(ver.as_deref(), Some("3" | "4" | "5" | "6" | SCHEMA_VERSION)) {
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
         // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
         for (col, ddl) in [
@@ -228,7 +228,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
                  reserved_at INTEGER NOT NULL,
                  execution_started_at INTEGER,
                  completed_at INTEGER,
-                 external_reference TEXT
+                 external_reference TEXT,
+                 external_target TEXT,
+                 compensation_deadline INTEGER,
+                 compensated_at INTEGER
              );
              CREATE INDEX IF NOT EXISTS action_receipts_status
                  ON action_receipts(status, reserved_at);
@@ -236,8 +239,32 @@ fn init_schema(conn: &Connection) -> Result<()> {
                  capability_id TEXT PRIMARY KEY,
                  issuer TEXT NOT NULL,
                  receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
-             );
-             INSERT OR REPLACE INTO meta(key, value) VALUES('schema', '6');",
+             );",
+        )?;
+        for (column, ddl) in [
+            (
+                "external_target",
+                "ALTER TABLE action_receipts ADD COLUMN external_target TEXT",
+            ),
+            (
+                "compensation_deadline",
+                "ALTER TABLE action_receipts ADD COLUMN compensation_deadline INTEGER",
+            ),
+            (
+                "compensated_at",
+                "ALTER TABLE action_receipts ADD COLUMN compensated_at INTEGER",
+            ),
+        ] {
+            if conn
+                .prepare(&format!("SELECT {column} FROM action_receipts LIMIT 0"))
+                .is_err()
+            {
+                conn.execute_batch(ddl)?;
+            }
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?1)",
+            [SCHEMA_VERSION],
         )?;
         return Ok(());
     }
@@ -306,7 +333,10 @@ fn init_schema(conn: &Connection) -> Result<()> {
             reserved_at INTEGER NOT NULL,
             execution_started_at INTEGER,
             completed_at INTEGER,
-            external_reference TEXT
+            external_reference TEXT,
+            external_target TEXT,
+            compensation_deadline INTEGER,
+            compensated_at INTEGER
         );
         CREATE INDEX action_receipts_status ON action_receipts(status, reserved_at);
         CREATE TABLE action_capability_uses(
@@ -856,7 +886,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "6");
+        assert_eq!(schema, "7");
         assert!(migrated.prepare("SELECT note_uid, namespace, authority_role, authority_status, authority_scope FROM notes LIMIT 0").is_ok());
         assert!(
             migrated
@@ -925,7 +955,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "6");
+        assert_eq!(schema, "7");
         assert!(
             migrated
                 .prepare(
@@ -949,6 +979,58 @@ mod tests {
             })
             .unwrap();
         assert_eq!(preserved, document);
+    }
+
+    #[test]
+    fn existing_v6_receipts_gain_reconcile_fields_without_losing_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute_batch(
+            "DROP TABLE action_capability_uses;
+             DROP TABLE action_receipts;
+             CREATE TABLE action_receipts(
+                 receipt_id TEXT PRIMARY KEY,
+                 workspace TEXT NOT NULL,
+                 request_hash TEXT NOT NULL UNIQUE,
+                 idempotency_key TEXT NOT NULL UNIQUE,
+                 capability_id TEXT,
+                 request_json TEXT NOT NULL,
+                 decision_json TEXT NOT NULL,
+                 status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
+                 reserved_at INTEGER NOT NULL,
+                 execution_started_at INTEGER,
+                 completed_at INTEGER,
+                 external_reference TEXT
+             );
+             INSERT INTO action_receipts(
+                 receipt_id, workspace, request_hash, idempotency_key,
+                 request_json, decision_json, status, reserved_at
+             ) VALUES(
+                 'receipt:v6', 'workspace:test', 'hash:v6', 'key:v6',
+                 '{}', '{}', 'pending', 1
+             );
+             UPDATE meta SET value='6' WHERE key='schema';",
+        )
+        .unwrap();
+        drop(conn);
+
+        let migrated = open_db_recovery(&vault).unwrap();
+        let schema: String = migrated
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, "7");
+        let preserved: (String, Option<String>, Option<i64>, Option<i64>) = migrated
+            .query_row(
+                "SELECT receipt_id, external_target, compensation_deadline, compensated_at
+                 FROM action_receipts WHERE receipt_id='receipt:v6'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(preserved, ("receipt:v6".to_owned(), None, None, None));
     }
 
     /// 2026-08-20、semantic executorのruntime監査表は既存v4 DBにも非破壊で
@@ -985,7 +1067,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "6");
+        assert_eq!(schema, "7");
         assert!(
             migrated
                 .prepare(
