@@ -15,16 +15,19 @@ import { useFiles } from "@/lib/queries";
 
 import { FileCard } from "./FileCard";
 import { FilePreviewDialog } from "./FilePreviewDialog";
-import { filterFiles, type FileKind } from "./fileKind";
+import { filterFiles, formatBytes, summarizeFiles, type FileKind } from "./fileKind";
+
+const FILE_KINDS = ["pdf", "image", "document", "other"] as const;
 
 /** ノートを横断して、現行版のファイルを探して開く一覧。 */
 export function FilesPage() {
-  const { t } = useTranslation("files");
+  const { t, i18n } = useTranslation("files");
   const { data, isPending } = useFiles();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<FileKind | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const files = useMemo(() => filterFiles(data?.files ?? [], query, kind), [data, query, kind]);
+  const summary = useMemo(() => summarizeFiles(data?.files ?? []), [data]);
   const selected = data?.files.find((file) => file.id === selectedId) ?? null;
 
   return (
@@ -33,7 +36,45 @@ export function FilesPage() {
       <div className="mx-auto w-full max-w-[1180px] px-7 py-7 max-[720px]:px-4 max-[720px]:py-5">
         <h1 className="text-[28px] leading-tight font-medium">{t("title")}</h1>
 
-        <div className="mt-6 grid grid-cols-[minmax(0,1fr)_auto] gap-2.5 max-[560px]:grid-cols-1">
+        <section
+          aria-label={t("summary.label")}
+          className="border-line bg-panel-2/60 mt-6 overflow-hidden rounded-xl border"
+        >
+          <dl className="divide-line grid grid-cols-3 divide-x max-[560px]:grid-cols-1 max-[560px]:divide-x-0 max-[560px]:divide-y">
+            <div className="px-4 py-3.5">
+              <dt className="text-muted text-[11px] font-medium tracking-wide uppercase">
+                {t("summary.total")}
+              </dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">
+                {t("count", { count: summary.totalCount })}
+              </dd>
+            </div>
+            <div className="px-4 py-3.5">
+              <dt className="text-muted text-[11px] font-medium tracking-wide uppercase">
+                {t("summary.size")}
+              </dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">
+                {formatBytes(summary.totalBytes, i18n.resolvedLanguage ?? i18n.language)}
+              </dd>
+            </div>
+            <div className="px-4 py-3.5">
+              <dt className="text-muted text-[11px] font-medium tracking-wide uppercase">
+                {t("summary.missing")}
+              </dt>
+              <dd className="mt-1 text-xl font-semibold tabular-nums">{summary.missingCount}</dd>
+            </div>
+          </dl>
+          <dl className="border-line flex flex-wrap gap-x-5 gap-y-1 border-t px-4 py-2.5">
+            {FILE_KINDS.map((value) => (
+              <div key={value} className="flex items-baseline gap-1.5 text-xs">
+                <dt className="text-muted">{t(`filter.${value}`)}</dt>
+                <dd className="font-semibold tabular-nums">{summary.byKind[value]}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <div className="mt-4 grid grid-cols-[minmax(0,1fr)_auto] gap-2.5 max-[560px]:grid-cols-1">
           <label className="relative min-w-0">
             <span className="sr-only">{t("search")}</span>
             <Search className="text-muted pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
@@ -50,7 +91,7 @@ export function FilesPage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {(["all", "pdf", "image", "document", "other"] as const).map((value) => (
+              {(["all", ...FILE_KINDS] as const).map((value) => (
                 <SelectItem key={value} value={value}>
                   {t(`filter.${value}`)}
                 </SelectItem>
