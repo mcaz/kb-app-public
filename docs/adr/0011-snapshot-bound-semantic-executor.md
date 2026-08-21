@@ -27,7 +27,8 @@ canonicalと根拠recordを同時に更新する蒸留では、この境界は�
 - snapshot digestとnote count
 - 各対象のnote ID、input hash、plan operation、変更理由、構造化target
 
-executorは同じSQLite write transaction内で`mechanical-v1` planを再計算し、schema、profile、plan ID、
+executorは同じSQLite write transaction内で`mechanical-v1` plan、または
+[ADR-0013](0013-targeted-distillation-plan.md)の`targeted-v1` planを再計算し、schema、profile、plan ID、
 snapshot digest、note count、各input hash、各operationをすべて照合する。1項目でも違えば書き込み前に
 wave全体を拒否する。plan確認と最初のwriteの間に別transactionが入った場合もSQLite snapshotの昇格失敗で
 commitできず、古いreadをwriteへ持ち上げない。
@@ -82,7 +83,7 @@ planもexecutionも人間承認queueではない。AIは方針内の対象を全
 - `kb-core::distillation_executor`: request正規化、snapshot再照合、operation制限、execution ID、atomic apply／rollback
 - `kb-core::note_store::queue_put`: 既存write validationとdurable outboxを外側transactionへ合流
 - SQLite schema v5: `distillation_runs`
-- MCP: `apply_distillation` / `rollback_distillation`をdestructive・non-idempotent・closed-worldとして公開
+- MCP: `apply_distillation` / `rollback_distillation`をdestructive・non-idempotent・closed-worldとして公開。`planner_profile`は`mechanical-v1` / `targeted-v1`だけを受理
 - CLI: `kb distill apply --input` / `kb distill rollback --execution-id`
 - Schema: `schemas/distillation-execution*.schema.json`
 - 自動テスト: stale plan、二重実行、record不変、途中失敗の全rollback、正常rollback、二重rollback、MCP境界

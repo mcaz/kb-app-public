@@ -1,6 +1,6 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
-//! resolve_markdown_conflict / plan_distillation / audit_distillation /
+//! resolve_markdown_conflict / plan_distillation / plan_targeted_distillation / audit_distillation /
 //! distillation_cadence_status / run_distillation_cadence / apply_distillation /
 //! rollback_distillation / plan_legacy_artifact_promotions /
 //! apply_legacy_artifact_promotion / rollback_legacy_artifact_promotion /
@@ -161,7 +161,8 @@ typed relationはnote_uidを端点にし、根拠・更新・矛盾・後継をp
 run_distillation_cadenceで最後に受入成功したcheckpointから増分監査する。cadence runは端末ローカルの\
 checkpointだけを更新し、ノートの意味変更は行わない。個別baselineを比較するときはaudit_distillationを使う。\
 audit内のplanは同一DB snapshotへ固定したread-only監査記録で、承認待ちqueueではない。候補ノートはgetで\
-全文確認する。baselineなしのplanだけが必要な場合はplan_distillationを使う。planのnormalize /\
+全文確認する。baselineなしの機械planはplan_distillation、全文監査で見つけたkeep対象のsemantic変更は\
+plan_targeted_distillationで対象・operation・理由を先に固定する。planのnormalize /\
 revise / extractを複数ノートへ反映するときはapply_distillationを使い、plan schema・profile・\
 snapshot・input hashをそのまま渡す。executorは全対象を1 transactionで更新し、古いplan・二重実行・\
 record本文改変を拒否する。失敗したwaveは対象が変わる前にrollback_distillationで一括復元する。\
@@ -604,7 +605,7 @@ fn semantic_tool_definitions() -> [Value; 2] {
     });
     let apply = json!({
         "name": "apply_distillation",
-        "description": "plan_distillationの同一snapshotを再照合し、既存AIノートのnormalize / revise / extractを1 transactionで反映する。create・delete・merge・supersede・split・authority変更は受け付けない。",
+        "description": "mechanical-v1またはtargeted-v1 planの同一snapshotを再照合し、既存AIノートのnormalize / revise / extractを1 transactionで反映する。create・delete・merge・supersede・split・authority変更は受け付けない。",
         "annotations": {
             "title": "蒸留waveを実行",
             "readOnlyHint": false,
@@ -618,7 +619,7 @@ fn semantic_tool_definitions() -> [Value; 2] {
             "properties": {
                 "schema": {"type": "string", "const": "kb-app.distillation-execution-request/v1"},
                 "plan_schema": {"type": "string", "const": "kb-app.distillation-plan/v1"},
-                "planner_profile": {"type": "string", "const": "mechanical-v1"},
+                "planner_profile": {"type": "string", "enum": ["mechanical-v1", "targeted-v1"]},
                 "plan_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
                 "snapshot_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
                 "snapshot_note_count": {"type": "integer", "minimum": 0},
@@ -647,6 +648,42 @@ fn semantic_tool_definitions() -> [Value; 2] {
         }
     });
     [apply, rollback]
+}
+
+fn targeted_distillation_tool_definition() -> Value {
+    json!({
+        "name": "plan_targeted_distillation",
+        "description": "全文監査で見つけた既存AIノートのnormalize / revise / extractを、対象・operation・理由・input hash・DB snapshotへ固定するread-only plan。apply_distillationとrollback_distillationで実行・復元する。",
+        "annotations": {
+            "title": "対象指定の蒸留waveを計画",
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+        },
+        "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "changes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "note": {"type": "string", "minLength": 1, "description": "全文確認済みの既存note ID"},
+                            "operation": {"type": "string", "enum": ["normalize", "revise", "extract"]},
+                            "reason": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$", "description": "このoperationをplanへ載せる根拠(一行)"}
+                        },
+                        "required": ["note", "operation", "reason"]
+                    }
+                }
+            },
+            "required": ["changes"]
+        }
+    })
 }
 
 fn distillation_audit_tool_definition() -> Value {
@@ -999,7 +1036,10 @@ fn tool_definitions(client: &str) -> Value {
         .position(|tool| tool["name"] == "plan_distillation")
         .expect("plan_distillation tool definition exists")
         + 1;
-    let mut distillation_tools = vec![distillation_audit_tool_definition()];
+    let mut distillation_tools = vec![
+        targeted_distillation_tool_definition(),
+        distillation_audit_tool_definition(),
+    ];
     distillation_tools.extend(distillation_cadence_tool_definitions());
     distillation_tools.extend(semantic_tool_definitions());
     distillation_tools.extend(legacy_promotion_tool_definitions());
@@ -1156,6 +1196,7 @@ fn call_tool_with_search_options(
     let distillation_closed_world = matches!(
         name,
         "plan_distillation"
+            | "plan_targeted_distillation"
             | "audit_distillation"
             | "distillation_cadence_status"
             | "run_distillation_cadence"
@@ -1358,6 +1399,22 @@ fn call_tool_with_search_options(
                 counts.merge_candidate,
                 counts.supersede_candidate,
                 counts.unresolved,
+            );
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&plan)?),
+            })
+        }
+        "plan_targeted_distillation" => {
+            let arguments: crate::distillation::TargetedDistillationArguments =
+                serde_json::from_value(args.clone())
+                    .context("plan_targeted_distillation引数を解釈できない")?;
+            let plan = crate::distillation::plan_targeted(&conn, arguments)?;
+            let text = format!(
+                "対象指定蒸留plan(read-only): {} changes / plan {} / snapshot {}",
+                plan.entries.len(),
+                plan.plan_id,
+                plan.snapshot.digest,
             );
             Ok(ToolOutput {
                 text,
@@ -2744,7 +2801,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 19);
+        assert_eq!(definitions.len(), 20);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -2909,6 +2966,78 @@ mod tests {
         )
         .unwrap_err();
         assert!(rejected.to_string().contains("引数を受け取らない"));
+    }
+
+    #[test]
+    fn targeted_distillation_plan_exposes_only_requested_snapshot_bound_changes() {
+        use crate::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace};
+
+        let tools = tool_definitions("test/client");
+        let definition = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["name"] == "plan_targeted_distillation")
+            .unwrap();
+        assert_eq!(definition["annotations"]["readOnlyHint"], true);
+        assert_eq!(definition["annotations"]["destructiveHint"], false);
+        assert_eq!(definition["annotations"]["idempotentHint"], true);
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "targeted MCP target",
+                    body: "欠落参照に依存する本文",
+                    description: Some("機械planではkeep"),
+                    tags: &["test".to_string()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Knowledge,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "test/mcp-targeted".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let arguments = serde_json::json!({
+            "changes": [{
+                "note": id,
+                "operation": "revise",
+                "reason": "全文監査で欠落参照への意味依存を検出した"
+            }]
+        });
+        let first = call_tool(
+            &vault,
+            "test/client",
+            "plan_targeted_distillation",
+            &arguments,
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let second = call_tool(
+            &vault,
+            "test/client",
+            "plan_targeted_distillation",
+            &arguments,
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first["planner_profile"], "targeted-v1");
+        assert_eq!(first["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(first["entries"][0]["operation"], "revise");
+        assert!(first.get("degraded").is_none());
     }
 
     #[test]

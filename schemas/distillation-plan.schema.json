@@ -7,7 +7,7 @@
   "required": ["schema", "planner_profile", "plan_id", "read_only", "snapshot", "summary", "entries"],
   "properties": {
     "schema": {"const": "kb-app.distillation-plan/v1"},
-    "planner_profile": {"const": "mechanical-v1"},
+    "planner_profile": {"enum": ["mechanical-v1", "targeted-v1"]},
     "plan_id": {"$ref": "#/$defs/hash"},
     "read_only": {"const": true},
     "snapshot": {"$ref": "#/$defs/snapshot"},
@@ -95,7 +95,7 @@
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": ["legacy_authority_missing", "missing_description", "proposal_matches_active_canonical", "proposal_needs_canonical_decision", "record_without_canonical_lineage", "record_updates_canonical", "record_contradicts_canonical", "canonical_has_pending_update", "canonical_has_contradiction", "historical_canonical_has_active_successor"]
+            "enum": ["legacy_authority_missing", "missing_description", "proposal_matches_active_canonical", "proposal_needs_canonical_decision", "record_without_canonical_lineage", "record_updates_canonical", "record_contradicts_canonical", "canonical_has_pending_update", "canonical_has_contradiction", "historical_canonical_has_active_successor", "targeted_semantic_change"]
           }
         },
         "reason": {"type": "string", "minLength": 1},

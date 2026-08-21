@@ -26,6 +26,17 @@ kb --vault <name> distill plan --format markdown
 [schemas/distillation-plan.schema.json](schemas/distillation-plan.schema.json)、設計判断は
 [ADR-0010](docs/adr/0010-read-only-distillation-planner.md)を参照。
 
+全文監査で機械signalに現れないsemantic修正を見つけた場合は、対象・operation・一行理由を
+`targeted-v1` planへ先に固定する。`keep`をexecutor側で任意に昇格させる経路は持たない。
+
+```sh
+kb --vault <name> distill plan-targeted --input <targeted-plan-request.json>
+```
+
+MCPでは`plan_targeted_distillation`を使う。入力契約は
+[targeted plan request schema](schemas/targeted-distillation-plan-request.schema.json)、設計判断は
+[ADR-0013](docs/adr/0013-targeted-distillation-plan.md)を参照。
+
 semantic waveはplan JSONのschema・profile・snapshot・各entry hashを保持し、対象全文を確認して
 `kb distill apply --input <execution.json>`またはMCP `apply_distillation`へ渡す。結果の`execution_id`は
 後続変更前なら`kb distill rollback --execution-id <id>`で一括復元できる。request／result契約は

@@ -1,0 +1,9 @@
+{
+  "changes": [
+    {
+      "note": "notes/example",
+      "operation": "revise",
+      "reason": "全文監査で欠落参照への意味依存を検出した"
+    }
+  ]
+}

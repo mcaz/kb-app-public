@@ -11,7 +11,10 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::authority::{AuthorityRole, NoteRelation};
-use crate::distillation::{DistillationOperation, DistillationPlan};
+use crate::distillation::{
+    DistillationOperation, DistillationPlan, TargetedDistillationArguments,
+    TargetedDistillationChange, TargetedDistillationOperation,
+};
 use crate::frontmatter::{Generated, Note, now_iso};
 use crate::note_id::NoteId;
 use crate::vault::Vault;
@@ -48,6 +51,14 @@ impl ExecutableOperation {
             Self::Normalize => DistillationOperation::Normalize,
             Self::Revise => DistillationOperation::Revise,
             Self::Extract => DistillationOperation::Extract,
+        }
+    }
+
+    const fn targeted(self) -> TargetedDistillationOperation {
+        match self {
+            Self::Normalize => TargetedDistillationOperation::Normalize,
+            Self::Revise => TargetedDistillationOperation::Revise,
+            Self::Extract => TargetedDistillationOperation::Extract,
         }
     }
 }
@@ -165,7 +176,7 @@ pub fn execute(
     }
     require_clean_outbox(&transaction)?;
 
-    let before_plan = crate::distillation::plan_in_transaction(&transaction)?;
+    let before_plan = plan_for_request(&transaction, &request)?;
     require_plan_match(&request, &before_plan)?;
     let entries = before_plan
         .entries
@@ -294,6 +305,32 @@ pub fn execute(
     })
 }
 
+fn plan_for_request(
+    conn: &Connection,
+    request: &DistillationExecutionRequest,
+) -> Result<DistillationPlan> {
+    match request.planner_profile.as_str() {
+        crate::distillation::PLANNER_PROFILE => crate::distillation::plan_in_transaction(conn),
+        crate::distillation::TARGETED_PLANNER_PROFILE => {
+            crate::distillation::plan_targeted_in_transaction(
+                conn,
+                TargetedDistillationArguments {
+                    changes: request
+                        .changes
+                        .iter()
+                        .map(|change| TargetedDistillationChange {
+                            note: change.note.clone(),
+                            operation: change.operation.targeted(),
+                            reason: change.reason.clone(),
+                        })
+                        .collect(),
+                },
+            )
+        }
+        profile => bail!("未対応の蒸留planner profile: {profile}"),
+    }
+}
+
 pub fn rollback(
     vault: &Vault,
     conn: &Connection,
@@ -353,7 +390,7 @@ pub fn rollback(
         )?;
     }
     crate::index::validate_authority_index(&transaction)?;
-    let restored_plan = crate::distillation::plan_in_transaction(&transaction)?;
+    let restored_plan = plan_for_request(&transaction, &stored.request)?;
     if restored_plan.snapshot.digest != stored.before_snapshot_digest
         || restored_plan.plan_id != stored.plan_id
     {
@@ -1058,6 +1095,83 @@ mod tests {
                 .as_deref(),
             Some("検索結果で用途が分かる要約")
         );
+    }
+
+    #[test]
+    fn targeted_keep_to_revise_is_plan_bound_atomic_and_rollbackable() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let note_id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "targeted canonical",
+                    body: "欠落参照に依存する本文",
+                    description: Some("機械plannerではkeepになる正本"),
+                    tags: &["test".to_string()],
+                    authority: authority(
+                        NoteNamespace::Knowledge,
+                        AuthorityRole::Canonical,
+                        "test/targeted-executor",
+                    ),
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        let mechanical = crate::distillation::plan(&conn).unwrap();
+        assert_eq!(
+            entry(&mechanical, &note_id).operation,
+            DistillationOperation::Keep
+        );
+        let reason = "全文監査で欠落参照への意味依存を検出した";
+        let targeted = crate::distillation::plan_targeted(
+            &conn,
+            TargetedDistillationArguments {
+                changes: vec![TargetedDistillationChange {
+                    note: note_id.clone(),
+                    operation: TargetedDistillationOperation::Revise,
+                    reason: reason.into(),
+                }],
+            },
+        )
+        .unwrap();
+        let planned = entry(&targeted, &note_id);
+        let mut revised = target(&vault.read_note_from_db(&conn, &note_id).unwrap());
+        revised.body = "根拠を本文だけで理解できる自己完結記述".into();
+        let request = DistillationExecutionRequest {
+            schema: EXECUTION_REQUEST_SCHEMA.into(),
+            plan_schema: targeted.schema.into(),
+            planner_profile: targeted.planner_profile.into(),
+            plan_id: targeted.plan_id.clone(),
+            snapshot_digest: targeted.snapshot.digest.clone(),
+            snapshot_note_count: targeted.snapshot.note_count,
+            changes: vec![DistillationChange {
+                note: note_id.clone(),
+                input_hash: planned.input_hash.clone(),
+                operation: ExecutableOperation::Revise,
+                reason: reason.into(),
+                target: revised,
+            }],
+        };
+
+        let report = execute(&vault, &conn, request.clone(), "test/executor").unwrap();
+        assert_eq!(
+            vault.read_note_from_db(&conn, &note_id).unwrap().body,
+            "根拠を本文だけで理解できる自己完結記述\n"
+        );
+        rollback(&vault, &conn, &report.execution_id, "test/executor").unwrap();
+        assert_eq!(
+            vault.read_note_from_db(&conn, &note_id).unwrap().body,
+            "欠落参照に依存する本文\n"
+        );
+
+        let mut tampered = request;
+        tampered.changes[0].reason = "planに無い別理由".into();
+        let error = execute(&vault, &conn, tampered, "test/executor").unwrap_err();
+        assert!(error.to_string().contains("plan_distillationからやり直す"));
     }
 
     #[test]
