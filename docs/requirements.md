@@ -107,6 +107,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     worksetを縮めても、受入gateは現在の全plan、未解決・risk、Markdown outbox、Storage Contract、
     local Git backupへ毎回かける。checkpointとgate PASSは実行権限にせず、executorのsnapshot再照合を
     省略しない。
+13. **完了initiativeは本文蒸留と分離したatomic lifecycle waveで閉じる**。AI管理のactive canonical
+    initiativeだけを対象に、read-only planでnote ID・note UID・input hash・全DB snapshot・理由を固定する。
+    applyはauthority statusのactive→historical以外を不変にし、全件成功または0件とする。rollbackは
+    apply直後の全snapshotと対象documentが不変の場合だけ全件をactiveへ戻す。
 
 ## システム構成(3層)
 
@@ -166,6 +170,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   typed relationで参照中の削除をcoreで拒否する。複数ノートを一括遷移するatomic supersedeと
   path移動は次のsemantic executor段で実装し、それまでは半端なsuperseded状態を作らない
 - **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / plan_targeted_distillation / audit_distillation /
+  plan_initiative_closure / apply_initiative_closure / rollback_initiative_closure /
   plan_legacy_artifact_promotions / apply_legacy_artifact_promotion /
   rollback_legacy_artifact_promotion / propose に加え、**update / prepare_remove / commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
@@ -195,6 +200,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   - `plan_targeted_distillation`は、全文監査で見つけた既存AIノートのnormalize / revise / extractを
     note・operation・一行理由へ固定したtargeted-v1 planとして返す。plan IDは全DB snapshot、対象input hash、
     requested operation・理由を含み、applyは同じ入力からplanを再構成する。`keep`の任意昇格は許可しない
+  - 完了initiativeは`plan_initiative_closure` / `apply_initiative_closure` /
+    `rollback_initiative_closure`の専用waveで扱う。対象はAI管理のactive canonical initiativesだけに限定し、
+    note UID・全DB snapshot・input hash・理由を再照合してauthority statusだけをactiveからhistoricalへ変える。
+    複数対象は1 transactionで処理し、stale plan・改ざん・二重実行・部分成功と後続変更後のrollbackを拒否する
   - `audit_distillation`は自己digestを再照合した任意の前回checkpointと現在planを`note_uid`（legacyはnote ID）で比較し、
     追加・変更・削除・移動と、non-keep／risk候補を`depends_on`の双方向閉包へ広げたworksetを返す。
     baseline無しは全件監査。受入gateは全plan、unresolved・risk、pending Markdown export、Storage Contract、
