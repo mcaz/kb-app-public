@@ -578,7 +578,7 @@ pub fn push_now(vault: &Vault) -> Result<()> {
 }
 
 /// 呼び出し側が `sync_lock` を保持しているときの push 本体。
-fn push_now_locked(vault: &Vault) -> Result<()> {
+pub(crate) fn push_now_locked(vault: &Vault) -> Result<()> {
     push_now_locked_with_gate(vault, ensure_origin_upload_allowed)
 }
 
