@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 11354)
-Total output lines: 480
-
 # kb-app 要件定義 v0(仮名 — 命名は未決)
 
 2026-08-09 起草。ゼロベース。既存実装への依存・言及なしで書く。
@@ -217,7 +214,57 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   内部語も、ディレクトリという言葉も見せない — 原則7)。
   - **実体は Vault Git の外**に置き、Vault Git に入るのは manifest・参照・
     full 転送用の pointer まで。`sensitivity`(非公開/共有)と `sync_policy`
-    (このPCのみ/別PCでも復元)の…1354 tokens truncated…のノートの文脈で
+    (このPCのみ/別PCでも復元)の**二軸**を持ち、client repo 由来は `local_only` 固定で
+    プロンプトから緩和できない。availability は同期せず端末ごとに導出する
+  - **full 転送は同一 origin の Git LFS**(`git-lfs` は公式releaseのchecksum固定sidecarとして
+    同梱。配布CIはambient版なしの実処理とpackage内容を検査し、ユーザーに追加設定を求めない)。
+    manifest の取得と blob の取得を分離し、取得失敗は端末ごとの「この端末にない」として出す
+  - **旧方式 `<id>.files/`(同名サイドカー)は legacy transport**。ノート=1ファイルの
+    OKF 互換を壊さない利点(`index.md` 予約名衝突の A 案・ID が汚れる B 案を棄却した理由)は
+    そのままだが、**新規の保存先にはしない**(2026-08-13 に書き込み経路を削除済み。
+    読み取りだけ残す)。既存分は blob を動かさず manifest を重ね、
+    LFS へ上げて成功を確認してから参照を切り替え、旧ファイルは fallback として残す
+    (MVP では削除しない)。**移行前に全端末から取得できた添付は、移行で取得不能にしない**
+  - 「1ノート=1単位」の対の管理(rename/move/archive 時の同伴)はアプリが保証する。
+    検索対象は manifest まで(blob の中身は既定で対象外、transcript は既定で除外)
+  - サイズは `local_only` に固定上限を置かず、`full` のみ 100MB 警告・
+    2GB 拒否。**旧来の 10MB / 50MB は GitHub 同期の保全が根拠で、実体が Vault Git を
+    出た時点で失効する**。path取り込みはstreaming。MCP content取り込みだけはJSON-RPCの
+    Base64を使うため16MiBで先に拒否する
+  - 出典は OKF `sources[].resource` に `kb-artifact:<artifact_id>` を書いて**版を固定**する
+    (標準語彙の provenance)。本文リンクは参照名で最新版を追い、既存の `/…files/…` は
+    本文を書き換えず alias で解決する
+  - 画像はペーストで自動取り込み+リンク挿入、プレビューで表示。path を扱う
+    picker / drop / paste / CLI は同じコア API に合流させる。MCP は `attach` のcontent経路だけを
+    公開し、path・policy・role・media type・origin・by・at・supersedesを受け取らない。
+    既存ノートの実在を確認してから、server管理の一時file経由で同じstore / ledgerへ合流する
+  - ファイルの中身検索(PDF 抽出等)、dataset の複数ファイル管理、実削除を伴う GC は将来
+- **FR-C7 お手入れ(ライフサイクルの自動運転)— 2026-08-20 増分audit gate段まで実装**:
+  authorityとtyped relationから、正本更新・記録抽出・proposal統合・legacy未解決・description正規化の
+  候補をsnapshot固定で列挙する。executor v1は候補ノートを全文取得したAIから構造化targetを受け、
+  plan schema/profile/ID、snapshot、全input hashとoperationを同じwrite transactionで再照合する。
+  既存authority付きAIノートのnormalize、active canonical revise、record lineage extractを全件成功または0件で
+  実行し、request hashによる二重実行拒否、実行前後document監査、後続変更前のatomic rollbackを備える。
+  read-only auditは前回checkpointからの増分worksetを作る一方、受入判定を現在の全planとStorage Contract、
+  Markdown outbox、local Git backupへかけ、中断後の再開コスト削減と全体drift検出を両立する。
+  record本文・UID・authorityは不変とし、create、semantic merge、atomic supersede、新規extract／split、
+  legacy backfill、別端末自動rollbackは次段。planとexecutionは人間の承認キューを作らない。方針内のAI管理ノートは
+  update・atomic supersede・対象固定型二段階削除で自律メンテナンスし、ユーザーへwaveごとの承認作業を
+  戻さない。legacy `origin: human`は互換読み取り専用の所有境界を維持する。リンク切れ・契約違反など
+  自動修復できない劣化は、該当なしへ潰さず結果とともに報告する
+
+### 管理アプリ(Tauri)
+
+- **FR-A1 オンボーディング**: 初回起動で最初の vault を自動作成し、そのままノートが書ける
+  (段0の実体)。AI アプリ接続(まず Claude Desktop / Claude Code)・ローカル埋め込みの導入は
+  **任意の「繋ぐ」ボタン**としてアプリが代行。スキップしても全機能の段0が成立
+- **FR-A2 ホーム**: vault 一覧+健全性(ノート数・索引状態・劣化警告・未バックアップ)
+- **FR-A3 受信箱**: 廃止。下書き・承認キューを持たず、ノートのauthorityはAIが機械管理する。
+  ユーザーへはメンテナンス結果と劣化を通知し、内部role/statusの操作を要求しない
+- **FR-A4 ノートビュー+エディタ**: 一覧・本文閲覧・メタ・リンク表示に加え、**作成・編集**
+  (Markdown の素朴なエディタ+プレビュー。執筆環境の再発明はしない — 高度な編集は
+  外部エディタに委譲可)。アプリ内検索 UI もここ(AI なしで検索が完結)
+- **FR-A5 起動ランチャ**: 登録済みの AI を、**ノート一覧・ノート画面からそのノートの文脈で
   直接起動**できる。起動形態は AI ごとに事前設定 — デスクトップアプリ / ターミナル
   (既定はアプリ。ターミナルはエンジニア向けで、Claude Code 等を vault ディレクトリで開く)。
   ノート文脈の受け渡しは、コアが「いま見ているノート」状態を持ち MCP 側から参照可能にする。
