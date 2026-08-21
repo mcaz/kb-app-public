@@ -9,6 +9,11 @@
     "categoryCount": "{{name}}、{{count}}件",
     "graph": "グラフ",
     "connect": "繋ぐ",
+    "workspaces": "ワークスペース",
+    "back": "戻る",
+    "forward": "進む",
+    "newTab": "新しいタブ",
+    "closeTab": "{{name}}を閉じる",
     "collapse": "畳む",
     "expand": "開く",
     "settings": "設定"

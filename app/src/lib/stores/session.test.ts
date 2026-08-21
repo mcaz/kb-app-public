@@ -16,6 +16,25 @@ beforeEach(() => {
     graphFocus: null,
     backStack: [],
     forwardStack: [],
+    tabs: [
+      {
+        id: "tab-1",
+        view: "notes",
+        selectedId: null,
+        selectedCategory: null,
+        browsePane: "list",
+        query: "",
+        selectedTags: [],
+        period: "all",
+        sort: "updated",
+        activeFav: null,
+        graphFocus: null,
+        backStack: [],
+        forwardStack: [],
+      },
+    ],
+    activeTabId: "tab-1",
+    nextTabNumber: 2,
   });
 });
 
@@ -58,5 +77,46 @@ describe("navigation history", () => {
 
     expect(useSession.getState().view).toBe("files");
     expect(useSession.getState().forwardStack).toHaveLength(1);
+  });
+});
+
+describe("workspace tabs", () => {
+  it("新しいタブをホームで開き、元のタブの現在地を保つ", () => {
+    useSession.getState().selectCategory("research");
+    useSession.getState().openListedNote("research/search-design");
+
+    useSession.getState().openTab();
+    expect(useSession.getState().view).toBe("home");
+    expect(useSession.getState().tabs).toHaveLength(2);
+
+    useSession.getState().switchTab("tab-1");
+    expect(useSession.getState().view).toBe("notes");
+    expect(useSession.getState().selectedId).toBe("research/search-design");
+    expect(useSession.getState().browsePane).toBe("note");
+  });
+
+  it("タブごとのページ移動と戻る履歴を独立して保つ", () => {
+    useSession.getState().go("files");
+    useSession.getState().openTab();
+    useSession.getState().go("graph");
+    useSession.getState().goBack();
+
+    expect(useSession.getState().view).toBe("home");
+    useSession.getState().switchTab("tab-1");
+    expect(useSession.getState().view).toBe("files");
+    expect(useSession.getState().backStack.at(-1)?.view).toBe("notes");
+  });
+
+  it("選択中タブを閉じると隣のタブへ移り、最後の1枚は閉じない", () => {
+    useSession.getState().go("files");
+    useSession.getState().openTab();
+    useSession.getState().closeTab("tab-2");
+
+    expect(useSession.getState().activeTabId).toBe("tab-1");
+    expect(useSession.getState().view).toBe("files");
+    expect(useSession.getState().tabs).toHaveLength(1);
+
+    useSession.getState().closeTab("tab-1");
+    expect(useSession.getState().tabs).toHaveLength(1);
   });
 });

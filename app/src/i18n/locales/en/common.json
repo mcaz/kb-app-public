@@ -9,6 +9,11 @@
     "categoryCount": "{{name}}, {{count}} notes",
     "graph": "Graph",
     "connect": "Connect",
+    "workspaces": "Workspaces",
+    "back": "Back",
+    "forward": "Forward",
+    "newTab": "New tab",
+    "closeTab": "Close {{name}}",
     "collapse": "Collapse",
     "expand": "Expand",
     "settings": "Settings"

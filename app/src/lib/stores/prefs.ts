@@ -25,7 +25,7 @@ export const usePrefs = create<PrefsStore>()(
   persist(
     (set) => ({
       language: detectLanguage(),
-      theme: "system",
+      theme: "dark",
       sideCollapsed: false,
       relWidth: 220,
       set: (patch) => set(patch),

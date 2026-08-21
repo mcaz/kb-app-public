@@ -19,8 +19,8 @@ export function NavButton({ icon, label, collapsed, active, onClick }: NavButton
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       aria-label={collapsed ? label : undefined}
-      className={`flex cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2.5 py-1.5 text-left text-[13px] whitespace-nowrap ${
-        active ? "bg-sel text-ink" : "text-muted hover:text-ink"
+      className={`flex min-h-9 cursor-pointer items-center gap-2.5 rounded-lg border-none bg-transparent px-2.5 py-1.5 text-left text-[13px] whitespace-nowrap transition-colors ${
+        active ? "bg-sel text-ink" : "text-muted hover:bg-panel-2 hover:text-ink"
       } ${collapsed ? "justify-center px-1" : ""}`}
     >
       <Icon as={icon} />
