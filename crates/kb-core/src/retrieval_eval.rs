@@ -14,13 +14,15 @@ use crate::retrieval::{
     AUTO_SEED_LIMIT, RetrievalBundle, RetrievalOptions, RetrievalSource, context_documents,
 };
 
-pub const EVALUATION_SCHEMA_VERSION: &str = "1.0.0";
+pub const EVALUATION_SCHEMA_VERSION: &str = "2.0.0";
 pub const HOOK_SPILL_THRESHOLD_TOKENS: usize = 12_000;
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GoldenSuite {
     pub schema_version: String,
+    #[serde(default = "default_stability_runs")]
+    pub stability_runs: usize,
     pub cases: Vec<GoldenCase>,
 }
 
@@ -28,12 +30,62 @@ pub struct GoldenSuite {
 #[serde(deny_unknown_fields)]
 pub struct GoldenCase {
     pub id: String,
-    pub query: String,
+    pub queries: SurfaceQueries,
     pub required: Vec<String>,
     #[serde(default)]
     pub relevant: Vec<String>,
     #[serde(default)]
     pub excluded: Vec<String>,
+    #[serde(default)]
+    pub body_requirements: Vec<BodyRequirement>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceQueries {
+    pub codex: String,
+    pub claude_code: String,
+    pub chatgpt: String,
+}
+
+impl SurfaceQueries {
+    fn iter(&self) -> [(EvaluationSurface, &str); 3] {
+        [
+            (EvaluationSurface::Codex, &self.codex),
+            (EvaluationSurface::ClaudeCode, &self.claude_code),
+            (EvaluationSurface::Chatgpt, &self.chatgpt),
+        ]
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationSurface {
+    Codex,
+    ClaudeCode,
+    Chatgpt,
+}
+
+impl EvaluationSurface {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude_code",
+            Self::Chatgpt => "chatgpt",
+        }
+    }
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BodyRequirement {
+    pub id: String,
+    #[serde(default)]
+    pub all_terms: Vec<String>,
+    #[serde(default)]
+    pub any_terms: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -61,7 +113,15 @@ pub struct EvaluationReport {
     pub strategy_configurations: Vec<StrategyConfiguration>,
     pub summaries: Vec<StrategySummary>,
     pub linked_minus_top3: StrategyDelta,
+    pub gate: GateReport,
     pub cases: Vec<CaseReport>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GateReport {
+    pub strategy: EvaluationStrategy,
+    pub passed: bool,
+    pub failed_cases: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -132,11 +192,13 @@ pub struct StrategyDelta {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct CaseReport {
     pub id: String,
+    pub surface: EvaluationSurface,
     pub query: String,
     pub required: Vec<String>,
     pub relevant: Vec<String>,
     pub excluded: Vec<String>,
     pub search_degraded: Vec<Degradation>,
+    pub stable: bool,
     pub strategies: Vec<CaseStrategyReport>,
 }
 
@@ -148,10 +210,19 @@ pub struct CaseStrategyReport {
     pub required_in_candidates: Vec<String>,
     pub required_in_selected: Vec<String>,
     pub excluded_in_selected: Vec<String>,
+    pub body_requirements: Vec<BodyRequirementReport>,
+    pub gate_passed: bool,
     pub candidate_recall: f64,
     pub selected_recall: f64,
     pub selected_precision: f64,
     pub runtime: EvaluationRuntime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct BodyRequirementReport {
+    pub id: String,
+    pub passed: bool,
+    pub matching_document_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -175,6 +246,7 @@ pub struct EvaluationRuntime {
     pub budget_exhausted: bool,
     pub document_cap_reached: bool,
     pub candidate_cap_reached: bool,
+    pub missing_documents: usize,
     pub selected_depth_0: usize,
     pub selected_depth_1: usize,
     pub selected_depth_2: usize,
@@ -188,9 +260,18 @@ pub fn evaluate(conn: &Connection, suite: &GoldenSuite) -> Result<EvaluationRepo
         .context("retrieval評価用snapshotを開始できない")?;
     validate_suite(&transaction, suite)?;
 
-    let mut cases = Vec::with_capacity(suite.cases.len());
+    let mut cases = Vec::new();
     for case in &suite.cases {
-        cases.push(evaluate_case(&transaction, case)?);
+        for (surface, query) in case.queries.iter() {
+            let mut report = evaluate_case(&transaction, case, surface, query)?;
+            for _ in 1..suite.stability_runs {
+                let repeated = evaluate_case(&transaction, case, surface, query)?;
+                if !same_retrieval_result(&report, &repeated) {
+                    report.stable = false;
+                }
+            }
+            cases.push(report);
+        }
     }
 
     let top3 = summarize(&cases, EvaluationStrategy::Top3);
@@ -212,6 +293,19 @@ pub fn evaluate(conn: &Connection, suite: &GoldenSuite) -> Result<EvaluationRepo
 
     // read-only transactionを明示終了し、呼び出し側が同じConnectionを続けて使えるようにする。
     transaction.rollback()?;
+    let failed_cases = cases
+        .iter()
+        .filter(|case| {
+            !case.stable
+                || !case.search_degraded.is_empty()
+                || !case
+                    .strategies
+                    .iter()
+                    .find(|result| result.strategy == EvaluationStrategy::LinkedV1)
+                    .is_some_and(|result| result.gate_passed)
+        })
+        .map(case_key)
+        .collect::<Vec<_>>();
     Ok(EvaluationReport {
         schema_version: EVALUATION_SCHEMA_VERSION,
         core_version: crate::CORE_VERSION,
@@ -226,13 +320,23 @@ pub fn evaluate(conn: &Connection, suite: &GoldenSuite) -> Result<EvaluationRepo
             .collect(),
         summaries: vec![top3, linked],
         linked_minus_top3: delta,
+        gate: GateReport {
+            strategy: EvaluationStrategy::LinkedV1,
+            passed: failed_cases.is_empty(),
+            failed_cases,
+        },
         cases,
     })
 }
 
-fn evaluate_case(conn: &Connection, case: &GoldenCase) -> Result<CaseReport> {
+fn evaluate_case(
+    conn: &Connection,
+    case: &GoldenCase,
+    surface: EvaluationSurface,
+    query: &str,
+) -> Result<CaseReport> {
     let search_started = Instant::now();
-    let outcome = crate::search::search_mode(conn, &case.query, AUTO_SEED_LIMIT, true);
+    let outcome = crate::search::search_mode(conn, query, AUTO_SEED_LIMIT, true);
     let search_elapsed_us = micros(search_started.elapsed());
     let ranked_hit_ids = outcome
         .hits
@@ -252,11 +356,13 @@ fn evaluate_case(conn: &Connection, case: &GoldenCase) -> Result<CaseReport> {
 
     Ok(CaseReport {
         id: case.id.clone(),
-        query: case.query.clone(),
+        surface,
+        query: query.to_string(),
         required: case.required.clone(),
         relevant: case.relevant.clone(),
         excluded: case.excluded.clone(),
         search_degraded: outcome.degraded,
+        stable: true,
         strategies,
     })
 }
@@ -338,6 +444,17 @@ fn score_case(
         .filter(|document| relevant_set.contains(document.id.as_str()))
         .count();
 
+    let body_requirements = case
+        .body_requirements
+        .iter()
+        .map(|requirement| score_body_requirement(requirement, &bundle))
+        .collect::<Vec<_>>();
+    let gate_passed = required_in_selected.len() == case.required.len()
+        && excluded_in_selected.is_empty()
+        && body_requirements
+            .iter()
+            .all(|requirement| requirement.passed)
+        && bundle.stats.missing_documents == 0;
     let retrieval_elapsed_us = bundle.stats.elapsed_us;
     let total_elapsed_us = search_elapsed_us.saturating_add(retrieval_elapsed_us);
     let selected = bundle
@@ -363,6 +480,8 @@ fn score_case(
         required_in_candidates,
         required_in_selected,
         excluded_in_selected,
+        body_requirements,
+        gate_passed,
         runtime: EvaluationRuntime {
             search_elapsed_us,
             retrieval_elapsed_us,
@@ -375,12 +494,79 @@ fn score_case(
             budget_exhausted: bundle.stats.budget_exhausted,
             document_cap_reached: bundle.stats.document_cap_reached,
             candidate_cap_reached: bundle.stats.candidate_cap_reached,
+            missing_documents: bundle.stats.missing_documents,
             selected_depth_0: bundle.stats.selected_depth_0,
             selected_depth_1: bundle.stats.selected_depth_1,
             selected_depth_2: bundle.stats.selected_depth_2,
             selected_incoming: bundle.stats.selected_incoming,
         },
     }
+}
+
+fn score_body_requirement(
+    requirement: &BodyRequirement,
+    bundle: &RetrievalBundle,
+) -> BodyRequirementReport {
+    let all_terms_found = requirement.all_terms.iter().all(|term| {
+        bundle
+            .documents
+            .iter()
+            .any(|document| contains_term(&document.text, term))
+    });
+    let any_terms_found = requirement.any_terms.is_empty()
+        || requirement.any_terms.iter().any(|term| {
+            bundle
+                .documents
+                .iter()
+                .any(|document| contains_term(&document.text, term))
+        });
+    let matching_document_ids = bundle
+        .documents
+        .iter()
+        .filter(|document| {
+            requirement
+                .all_terms
+                .iter()
+                .chain(&requirement.any_terms)
+                .any(|term| contains_term(&document.text, term))
+        })
+        .map(|document| document.id.clone())
+        .collect();
+    BodyRequirementReport {
+        id: requirement.id.clone(),
+        passed: all_terms_found && any_terms_found,
+        matching_document_ids,
+    }
+}
+
+fn contains_term(text: &str, term: &str) -> bool {
+    text.to_lowercase().contains(&term.to_lowercase())
+}
+
+fn same_retrieval_result(left: &CaseReport, right: &CaseReport) -> bool {
+    left.search_degraded == right.search_degraded
+        && left
+            .strategies
+            .iter()
+            .zip(&right.strategies)
+            .all(|(left, right)| {
+                left.strategy == right.strategy
+                    && left.candidate_ids == right.candidate_ids
+                    && left
+                        .selected
+                        .iter()
+                        .map(|document| &document.id)
+                        .eq(right.selected.iter().map(|document| &document.id))
+                    && left.body_requirements == right.body_requirements
+            })
+}
+
+fn case_key(case: &CaseReport) -> String {
+    format!("{}@{}", case.id, case.surface.label())
+}
+
+const fn default_stability_runs() -> usize {
+    1
 }
 
 fn summarize(cases: &[CaseReport], strategy: EvaluationStrategy) -> StrategySummary {
@@ -462,10 +648,11 @@ fn summarize(cases: &[CaseReport], strategy: EvaluationStrategy) -> StrategySumm
 pub fn render_markdown(report: &EvaluationReport) -> String {
     let mut out = String::from("# Retrieval evaluation\n\n");
     out.push_str(&format!(
-        "- schema: `{}`\n- core: `{}`\n- cases: {}\n- shared search: top {}, any_terms={}\n\n",
+        "- schema: `{}`\n- core: `{}`\n- cases: {}\n- gate: **{}** (`linked_v1`)\n- shared search: top {}, any_terms={}\n\n",
         report.schema_version,
         report.core_version,
         report.case_count,
+        if report.gate.passed { "PASS" } else { "FAIL" },
         report.search_configuration.ranked_hit_limit,
         report.search_configuration.any_terms,
     ));
@@ -519,8 +706,10 @@ pub fn render_markdown(report: &EvaluationReport) -> String {
         report.linked_minus_top3.p95_elapsed_us,
     ));
     out.push_str("\n## Cases\n\n");
-    out.push_str("| case | strategy | candidate recall | selected recall | precision | selected IDs | token | total μs |\n");
-    out.push_str("| --- | --- | ---: | ---: | ---: | --- | ---: | ---: |\n");
+    out.push_str("| case | surface | strategy | gate | stable | candidate recall | selected recall | precision | selected IDs | token | missing | total μs |\n");
+    out.push_str(
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |\n",
+    );
     for case in &report.cases {
         for result in &case.strategies {
             let selected = result
@@ -530,14 +719,18 @@ pub fn render_markdown(report: &EvaluationReport) -> String {
                 .collect::<Vec<_>>()
                 .join(", ");
             out.push_str(&format!(
-                "| {} | {} | {:.1}% | {:.1}% | {:.1}% | {} | {} | {} |\n",
+                "| {} | {} | {} | {} | {} | {:.1}% | {:.1}% | {:.1}% | {} | {} | {} | {} |\n",
                 escape_table(&case.id),
+                case.surface.label(),
                 result.strategy.label(),
+                if result.gate_passed { "PASS" } else { "FAIL" },
+                case.stable,
                 result.candidate_recall * 100.0,
                 result.selected_recall * 100.0,
                 result.selected_precision * 100.0,
                 escape_table(&selected),
                 result.runtime.estimated_tokens,
+                result.runtime.missing_documents,
                 result.runtime.total_elapsed_us,
             ));
         }
@@ -556,6 +749,9 @@ fn validate_suite(conn: &Connection, suite: &GoldenSuite) -> Result<()> {
     if suite.cases.is_empty() {
         bail!("Golden Queryは1件以上必要");
     }
+    if !(1..=10).contains(&suite.stability_runs) {
+        bail!("stability_runsは1以上10以下にする");
+    }
 
     let mut case_ids = BTreeSet::new();
     for case in &suite.cases {
@@ -565,8 +761,10 @@ fn validate_suite(conn: &Connection, suite: &GoldenSuite) -> Result<()> {
         if !case_ids.insert(case.id.as_str()) {
             bail!("Golden Queryのidが重複している: {}", case.id);
         }
-        if case.query.trim().is_empty() {
-            bail!("{}: queryは空にできない", case.id);
+        for (surface, query) in case.queries.iter() {
+            if query.trim().is_empty() {
+                bail!("{}: {:?} queryは空にできない", case.id, surface);
+            }
         }
         if case.required.is_empty() {
             bail!("{}: requiredは1件以上必要", case.id);
@@ -580,6 +778,31 @@ fn validate_suite(conn: &Connection, suite: &GoldenSuite) -> Result<()> {
         if let Some(id) = required.union(&relevant).find(|id| excluded.contains(*id)) {
             bail!("{}: {id}を適合と除外へ同時指定できない", case.id);
         }
+        let mut requirement_ids = BTreeSet::new();
+        for requirement in &case.body_requirements {
+            if requirement.id.trim().is_empty() || requirement.id != requirement.id.trim() {
+                bail!(
+                    "{}: body_requirements.idは前後空白なしの非空文字列にする",
+                    case.id
+                );
+            }
+            if !requirement_ids.insert(requirement.id.as_str()) {
+                bail!(
+                    "{}: body_requirements.idが重複している: {}",
+                    case.id,
+                    requirement.id
+                );
+            }
+            if requirement.all_terms.is_empty() && requirement.any_terms.is_empty() {
+                bail!(
+                    "{}: {}にはall_termsまたはany_termsが必要",
+                    case.id,
+                    requirement.id
+                );
+            }
+            checked_terms(&case.id, &requirement.id, &requirement.all_terms)?;
+            checked_terms(&case.id, &requirement.id, &requirement.any_terms)?;
+        }
         for id in required.iter().chain(&relevant).chain(&excluded) {
             let status = conn
                 .query_row("SELECT status FROM notes WHERE id = ?1", [id], |row| {
@@ -592,6 +815,19 @@ fn validate_suite(conn: &Connection, suite: &GoldenSuite) -> Result<()> {
             if status == "deprecated" {
                 bail!("{}: deprecatedノートは評価対象にできない: {id}", case.id);
             }
+        }
+    }
+    Ok(())
+}
+
+fn checked_terms(case_id: &str, requirement_id: &str, terms: &[String]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for term in terms {
+        if term.trim().is_empty() || term != term.trim() {
+            bail!("{case_id}: {requirement_id}のtermは前後空白なしの非空文字列にする");
+        }
+        if !seen.insert(term) {
+            bail!("{case_id}: {requirement_id}のtermが重複している: {term}");
         }
     }
     Ok(())
@@ -705,12 +941,22 @@ mod tests {
     fn suite() -> GoldenSuite {
         GoldenSuite {
             schema_version: EVALUATION_SCHEMA_VERSION.into(),
+            stability_runs: 2,
             cases: vec![GoldenCase {
                 id: "one-hop".into(),
-                query: "retrieval beacon".into(),
+                queries: SurfaceQueries {
+                    codex: "retrieval beacon".into(),
+                    claude_code: "retrieval beacon".into(),
+                    chatgpt: "retrieval beacon".into(),
+                },
                 required: vec!["notes/target".into()],
                 relevant: vec!["notes/seed".into()],
                 excluded: vec!["notes/wrong".into()],
+                body_requirements: vec![BodyRequirement {
+                    id: "linked-policy".into(),
+                    all_terms: vec!["linked".into()],
+                    any_terms: vec!["context".into(), "policy".into()],
+                }],
             }],
         }
     }
@@ -737,6 +983,9 @@ mod tests {
         assert_eq!(linked.selected_recall, 1.0);
         assert_eq!(linked.selected_precision, 1.0);
         assert_eq!(linked.runtime.selected_depth_1, 1);
+        assert!(linked.gate_passed);
+        assert!(report.gate.passed);
+        assert!(report.cases[0].stable);
         assert_eq!(report.linked_minus_top3.macro_selected_recall, 1.0);
     }
 
@@ -753,6 +1002,32 @@ mod tests {
         missing_suite.cases[0].required = vec!["notes/missing".into()];
         missing_suite.cases[0].relevant.clear();
         assert!(evaluate(&conn, &missing_suite).is_err());
+    }
+
+    #[test]
+    fn linked_gate_fails_when_selected_bodies_lack_required_semantics() {
+        let conn = setup();
+        add_note(&conn, "notes/seed", "retrieval beacon");
+        add_note(&conn, "notes/target", "linked context");
+        add_note(&conn, "notes/wrong", "unrelated");
+        conn.execute(
+            "INSERT INTO links(src, dst) VALUES ('notes/seed', 'notes/target')",
+            [],
+        )
+        .unwrap();
+        let mut suite = suite();
+        suite.cases[0].body_requirements[0].all_terms = vec!["missing policy".into()];
+
+        let report = evaluate(&conn, &suite).unwrap();
+        let linked = &report.cases[0].strategies[1];
+        assert_eq!(linked.selected_recall, 1.0);
+        assert!(!linked.body_requirements[0].passed);
+        assert!(!linked.gate_passed);
+        assert!(!report.gate.passed);
+        assert_eq!(
+            report.gate.failed_cases,
+            ["one-hop@codex", "one-hop@claude_code", "one-hop@chatgpt"]
+        );
     }
 
     #[test]
@@ -789,5 +1064,6 @@ mod tests {
         let suite: GoldenSuite = serde_json::from_str(example).unwrap();
         assert_eq!(suite.schema_version, EVALUATION_SCHEMA_VERSION);
         assert_eq!(suite.cases.len(), 1);
+        assert_eq!(suite.cases[0].queries.iter().len(), 3);
     }
 }
