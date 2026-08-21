@@ -10,7 +10,7 @@
 - PoC 実測: [docs/poc-report.md](docs/poc-report.md) — ADR-0001 判定 3/3 PASS
 - Rule Delivery評価: [docs/rule-delivery-evaluation.md](docs/rule-delivery-evaluation.md) — Codex / Claude Code共通の隔離20ケース
 - AI 間の開発引き継ぎ: [docs/development-context.md](docs/development-context.md) — Context Pack v1
-- 状態: **private backup実受入、authority付き正本判定、snapshot固定planner、atomic semantic executor v1まで実装(2026-08-20)** — `apply_distillation`はplanと全inputを再照合し、既存ノートのnormalize / revise / extractを全件成功または0件で実行・rollbackする。create、merge、atomic supersede、splitは次段
+- 状態: **private backup実受入、authority付き正本判定、snapshot固定planner、atomic semantic executor v1、initiative完了waveまで実装(2026-08-21)** — `apply_distillation`はplanと全inputを再照合し、既存ノートのnormalize / revise / extractを全件成功または0件で実行・rollbackする。完了initiativeのactive→historicalは専用のplan/apply/rollbackで扱う。create、merge、atomic supersede、splitは次段
 
 ## 継続蒸留plan
 
@@ -43,6 +43,13 @@ semantic waveはplan JSONのschema・profile・snapshot・各entry hashを保持
 [execution schema](schemas/distillation-execution.schema.json)／
 [result schema](schemas/distillation-execution-result.schema.json)、設計判断は
 [ADR-0011](docs/adr/0011-snapshot-bound-semantic-executor.md)を参照。
+
+完了したAI管理initiativeは、MCPの`plan_initiative_closure`でread-only planを取得し、その出力を
+`apply_initiative_closure`へ渡す。後続変更前なら`rollback_initiative_closure`でwave全体をactiveへ戻せる。
+本文蒸留とは分離し、authority statusの`active → historical`だけを許可する。契約は
+[plan schema](schemas/initiative-closure-plan.schema.json)／
+[execution request schema](schemas/initiative-closure-execution.schema.json)、設計判断は
+[ADR-0014](docs/adr/0014-initiative-closure-wave.md)を参照。
 
 ## GitHub OAuth の build 設定
 
