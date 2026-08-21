@@ -8,7 +8,7 @@ import {
   Waypoints,
   X,
 } from "lucide-react";
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
@@ -37,7 +37,42 @@ export function WorkspaceTabs() {
   const canGoForward = useSession((state) => state.forwardStack.length > 0);
   const collapsed = usePrefs((state) => state.sideCollapsed);
   const forcedCompact = useMediaQuery("(max-width: 719px)");
+  const tabListRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    const tabList = tabListRef.current;
+    if (!tabList) return;
+
+    const scrollHorizontally = (event: WheelEvent) => {
+      const rawDelta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (rawDelta === 0) return;
+
+      const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? tabList.clientWidth : 1;
+      const maxScrollLeft = tabList.scrollWidth - tabList.clientWidth;
+      const nextScrollLeft = Math.max(
+        0,
+        Math.min(maxScrollLeft, tabList.scrollLeft + rawDelta * scale),
+      );
+      if (nextScrollLeft === tabList.scrollLeft) return;
+
+      tabList.scrollLeft = nextScrollLeft;
+      event.preventDefault();
+    };
+
+    tabList.addEventListener("wheel", scrollHorizontally, { passive: false });
+    return () => tabList.removeEventListener("wheel", scrollHorizontally);
+  }, []);
+
+  useEffect(() => {
+    const activeIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+    tabRefs.current[activeIndex]?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [activeTabId, tabs]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -60,7 +95,7 @@ export function WorkspaceTabs() {
         className={`flex h-full flex-none items-center gap-1.5 px-3 ${
           collapsed || forcedCompact
             ? "w-[52px] justify-center"
-            : "w-[201px] max-[1040px]:w-[181px]"
+            : "w-[207px] max-[1040px]:w-[187px]"
         }`}
       >
         <span
@@ -95,7 +130,8 @@ export function WorkspaceTabs() {
       </div>
 
       <div
-        className="workspace-tabs-scroll flex min-w-0 flex-1 items-end gap-1 overflow-x-auto px-1.5"
+        ref={tabListRef}
+        className="workspace-tabs-scroll flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
         role="tablist"
         aria-label={t("nav.workspaces")}
       >
@@ -142,6 +178,8 @@ export function WorkspaceTabs() {
             </div>
           );
         })}
+      </div>
+      <div className="flex h-full flex-none items-end pr-3 pl-1">
         <button
           type="button"
           className="text-muted hover:bg-panel-2 hover:text-ink mb-1 grid size-8 flex-none cursor-pointer place-items-center rounded-lg border-0 bg-transparent"
@@ -151,7 +189,6 @@ export function WorkspaceTabs() {
           <Icon as={Plus} />
         </button>
       </div>
-      <div className="h-full w-3 flex-none" aria-hidden="true" />
     </header>
   );
 }
