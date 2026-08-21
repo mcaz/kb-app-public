@@ -79,6 +79,13 @@ blob の取得失敗は**端末ごとの `missing`** として可視化する �
 元が client repo だったかも推定不能なので `client_repo: false` と断定しない。
 Git 履歴は書き換えない。`git lfs migrate` は使わない。
 
+二段目は `kb migrate-files --promotion-plan` で Artifact ごとの read-only JSON plan を作り、
+`--promotion-apply <plan.json>` で1件ずつ実行する。plan は manifest version、旧パス、
+bytes hash/size、LFS destination、ref revision、alias を固定する。apply は全入力を再照合し、
+LFS object の local hash と origin upload が成功するまで locator を変更しない。成功後も
+旧パス・LFS object・pointer は削除しない。直後の状態に限り、apply result を
+`--promotion-rollback <result.json>` へ渡して LegacyGit locator へ補償復元できる。
+
 受入条件を1つ追加する: **移行前に全端末から取得できた既存添付は、移行によって
 取得可能性を低下させない。**
 
