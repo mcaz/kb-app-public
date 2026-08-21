@@ -44,10 +44,8 @@ export function Sidebar({ categories, onOpenSearch, settingsOpen, onOpenSettings
 
   return (
     <nav
-      className={`border-line bg-panel-2 flex flex-none flex-col gap-0.5 border-r text-[13px] ${
-        visuallyCollapsed
-          ? "w-[52px] px-1.5 py-3.5"
-          : "w-[176px] px-2.5 py-3.5 max-[1040px]:w-[156px]"
+      className={`border-line bg-ground flex flex-none flex-col gap-0.5 border-r text-[13px] ${
+        visuallyCollapsed ? "w-[52px] px-1.5 py-3.5" : "w-[208px] px-3 py-4 max-[1040px]:w-[188px]"
       }`}
     >
       <NavButton

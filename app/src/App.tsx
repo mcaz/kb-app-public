@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/atoms/ui/tooltip";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { GlobalSearchDialog } from "@/components/organisms/GlobalSearchDialog";
 import { Sidebar } from "@/components/organisms/Sidebar";
+import { WorkspaceTabs } from "@/components/organisms/WorkspaceTabs";
 import { AppShell } from "@/components/templates/AppShell";
 import { useNoteFileIntake } from "@/hooks/useNoteFileIntake";
 import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
@@ -174,6 +175,7 @@ export function App() {
             onOpenSettings={openSettings}
           />
         }
+        tabs={<WorkspaceTabs />}
       >
         {view === "home" && <HomePage home={home} />}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
