@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 36276)
-Total output lines: 3561
-
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
 //! 公開ツールは search / get / recent / inspect_markdown_conflict /
 //! resolve_markdown_conflict / plan_distillation / audit_distillation /
@@ -1308,7 +1305,573 @@ fn call_tool_with_search_options(
                 .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
             let strategy = args
                 .get("strategy")
-   …6276 tokens truncated…let mut structured = note_conversation_identity(vault, &id, title)?;
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("strategy が必要"))?;
+            if strategy != "keep_db" {
+                anyhow::bail!("strategy v1はkeep_dbのみ");
+            }
+            let markdown_hash = args
+                .get("markdown_hash")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("markdown_hash が必要"))?;
+            let pending_document_hash =
+                args.get("pending_document_hash")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("pending_document_hash が必要"))?;
+            let report = vault.resolve_markdown_export_keep_db(
+                &conn,
+                note,
+                markdown_hash,
+                pending_document_hash,
+            )?;
+            let mut structured = serde_json::to_value(&report)?;
+            structured["conversation_events"] = json!([{
+                "type": "markdown_conflict_resolved",
+                "event": "markdown_conflict_resolved",
+                "required": true,
+                "note_id": &report.note,
+                "strategy": report.strategy,
+                "pending_exports": report.pending_exports,
+            }]);
+            Ok(ToolOutput {
+                text: format!(
+                    "Markdown出力競合を解消した: {} / strategy keep_db / pending exports {}",
+                    report.note, report.pending_exports
+                ),
+                structured: Some(structured),
+            })
+        }
+        "plan_distillation" => {
+            let plan = crate::distillation::plan(&conn)?;
+            let counts = &plan.summary.operations;
+            let text = format!(
+                "蒸留plan(read-only): {} notes / {} actionable\nplan: {}\nsnapshot: {}\nkeep {} / normalize {} / revise {} / extract {} / split候補 {} / merge候補 {} / supersede候補 {} / unresolved {}\n",
+                plan.snapshot.note_count,
+                plan.summary.actionable,
+                plan.plan_id,
+                plan.snapshot.digest,
+                counts.keep,
+                counts.normalize,
+                counts.revise,
+                counts.extract,
+                counts.split_canonical,
+                counts.merge_candidate,
+                counts.supersede_candidate,
+                counts.unresolved,
+            );
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&plan)?),
+            })
+        }
+        "audit_distillation" => {
+            let arguments: crate::distillation_audit::DistillationAuditArguments =
+                serde_json::from_value(args.clone())
+                    .context("audit_distillation引数を解釈できない")?;
+            let report =
+                crate::distillation_audit::audit(vault, &conn, arguments.baseline.as_ref())?;
+            let text = format!(
+                "蒸留audit(read-only): gate {} / workset {} / added {} / changed {} / moved {} / removed {}\naudit: {}\nplan: {}\n",
+                if report.gate.passed {
+                    "PASS"
+                } else {
+                    "ATTENTION"
+                },
+                report.delta.workset.len(),
+                report.delta.added.len(),
+                report.delta.changed.len(),
+                report.delta.moved.len(),
+                report.delta.removed.len(),
+                report.audit_id,
+                report.plan.plan_id,
+            );
+            Ok(ToolOutput {
+                text,
+                structured: Some(serde_json::to_value(&report)?),
+            })
+        }
+        "distillation_cadence_status" => {
+            let status = crate::distillation_cadence::status(vault, &conn)?;
+            let due = status
+                .due_lanes()
+                .iter()
+                .map(|lane| lane.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(ToolOutput {
+                text: format!(
+                    "蒸留cadence: due {} / current {} / accepted {}",
+                    if due.is_empty() { "none" } else { &due },
+                    status.current_checkpoint_id,
+                    status.accepted_checkpoint_id.as_deref().unwrap_or("none"),
+                ),
+                structured: Some(serde_json::to_value(&status)?),
+            })
+        }
+        "run_distillation_cadence" => {
+            let arguments: crate::distillation_cadence::DistillationCadenceRunArguments =
+                serde_json::from_value(args.clone())
+                    .context("run_distillation_cadence引数を解釈できない")?;
+            let report = crate::distillation_cadence::run(vault, &conn, arguments)?;
+            let selected = report
+                .selected_lanes
+                .iter()
+                .map(|lane| lane.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(ToolOutput {
+                text: format!(
+                    "蒸留cadence: executed {} / accepted {} / lanes {} / review scope {}",
+                    report.executed,
+                    report.accepted,
+                    if selected.is_empty() {
+                        "none"
+                    } else {
+                        &selected
+                    },
+                    report.review_scope.len(),
+                ),
+                structured: Some(serde_json::to_value(&report)?),
+            })
+        }
+        "apply_distillation" => {
+            let request: crate::distillation_executor::DistillationExecutionRequest =
+                serde_json::from_value(args.clone())
+                    .context("apply_distillation引数を解釈できない")?;
+            let report = crate::distillation_executor::execute(vault, &conn, request, client)?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "distillation_applied",
+                    "event": "distillation_applied",
+                    "required": true,
+                    "execution_id": &report.execution_id,
+                    "plan_id": &report.plan_id,
+                    "changed_notes": report.changes.len(),
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "蒸留waveを適用した: {}件 / execution {} / after snapshot {}",
+                        report.changes.len(),
+                        report.execution_id,
+                        report.after_snapshot_digest
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "rollback_distillation" => {
+            let execution_id = args
+                .get("execution_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("execution_id が必要"))?;
+            let report =
+                crate::distillation_executor::rollback(vault, &conn, execution_id, client)?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type": "distillation_rolled_back",
+                    "event": "distillation_rolled_back",
+                    "required": true,
+                    "execution_id": &report.execution_id,
+                    "rollback_id": &report.rollback_id,
+                    "restored_notes": report.restored_notes.len(),
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "蒸留waveをrollbackした: {}件 / execution {} / snapshot {}",
+                        report.restored_notes.len(),
+                        report.execution_id,
+                        report.after_snapshot_digest
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "search" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+            let any = args.get("any").and_then(|v| v.as_bool()).unwrap_or(false);
+            let include_documents = args
+                .get("include_documents")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            // Ranking・リンク展開・本文選択の間で別processの更新を挟まない。
+            // include_documentsはこのread transactionの同じSQLite snapshotから組み立てる。
+            let snapshot = conn.unchecked_transaction()?;
+            let mut out = if any {
+                crate::search::search_mode(&snapshot, query, limit, true)
+            } else {
+                search(&snapshot, query, limit)
+            };
+            out.degraded.extend(degraded);
+            let retrieval = if include_documents {
+                let hit_ids = out
+                    .hits
+                    .iter()
+                    .map(|hit| hit.id.clone())
+                    .collect::<Vec<_>>();
+                let options = crate::retrieval::RetrievalOptions::default();
+                match crate::retrieval::context_documents(&snapshot, &hit_ids, options) {
+                    Ok(bundle) => Some(bundle),
+                    Err(error) => {
+                        // リンク表だけが壊れても検索seed本文は返す。正常な0リンクとは
+                        // ContextRetrieval degradationで区別する。
+                        out.degraded
+                            .push(crate::degradation::Degradation::ContextRetrieval {
+                                detail: error.to_string(),
+                            });
+                        Some(crate::retrieval::context_documents(
+                            &snapshot,
+                            &hit_ids,
+                            crate::retrieval::RetrievalOptions {
+                                max_depth: 0,
+                                include_incoming: false,
+                                ..options
+                            },
+                        )?)
+                    }
+                }
+            } else {
+                None
+            };
+            let mut text = String::new();
+            if out.hits.is_empty() {
+                text.push_str("該当なし。\n");
+            }
+            for h in &out.hits {
+                text.push_str(&format!(
+                    "- {} [{}]: {}\n",
+                    h.id,
+                    h.title.as_deref().unwrap_or("無題"),
+                    h.snippet
+                ));
+            }
+            if !out.related.is_empty() {
+                text.push_str("関連(リンク1ホップ): ");
+                let rel: Vec<String> = out
+                    .related
+                    .iter()
+                    .map(|(id, t)| format!("{id} [{}]", t.as_deref().unwrap_or("無題")))
+                    .collect();
+                text.push_str(&rel.join(", "));
+                text.push('\n');
+            }
+            text.push_str(&degradation_text(&out.degraded));
+            let mut structured = serde_json::to_value(&out)?;
+            if let Some(retrieval) = retrieval {
+                structured["documents"] = serde_json::to_value(&retrieval.documents)?;
+                structured["retrieval_candidates"] = serde_json::to_value(&retrieval.candidates)?;
+                structured["retrieval"] = serde_json::to_value(&retrieval.stats)?;
+            }
+            structured["conversation_events"] = conversation_events(None, &out.degraded);
+            snapshot.commit()?;
+            Ok(ToolOutput {
+                text,
+                structured: Some(structured),
+            })
+        }
+        "get" => {
+            let id = match args.get("note").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                // 引数なし =「このノート」(アプリでいま開いているノート。FR-A5 の文脈受け渡し)
+                None => crate::connect::current_note(vault).ok_or_else(|| {
+                    anyhow::anyhow!("いま開いているノートが無い(note 引数で ID を指定)")
+                })?,
+            };
+            let note = vault.read_note_from_db(&conn, &id)?;
+            let title = note.front.title.as_deref().unwrap_or("無題");
+            let identity = note_conversation_identity(vault, &id, title)?;
+            let attachments = vault.list_attachments(&id)?;
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let stores = crate::store::Stores::open(&workspace_id)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let managed = ledger.list_for_note(&id);
+            let legacy_line = if attachments.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "(旧添付: {} — 本文からは /{id}.files/<名前> で参照)\n",
+                    attachments
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let managed_line = if managed.is_empty() {
+                String::new()
+            } else {
+                let rows = managed
+                    .iter()
+                    .map(|manifest| {
+                        let reference = ledger
+                            .ref_for(&manifest.id)
+                            .map(|r| format!(", ref={}", r.name))
+                            .unwrap_or_default();
+                        let availability = crate::store::availability(vault, &stores, manifest);
+                        format!(
+                            "{} [artifact={}, v={}, {}, {} bytes, role={:?}, {:?}/{:?}, {:?}{}]",
+                            manifest.display_name,
+                            manifest.id,
+                            manifest.version,
+                            manifest.created.media_type,
+                            manifest.created.size,
+                            manifest.role,
+                            manifest.policy.sensitivity,
+                            manifest.policy.sync,
+                            availability,
+                            reference
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("(ファイル: {rows})\n")
+            };
+            // 関連を決めるのは AI(2026-08-11 方針)。判断材料として近いノートを添える
+            let similar = match crate::search::similar_notes(&conn, &id, 5) {
+                Ok(similar) => similar,
+                Err(error) => {
+                    degraded.push(crate::degradation::Degradation::SimilarNotes {
+                        detail: error.to_string(),
+                    });
+                    Vec::new()
+                }
+            };
+            let sim_line = if similar.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "(近いノート — まだリンクされていない: {})\n",
+                    similar
+                        .iter()
+                        .map(|(sid, t, d)| format!(
+                            "{sid}[{}] {d:.2}",
+                            t.as_deref().unwrap_or("無題")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            let artifact_rows = managed
+                .iter()
+                .map(|manifest| {
+                    let reference = ledger.ref_for(&manifest.id).map(|r| r.name.to_string());
+                    json!({
+                        "artifact_id": manifest.id,
+                        "version": manifest.version,
+                        "display_name": manifest.display_name,
+                        "media_type": manifest.created.media_type,
+                        "size": manifest.created.size,
+                        "role": manifest.role,
+                        "policy": manifest.policy,
+                        "ref_name": reference,
+                        "availability": crate::store::availability(vault, &stores, manifest),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let legacy_names = attachments
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>();
+            let note_text = note.to_file_string()?;
+            let note_description = note.front.description.clone();
+            let note_tags = note.front.tags.clone();
+            let note_status = note.front.effective_status().to_string();
+            let note_origin = note.front.origin.clone();
+            let note_uid = note.front.note_uid.clone();
+            let note_authority = note.front.authority.clone();
+            let note_relations = note.front.relations.clone();
+            let note_body = note.body.clone();
+            let link_text = note_markdown_link(&identity);
+            Ok(ToolOutput {
+                text: format!(
+                    "(note: {id})\nリンク: {link_text}\n{legacy_line}{managed_line}{sim_line}{}{}",
+                    degradation_text(&degraded),
+                    note_text
+                ),
+                structured: Some(json!({
+                    "note": &id,
+                    "note_id": identity["note_id"],
+                    "title": identity["title"],
+                    "description": note_description,
+                    "tags": note_tags,
+                    "status": note_status,
+                    "origin": note_origin,
+                    "note_uid": note_uid,
+                    "authority": note_authority,
+                    "relations": note_relations,
+                    "body": note_body,
+                    "conversation_link": identity["conversation_link"],
+                    "artifacts": artifact_rows,
+                    "legacy_attachments": legacy_names,
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(
+                        Some(note_conversation_event(&identity, "note_read")),
+                        &degraded,
+                    ),
+                })),
+            })
+        }
+        "attach" => {
+            let note_id = args
+                .get("note")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("note が必要"))?;
+            let file_name = args
+                .get("file_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("file_name が必要"))?;
+            let content = decode_attachment_content(args)?;
+            let ref_name = args
+                .get("ref_name")
+                .and_then(|v| v.as_str())
+                .map(crate::artifact::RefName::from_str)
+                .transpose()?;
+
+            let workspace_id = crate::workspace::workspace_id(vault)?;
+            let stores = crate::store::Stores::open(&workspace_id)?;
+            let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
+            let taken = crate::intake::take_content(
+                vault,
+                &stores,
+                &ledger,
+                &workspace_id,
+                crate::intake::ContentRequest {
+                    note_id,
+                    display_name: file_name,
+                    content: &content,
+                    ref_name,
+                    client,
+                },
+            )?;
+            let reference = taken
+                .artifact_ref
+                .as_ref()
+                .map(|artifact_ref| artifact_ref.name.as_str());
+            let availability = crate::store::availability(vault, &stores, &taken.manifest);
+            let note = vault.read_note_from_db(&conn, note_id)?;
+            let identity = note_conversation_identity(
+                vault,
+                note_id,
+                note.front.title.as_deref().unwrap_or("無題"),
+            )?;
+            let structured = json!({
+                "note": note_id,
+                "note_id": identity["note_id"],
+                "title": identity["title"],
+                "conversation_link": identity["conversation_link"],
+                "file_name": taken.manifest.display_name,
+                "artifact_id": taken.manifest.id,
+                "version": taken.manifest.version,
+                "media_type": taken.manifest.created.media_type,
+                "size": taken.manifest.created.size,
+                "role": taken.manifest.role,
+                "policy": taken.manifest.policy,
+                "ref_name": reference,
+                "locator": "managed",
+                "availability": availability,
+                "delivery": taken.delivery,
+                "warn_over_bytes": taken.warn_over,
+                "degraded": degraded,
+                "conversation_events": conversation_events(
+                    Some(note_conversation_event(&identity, "artifact_attached")),
+                    &degraded,
+                ),
+            });
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "添付した: {} → {} (artifact {})",
+                        file_name,
+                        note_markdown_link(&identity),
+                        taken.manifest.id
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "recent" => {
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+            let hits = recent(&conn, limit)?;
+            let text = hits
+                .iter()
+                .map(|h| {
+                    format!(
+                        "- {} [{}]: {}",
+                        h.id,
+                        h.title.as_deref().unwrap_or("無題"),
+                        h.snippet
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(ToolOutput {
+                text: with_degradations(text, &degraded),
+                structured: Some(json!({
+                    "hits": hits,
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(None, &degraded),
+                })),
+            })
+        }
+        "propose" => {
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("title が必要"))?;
+            let body = args
+                .get("body")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("body が必要"))?;
+            let description = args.get("description").and_then(|v| v.as_str());
+            let tags: Vec<String> = args
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|t| t.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            // 語彙外タグは**書く前に**弾く(契約1の強制点)。以前は起票後に
+            // 「新しいタグを導入した」と教えるだけだったため語彙が膨らみ続けた
+            // (60ノートに112語・1回きり61%)。2026-08-12 に事前拒否へ引き上げ。
+            let id = vault.propose(
+                &conn,
+                NoteProposal {
+                    title,
+                    body,
+                    description,
+                    tags: &tags,
+                    authority: authority_argument(args, true)?.expect("required above"),
+                    relations: relations_argument(args)?.unwrap_or_default(),
+                    allow_new_tags: false,
+                    client,
+                },
+            )?;
+            let mut structured = note_conversation_identity(vault, &id, title)?;
             let created = vault.read_note_from_db(&conn, &id)?;
             structured["note_uid"] = serde_json::to_value(&created.front.note_uid)?;
             structured["authority"] = serde_json::to_value(&created.front.authority)?;
