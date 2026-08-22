@@ -70,6 +70,10 @@ export const api = {
     IN_TAURI ? unwrap(commands.settingsAiGuardStatus()) : (await demo()).settingsAiGuardStatus(),
   settingsInstallAiGuard: async (): Promise<AiGuardStatus> =>
     IN_TAURI ? unwrap(commands.settingsInstallAiGuard()) : (await demo()).settingsInstallAiGuard(),
+  settingsEnableAiGuardDevelopmentMode: async (): Promise<AiGuardStatus> =>
+    IN_TAURI
+      ? unwrap(commands.settingsEnableAiGuardDevelopmentMode())
+      : (await demo()).settingsEnableAiGuardDevelopmentMode(),
   onboard: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboard()) : (await demo()).onboard(),
   onboardExisting: async (url: string): Promise<SetupState> =>

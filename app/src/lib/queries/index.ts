@@ -29,6 +29,16 @@ export function useInstallAiGuard() {
   });
 }
 
+export function useEnableAiGuardDevelopmentMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsEnableAiGuardDevelopmentMode,
+    onSuccess: (status) => {
+      qc.setQueryData(queryKeys.aiGuard, status);
+    },
+  });
+}
+
 export function useSetAiKbEnabled() {
   const qc = useQueryClient();
   return useMutation({

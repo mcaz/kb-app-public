@@ -275,6 +275,14 @@ let settings: Settings = {
 
 function aiGuard(): AiGuardStatus {
   const phase = params().get("guard");
+  if (phase === "development") {
+    return {
+      ready: false,
+      codex: "development",
+      claude: "enforced",
+      guarded_paths: ["(demo)"],
+    };
+  }
   if (phase === "missing" || phase === "conflict") {
     return {
       ready: false,
@@ -290,6 +298,8 @@ function aiGuard(): AiGuardStatus {
     guarded_paths: ["(demo)"],
   };
 }
+
+let guardOverride: AiGuardStatus | null = null;
 
 export const demoApi = {
   setupState: (): Promise<SetupState> =>
@@ -311,8 +321,25 @@ export const demoApi = {
     settings = { ...settings, gpt_kb_enabled: enabled };
     return delay(settings);
   },
-  settingsAiGuardStatus: (): Promise<AiGuardStatus> => delay(aiGuard()),
-  settingsInstallAiGuard: (): Promise<AiGuardStatus> => delay(aiGuard()),
+  settingsAiGuardStatus: (): Promise<AiGuardStatus> => delay(guardOverride ?? aiGuard()),
+  settingsInstallAiGuard: (): Promise<AiGuardStatus> => {
+    guardOverride = {
+      ready: true,
+      codex: "enforced",
+      claude: "enforced",
+      guarded_paths: ["(demo)"],
+    };
+    return delay(guardOverride);
+  },
+  settingsEnableAiGuardDevelopmentMode: (): Promise<AiGuardStatus> => {
+    guardOverride = {
+      ready: false,
+      codex: "development",
+      claude: "enforced",
+      guarded_paths: ["(demo)"],
+    };
+    return delay(guardOverride);
+  },
   onboard: (): Promise<SetupState> =>
     delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" }),
   homeState: (): Promise<HomeState> =>

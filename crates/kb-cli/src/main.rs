@@ -152,6 +152,23 @@ enum SettingsCommand {
     AiGuardStatus,
     /// macOS の管理者認証を経て OS レベル保護を導入・更新する
     InstallAiGuard,
+    /// Codex の開発高速モードを管理する
+    DevMode {
+        #[command(subcommand)]
+        command: DevModeCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum DevModeCommand {
+    /// Codex を Full Access にし、その間 Codex からの KB 利用を停止する
+    Enable,
+    /// Codex を KB 保護付きの strict mode へ戻す
+    Disable,
+    /// 現在の AI access guard 状態を JSON で返す
+    Status,
+    /// strict mode でなければ失敗するリリース前ゲート
+    ReleaseCheck,
 }
 
 #[derive(Subcommand)]
@@ -970,6 +987,19 @@ fn main() -> Result<()> {
                 let status = kb_core::ai_guard::install().map_err(anyhow::Error::new)?;
                 println!("{}", serde_json::to_string_pretty(&status)?);
             }
+            SettingsCommand::DevMode { command } => {
+                let status = match command {
+                    DevModeCommand::Enable => {
+                        kb_core::ai_guard::enable_development_mode().map_err(anyhow::Error::new)?
+                    }
+                    DevModeCommand::Disable => {
+                        kb_core::ai_guard::install().map_err(anyhow::Error::new)?
+                    }
+                    DevModeCommand::Status => kb_core::ai_guard::status()?,
+                    DevModeCommand::ReleaseCheck => kb_core::ai_guard::ensure_release_ready()?,
+                };
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            }
         },
     }
     Ok(())
@@ -1062,6 +1092,11 @@ mod tests {
             "settings".to_string(),
             "settings ai-enabled".to_string(),
             "settings ai-guard-status".to_string(),
+            "settings dev-mode".to_string(),
+            "settings dev-mode disable".to_string(),
+            "settings dev-mode enable".to_string(),
+            "settings dev-mode release-check".to_string(),
+            "settings dev-mode status".to_string(),
             "settings install-ai-guard".to_string(),
             "storage".to_string(),
             "storage export".to_string(),

@@ -325,7 +325,7 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `kb_disabled`（`authoritative=true` / `retryable=false` / 空data）で拒否する。会話へすでに渡った文脈は
   取り除けないため、比較時はAIアプリを再起動して新しい会話を使う。全体switchに加え、
   ClaudeとGPT／Codexを個別にON／OFFでき、全体OFFは個別設定より優先する。Claude Codeの
-  前出し・Stopフックも同じ設定に従う。生ファイルはON/OFFにかかわらず、Codexの管理
+  前出し・Stopフックも同じ設定に従う。strict modeでは生ファイルはON/OFFにかかわらず、Codexの管理
   permission profileとClaude Codeの管理sandboxを通じてOSレベルで読み書きを拒否する。
   Claude Desktop / ChatGPT通常チャット面はkb-app MCPに生path入力を公開しないbroker境界で分離し、
   coding agent用OS policyやmanaged hookの存在を通常チャットの保証として流用しない。
@@ -337,7 +337,12 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `initialize → search(any, include_documents)`を実行し、同じDB snapshotで検索seed・リンク候補・
   予算内本文を選んで文脈へ注入する。OFFはsearchの
   `kb_disabled`終端結果を検知して注入せず、失敗・劣化は該当なしと区別してクライアントへ返す。旧Claude Python hookの
-  CLI直検索と、MCP未使用をtranscriptで推測するStop hookは廃止する。
+  CLI直検索と、MCP未使用をtranscriptで推測するStop hookは廃止する。ローカル開発では、完全保護が正常な
+  状態から管理者認証を経た場合に限りCodexだけを`:danger-full-access`かつ`approval_policy=never`へ
+  切り替える開発高速モードを提供する。
+  この間はCodexのkb-app MCPと自動retrievalをfail-closedにし、Claude Codeのstrict guardは維持する。
+  設定UIとCLIは状態を明示し、検証・テスト・リリース前はstrict modeへの復旧を要求する。CLIの
+  `kb settings dev-mode release-check`はstrict modeでなければ失敗する。
 
 ### 将来(ステージ外)
 
