@@ -35,7 +35,11 @@ pub fn desktop_status_at(config: &Path) -> DesktopStatus {
         return DesktopStatus::NotFound;
     };
     match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(v) if v.get("mcpServers").and_then(|s| s.get("kb-app")).is_some() => {
+        Ok(v)
+            if ["kb-app-read", "kb-app-write", "kb-app-maintenance"]
+                .iter()
+                .all(|name| v.get("mcpServers").and_then(|s| s.get(name)).is_some()) =>
+        {
             DesktopStatus::Connected
         }
         Ok(_) => DesktopStatus::NotConnected,
@@ -43,7 +47,8 @@ pub fn desktop_status_at(config: &Path) -> DesktopStatus {
     }
 }
 
-/// kb-app サーバーを Desktop 設定へ追記。既存キーは触らない。バックアップを残す。
+/// 用途別kb-appサーバーを Desktop 設定へ追記。kb-app以外の既存キーは触らず、
+/// 旧単一`kb-app`登録は用途別登録へ移行する。バックアップを残す。
 /// `exe` は MCP を起動する実行ファイル(アプリ自身+`--mcp`)。
 pub fn connect_desktop_at(config: &Path, exe: &Path, vault_name: &str) -> Result<()> {
     let text = fs::read_to_string(config)
@@ -59,13 +64,23 @@ pub fn connect_desktop_at(config: &Path, exe: &Path, vault_name: &str) -> Result
         .context("mcpServers がオブジェクトでない")?;
     let backup = config.with_file_name(format!("claude_desktop_config.json.bak-kbapp-{}", today()));
     fs::copy(config, &backup).context("バックアップ作成")?;
-    servers.insert(
-        "kb-app".to_string(),
-        serde_json::json!({
-            "command": exe.to_string_lossy(),
-            "args": ["--mcp", "--vault", vault_name, "--client", "claude-desktop/claude"],
-        }),
-    );
+    servers.remove("kb-app");
+    for (name, surface) in [
+        ("kb-app-read", "read"),
+        ("kb-app-write", "write"),
+        ("kb-app-maintenance", "maintenance"),
+    ] {
+        servers.insert(
+            name.to_string(),
+            serde_json::json!({
+                "command": exe.to_string_lossy(),
+                "args": [
+                    "--mcp", "--mcp-surface", surface, "--vault", vault_name,
+                    "--client", "claude-desktop/claude"
+                ],
+            }),
+        );
+    }
     fs::write(config, serde_json::to_string_pretty(&v)?).context("設定の書き込み")?;
     Ok(())
 }
@@ -1096,9 +1111,28 @@ mod tests {
             v["mcpServers"]["vault"].is_object(),
             "既存サーバーが保持される"
         );
-        assert_eq!(v["mcpServers"]["kb-app"]["args"][2], "try");
+        for (name, surface) in [
+            ("kb-app-read", "read"),
+            ("kb-app-write", "write"),
+            ("kb-app-maintenance", "maintenance"),
+        ] {
+            assert_eq!(v["mcpServers"][name]["args"][2], surface);
+            assert_eq!(v["mcpServers"][name]["args"][4], "try");
+        }
+        assert!(v["mcpServers"].get("kb-app").is_none());
         // バックアップが残る
         assert!(fs::read_dir(dir.path()).unwrap().count() >= 2);
+    }
+
+    #[test]
+    fn legacy_single_server_is_not_reported_as_split_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("claude_desktop_config.json");
+        fs::write(&cfg, r#"{"mcpServers": {"kb-app": {"command": "old"}}}"#).unwrap();
+
+        assert_eq!(desktop_status_at(&cfg), DesktopStatus::NotConnected);
+        connect_desktop_at(&cfg, Path::new("/usr/bin/true"), "try").unwrap();
+        assert_eq!(desktop_status_at(&cfg), DesktopStatus::Connected);
     }
 
     #[test]

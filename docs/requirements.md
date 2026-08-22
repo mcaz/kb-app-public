@@ -177,6 +177,11 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   新規添付・16MiB上限)**を公開。confirm / draft状態は持たない。
   所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
   所有の領分・会話で生まれたファイルはpathでなくattachへ」の規律を配る
+  - 通常接続は`kb-app-read` / `kb-app-write` / `kb-app-maintenance`の3登録へ分ける。
+    `read`はsearch / get / recentだけを常時発見しやすい小面として保ち、writeとmaintenanceは
+    host側のtool search・遅延ロード対象にできる形にする。各processは一覧外toolの直接callも
+    Vault操作前に拒否し、自動retrievalの子processは`read`固定にする。単一`all`面はCLIと評価fixtureの
+    後方互換に限定する。hostがどの面を遅延ロードするかはhost設定でありserverからは強制しない
   - 自動retrievalは`search(include_documents)`の1 callで、上位5件をseedに出リンク最大2ホップを
     展開し、最大50候補から推定10,000 token以内・最大10本文を同じSQLite snapshotで返す。
     被リンクは出リンクより低く扱い、重複・循環・deprecatedを除外する。選外候補はID・タイトル・

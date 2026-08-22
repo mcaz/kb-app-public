@@ -1,4 +1,5 @@
-//! `kb-app --mcp --vault <name> [--client <actor>]` で GUI を開かず MCP サーバーとして動く。
+//! `kb-app --mcp --vault <name> [--client <actor>] [--mcp-surface <surface>]` で
+//! GUI を開かず MCP サーバーとして動く。
 //!
 //! Claude Desktop の設定がこの実行ファイル1つを指せるようにするための経路
 //! (配布形の前提 — 非エンジニアに別バイナリの導入を求めない)。
@@ -18,10 +19,22 @@ pub fn run_if_requested() -> bool {
     };
     let client = flag("--client").unwrap_or_else(|| "mcp-client/unknown".into());
     let remote_sync = !args.iter().any(|arg| arg == "--no-remote-sync");
+    let tool_surface = flag("--mcp-surface")
+        .as_deref()
+        .map(kb_core::mcp::ToolSurface::parse)
+        .transpose()
+        .unwrap_or_else(|error| {
+            eprintln!("kb-app --mcp: {error}");
+            std::process::exit(2);
+        })
+        .unwrap_or_default();
 
     let result = kb_core::mcp::serve_with_options(
         &client,
-        kb_core::mcp::ServeOptions { remote_sync },
+        kb_core::mcp::ServeOptions {
+            remote_sync,
+            tool_surface,
+        },
         || {
             let reg = kb_core::registry::Registry::load()?;
             let path = reg.resolve(flag("--vault").as_deref())?;
