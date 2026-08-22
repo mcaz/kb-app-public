@@ -130,6 +130,9 @@ enum Command {
         /// generated.by に刻むクライアント actor(例: claude-desktop/claude-fable-5)
         #[arg(long, default_value = "mcp-client/unknown")]
         client: String,
+        /// 公開する用途別ツール面(all / read / write / maintenance)
+        #[arg(long, default_value = "all")]
+        surface: String,
     },
     /// AI 連携向けの端末設定を読み取る
     Settings {
@@ -941,8 +944,15 @@ fn main() -> Result<()> {
                 write_eval_output(output.as_ref(), &rendered, "Rule Delivery report")?;
             }
         },
-        Command::Mcp { client } => {
-            kb_core::mcp::serve(&client, || open_vault(cli.vault.as_deref()))?;
+        Command::Mcp { client, surface } => {
+            kb_core::mcp::serve_with_options(
+                &client,
+                kb_core::mcp::ServeOptions {
+                    remote_sync: true,
+                    tool_surface: kb_core::mcp::ToolSurface::parse(&surface)?,
+                },
+                || open_vault(cli.vault.as_deref()),
+            )?;
         }
         Command::Settings { command } => match command {
             SettingsCommand::AiEnabled { client } => {

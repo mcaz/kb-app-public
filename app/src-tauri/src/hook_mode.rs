@@ -19,8 +19,15 @@ const MAX_DOCUMENTS: usize = 10;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const KB_DISABLED_CODE: &str = "kb_disabled";
 
-fn child_mcp_args(client: &str) -> [&str; 4] {
-    ["--mcp", "--no-remote-sync", "--client", client]
+fn child_mcp_args(client: &str) -> [&str; 6] {
+    [
+        "--mcp",
+        "--no-remote-sync",
+        "--mcp-surface",
+        "read",
+        "--client",
+        client,
+    ]
 }
 
 /// 自動retrievalモードなら実行して true を返す。通常起動なら false。
@@ -457,6 +464,8 @@ mod tests {
             [
                 "--mcp",
                 "--no-remote-sync",
+                "--mcp-surface",
+                "read",
                 "--client",
                 "codex-cli/gpt-5-codex"
             ]

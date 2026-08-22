@@ -111,12 +111,78 @@ pub struct ServeOptions {
     /// tool callの前にGitHub pullを試す。短命な自動retrieval processではfalseにし、
     /// Keychain認証やremote I/Oを発話回数へ結び付けない。
     pub remote_sync: bool,
+    /// 公開するツール群。ホストが遅延ロードを誤判定しても、read面を小さく常時公開し、
+    /// 書込・保守ツールは別MCP登録へ分離できるようにする。
+    pub tool_surface: ToolSurface,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ToolSurface {
+    /// CLI・評価fixture向けの後方互換面。
+    #[default]
+    All,
+    Read,
+    Write,
+    Maintenance,
+}
+
+impl ToolSurface {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "all" => Ok(Self::All),
+            "read" => Ok(Self::Read),
+            "write" => Ok(Self::Write),
+            "maintenance" => Ok(Self::Maintenance),
+            _ => anyhow::bail!(
+                "unknown MCP tool surface: {value} (expected all, read, write, or maintenance)"
+            ),
+        }
+    }
+
+    fn server_name(self) -> &'static str {
+        match self {
+            Self::All => "kb-app",
+            Self::Read => "kb-app-read",
+            Self::Write => "kb-app-write",
+            Self::Maintenance => "kb-app-maintenance",
+        }
+    }
+
+    fn allows(self, tool: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Read => matches!(tool, "search" | "get" | "recent"),
+            Self::Write => matches!(
+                tool,
+                "propose" | "update" | "attach" | "prepare_remove" | "commit_remove"
+            ),
+            Self::Maintenance => matches!(
+                tool,
+                "inspect_markdown_conflict"
+                    | "resolve_markdown_conflict"
+                    | "plan_distillation"
+                    | "plan_targeted_distillation"
+                    | "audit_distillation"
+                    | "distillation_cadence_status"
+                    | "run_distillation_cadence"
+                    | "apply_distillation"
+                    | "rollback_distillation"
+                    | "plan_initiative_closure"
+                    | "apply_initiative_closure"
+                    | "rollback_initiative_closure"
+                    | "plan_legacy_artifact_promotions"
+                    | "apply_legacy_artifact_promotion"
+                    | "rollback_legacy_artifact_promotion"
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ToolCallOptions {
     remote_sync: bool,
     update_embeddings: bool,
+    tool_surface: ToolSurface,
 }
 
 #[derive(Clone, Debug)]
@@ -129,7 +195,10 @@ pub struct EvaluationServeOptions {
 
 impl Default for ServeOptions {
     fn default() -> Self {
-        Self { remote_sync: true }
+        Self {
+            remote_sync: true,
+            tool_surface: ToolSurface::All,
+        }
     }
 }
 
@@ -220,7 +289,10 @@ pub fn serve_evaluation(
 ) -> Result<()> {
     serve_loop(
         client_hint,
-        ServeOptions { remote_sync: false },
+        ServeOptions {
+            remote_sync: false,
+            tool_surface: ToolSurface::All,
+        },
         Some(evaluation),
         open_vault,
     )
@@ -283,7 +355,8 @@ fn serve_loop(
         };
         // initialize / list / OFF は Vault の場所すら開かない。ON の tool call が来た
         // 最初の1回だけ開き、以後は同じ process 内で再利用する。
-        let needs_vault = method_needs_vault(enabled, method);
+        let needs_vault =
+            method_needs_vault(enabled, method, options.tool_surface, msg.get("params"));
         if needs_vault && vault.is_none() {
             vault = Some(open_vault()?);
         }
@@ -294,6 +367,7 @@ fn serve_loop(
             ToolCallOptions {
                 remote_sync: options.remote_sync,
                 update_embeddings: evaluation.is_none(),
+                tool_surface: options.tool_surface,
             },
             &mut removal_plans,
             method,
@@ -380,8 +454,18 @@ fn apply_evaluation_transform(
     }
 }
 
-fn method_needs_vault(enabled: bool, method: &str) -> bool {
-    enabled && method == "tools/call"
+fn method_needs_vault(
+    enabled: bool,
+    method: &str,
+    tool_surface: ToolSurface,
+    params: Option<&Value>,
+) -> bool {
+    enabled
+        && method == "tools/call"
+        && params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str)
+            .is_some_and(|name| tool_surface.allows(name))
 }
 
 #[cfg(test)]
@@ -400,6 +484,32 @@ fn handle(
         ToolCallOptions {
             remote_sync,
             update_embeddings: true,
+            tool_surface: ToolSurface::All,
+        },
+        &mut RemovalPlans::default(),
+        method,
+        params,
+    )
+}
+
+#[cfg(test)]
+fn handle_on_surface(
+    vault: Option<&Vault>,
+    client: &str,
+    enabled: bool,
+    remote_sync: bool,
+    tool_surface: ToolSurface,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<Option<Value>> {
+    handle_with_search_options(
+        vault,
+        client,
+        enabled,
+        ToolCallOptions {
+            remote_sync,
+            update_embeddings: true,
+            tool_surface,
         },
         &mut RemovalPlans::default(),
         method,
@@ -438,7 +548,7 @@ fn handle_with_search_options(
                         "experimental": {"kbApp": capabilities},
                     })
                 },
-                "serverInfo": {"name": "kb-app", "version": env!("CARGO_PKG_VERSION")},
+                "serverInfo": {"name": tool_options.tool_surface.server_name(), "version": env!("CARGO_PKG_VERSION")},
             });
             initialized["instructions"] = json!(if enabled {
                 instructions_for(client)
@@ -448,7 +558,9 @@ fn handle_with_search_options(
             Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
-        "tools/list" => Ok(Some(json!({"tools": tool_definitions(client)}))),
+        "tools/list" => Ok(Some(
+            json!({"tools": tool_definitions_for_surface(client, tool_options.tool_surface)}),
+        )),
         // MCP prompts — 定型操作の入口(常駐コンテキストを増やさず、正しい挙動を
         // ワンタップで起動させる。Desktop のプロンプトピッカーに現れる)
         "prompts/list" => Ok(Some(if enabled {
@@ -478,6 +590,22 @@ fn handle_with_search_options(
                 .and_then(|p| p.get("name"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            if !tool_options.tool_surface.allows(name) {
+                return Ok(Some(json!({
+                    "content": [{"type": "text", "text": format!(
+                        "エラー: tool '{name}' is not available on the {} MCP surface",
+                        tool_options.tool_surface.server_name()
+                    )}],
+                    "structuredContent": {
+                        "code": "tool_surface_mismatch",
+                        "authoritative": true,
+                        "retryable": false,
+                        "surface": tool_options.tool_surface.server_name(),
+                        "tool": name,
+                    },
+                    "isError": true,
+                })));
+            }
             let args = params
                 .and_then(|p| p.get("arguments"))
                 .cloned()
@@ -968,7 +1096,12 @@ fn legacy_promotion_tool_definitions() -> [Value; 3] {
     [plan, apply, rollback]
 }
 
+#[cfg(test)]
 fn tool_definitions(client: &str) -> Value {
+    tool_definitions_for_surface(client, ToolSurface::All)
+}
+
+fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
         {
@@ -1148,6 +1281,14 @@ fn tool_definitions(client: &str) -> Value {
         get["inputSchema"]["properties"]["note"]["description"] = json!("ノート ID(必須)");
         get["inputSchema"]["required"] = json!(["note"]);
     }
+    definitions
+        .as_array_mut()
+        .expect("tool definitions are array")
+        .retain(|definition| {
+            definition["name"]
+                .as_str()
+                .is_some_and(|name| tool_surface.allows(name))
+        });
     definitions
 }
 
@@ -2413,11 +2554,27 @@ mod tests {
 
     #[test]
     fn disabled_control_plane_never_opens_the_vault() {
+        let search = serde_json::json!({"name": "search"});
         for method in ["initialize", "tools/list", "prompts/list", "tools/call"] {
-            assert!(!method_needs_vault(false, method));
+            assert!(!method_needs_vault(
+                false,
+                method,
+                ToolSurface::All,
+                Some(&search)
+            ));
         }
-        assert!(!method_needs_vault(true, "initialize"));
-        assert!(method_needs_vault(true, "tools/call"));
+        assert!(!method_needs_vault(
+            true,
+            "initialize",
+            ToolSurface::All,
+            Some(&search)
+        ));
+        assert!(method_needs_vault(
+            true,
+            "tools/call",
+            ToolSurface::All,
+            Some(&search)
+        ));
     }
 
     #[test]
@@ -2539,6 +2696,121 @@ mod tests {
         assert!(!called.get());
         assert!(degraded.is_empty());
         assert!(ServeOptions::default().remote_sync);
+        assert_eq!(ServeOptions::default().tool_surface, ToolSurface::All);
+    }
+
+    #[test]
+    fn split_surfaces_publish_only_their_tools() {
+        let cases = [
+            (ToolSurface::Read, vec!["search", "get", "recent"]),
+            (
+                ToolSurface::Write,
+                vec![
+                    "attach",
+                    "propose",
+                    "update",
+                    "prepare_remove",
+                    "commit_remove",
+                ],
+            ),
+            (
+                ToolSurface::Maintenance,
+                vec![
+                    "inspect_markdown_conflict",
+                    "resolve_markdown_conflict",
+                    "plan_distillation",
+                    "plan_targeted_distillation",
+                    "audit_distillation",
+                    "distillation_cadence_status",
+                    "run_distillation_cadence",
+                    "apply_distillation",
+                    "rollback_distillation",
+                    "plan_initiative_closure",
+                    "apply_initiative_closure",
+                    "rollback_initiative_closure",
+                    "plan_legacy_artifact_promotions",
+                    "apply_legacy_artifact_promotion",
+                    "rollback_legacy_artifact_promotion",
+                ],
+            ),
+        ];
+
+        for (surface, expected) in cases {
+            let listed = handle_on_surface(
+                None,
+                "test/client",
+                true,
+                false,
+                surface,
+                "tools/list",
+                None,
+            )
+            .unwrap()
+            .unwrap();
+            let names = listed["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(names, expected, "unexpected tools on {surface:?}");
+        }
+    }
+
+    #[test]
+    fn split_surface_rejects_hidden_tool_before_opening_vault() {
+        let response = handle_on_surface(
+            None,
+            "test/client",
+            true,
+            false,
+            ToolSurface::Read,
+            "tools/call",
+            Some(&serde_json::json!({
+                "name": "propose",
+                "arguments": {"title": "must not run"}
+            })),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response["isError"], true);
+        assert_eq!(
+            response["structuredContent"]["code"],
+            "tool_surface_mismatch"
+        );
+        assert_eq!(response["structuredContent"]["authoritative"], true);
+        assert_eq!(response["structuredContent"]["retryable"], false);
+        assert_eq!(response["structuredContent"]["surface"], "kb-app-read");
+        assert!(!method_needs_vault(
+            true,
+            "tools/call",
+            ToolSurface::Read,
+            Some(&serde_json::json!({"name": "propose"})),
+        ));
+        assert!(method_needs_vault(
+            true,
+            "tools/call",
+            ToolSurface::Read,
+            Some(&serde_json::json!({"name": "search"})),
+        ));
+    }
+
+    #[test]
+    fn split_surface_identifies_itself_during_initialize() {
+        let initialized = handle_on_surface(
+            None,
+            "test/client",
+            true,
+            false,
+            ToolSurface::Write,
+            "initialize",
+            Some(&serde_json::json!({"protocolVersion": "2025-06-18"})),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(initialized["serverInfo"]["name"], "kb-app-write");
     }
 
     #[test]
