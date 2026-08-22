@@ -19,6 +19,8 @@ use crate::client_surface::{ClientSurface, RawVaultBoundary};
 use crate::error::{CoreError, Result};
 
 const CODEX_MARKER: &str = "# Managed by kb-app: AI raw-vault access guard";
+const CODEX_DEVELOPMENT_MARKER: &str =
+    "# kb-app development mode: Codex full access; KB broker disabled";
 const CLAUDE_MARKER: &str = "Read(//.kb-app-ai-raw-vault-guard-v1)";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -26,6 +28,7 @@ const CLAUDE_MARKER: &str = "Read(//.kb-app-ai-raw-vault-guard-v1)";
 #[serde(rename_all = "snake_case")]
 pub enum GuardTargetState {
     Enforced,
+    Development,
     Missing,
     Outdated,
     Conflict,
@@ -44,6 +47,7 @@ pub struct AiGuardStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuardPolicy {
     pub codex_requirements: String,
+    pub codex_development_requirements: String,
     pub claude_settings: String,
     pub guarded_paths: Vec<String>,
 }
@@ -51,6 +55,7 @@ pub struct GuardPolicy {
 #[derive(Debug)]
 pub enum AiGuardInstallError {
     Conflict,
+    StrictModeRequired,
     Unsupported,
     Failed(anyhow::Error),
 }
@@ -59,6 +64,12 @@ impl std::fmt::Display for AiGuardInstallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Conflict => write!(f, "existing administrator policy conflicts with kb-app"),
+            Self::StrictModeRequired => {
+                write!(
+                    f,
+                    "strict AI access guard must be ready before development mode"
+                )
+            }
             Self::Unsupported => write!(f, "AI access guard installation is unsupported"),
             Self::Failed(error) => write!(f, "AI access guard installation failed: {error}"),
         }
@@ -111,6 +122,7 @@ pub fn policy() -> Result<GuardPolicy> {
     let hook_executable = hook_executable()?;
     Ok(GuardPolicy {
         codex_requirements: codex_requirements(&guarded_paths, &hook_executable)?,
+        codex_development_requirements: codex_development_requirements(&hook_executable)?,
         claude_settings: claude_settings(&guarded_paths, &hook_executable)?,
         guarded_paths,
     })
@@ -153,6 +165,36 @@ pub fn install() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
     }
 }
 
+/// CodexだけをFull Accessへ切り替え、同時にCodexからのKB仲介をfail-closedにする。
+///
+/// Claude Codeの管理sandboxは変更しない。strict guardが完全に有効な状態からだけ
+/// 遷移できるため、欠損・競合状態を開発モードとして上書きしない。
+pub fn enable_development_mode() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(AiGuardInstallError::Unsupported)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        enable_development_mode_macos()
+    }
+}
+
+/// 検証・リリースへ進めるstrict guard状態かを検査する。
+pub fn ensure_release_ready() -> Result<AiGuardStatus> {
+    release_ready(status()?)
+}
+
+fn release_ready(status: AiGuardStatus) -> Result<AiGuardStatus> {
+    if status.ready {
+        return Ok(status);
+    }
+    Err(CoreError::configuration(anyhow::anyhow!(
+        "AI access guard is not in strict release-ready mode"
+    )))
+}
+
 #[cfg(target_os = "macos")]
 fn install_macos() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
     let current = status().map_err(|error| AiGuardInstallError::Failed(error.into()))?;
@@ -189,24 +231,7 @@ fn install_macos() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
         shell_quote(&claude_source),
         shell_quote(&claude_target),
     );
-    let output = Command::new("/usr/bin/osascript")
-        .args([
-            "-e",
-            "on run argv",
-            "-e",
-            "do shell script (item 1 of argv) with prompt \"kb-app の完全保護を設定します。\" with administrator privileges",
-            "-e",
-            "end run",
-            "--",
-            &command,
-        ])
-        .output()
-        .map_err(|error| AiGuardInstallError::Failed(error.into()))?;
-    if !output.status.success() {
-        return Err(AiGuardInstallError::Failed(anyhow::anyhow!(
-            "administrator authorization was denied or installation failed"
-        )));
-    }
+    run_admin_command(&command, "kb-app の完全保護を設定します。")?;
 
     remove_legacy_claude_hooks_at(
         &claude_user_settings_path().map_err(|error| AiGuardInstallError::Failed(error.into()))?,
@@ -220,6 +245,81 @@ fn install_macos() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
         )));
     }
     Ok(installed)
+}
+
+#[cfg(target_os = "macos")]
+fn enable_development_mode_macos() -> std::result::Result<AiGuardStatus, AiGuardInstallError> {
+    let current = status().map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+    if current.codex == GuardTargetState::Development
+        && current.claude == GuardTargetState::Enforced
+    {
+        return Ok(current);
+    }
+    if current.codex == GuardTargetState::Conflict || current.claude == GuardTargetState::Conflict {
+        return Err(AiGuardInstallError::Conflict);
+    }
+    if !current.ready {
+        return Err(AiGuardInstallError::StrictModeRequired);
+    }
+
+    let policy = policy().map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+    let temp = tempfile::tempdir().map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+    let codex_source = temp.path().join("requirements.toml");
+    fs::write(&codex_source, policy.codex_development_requirements)
+        .map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+
+    let codex_target = codex_requirements_path();
+    let codex_dir = codex_target.parent().ok_or_else(|| {
+        AiGuardInstallError::Failed(anyhow::anyhow!("Codex policy has no parent"))
+    })?;
+    let command = format!(
+        "/bin/mkdir -p {} && /usr/bin/install -m 0644 {} {}",
+        shell_quote(codex_dir),
+        shell_quote(&codex_source),
+        shell_quote(&codex_target),
+    );
+    run_admin_command(
+        &command,
+        "kb-app の開発高速モードを有効にします。Codex から KB は利用できなくなります。",
+    )?;
+
+    let installed = status().map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+    if installed.codex != GuardTargetState::Development
+        || installed.claude != GuardTargetState::Enforced
+        || installed.ready
+    {
+        return Err(AiGuardInstallError::Failed(anyhow::anyhow!(
+            "development mode policy did not pass verification"
+        )));
+    }
+    Ok(installed)
+}
+
+#[cfg(target_os = "macos")]
+fn run_admin_command(command: &str, prompt: &str) -> std::result::Result<(), AiGuardInstallError> {
+    let script = format!(
+        "do shell script (item 1 of argv) with prompt {} with administrator privileges",
+        serde_json::to_string(prompt).expect("administrator prompt is serializable")
+    );
+    let output = Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            &script,
+            "-e",
+            "end run",
+            "--",
+            command,
+        ])
+        .output()
+        .map_err(|error| AiGuardInstallError::Failed(error.into()))?;
+    if !output.status.success() {
+        return Err(AiGuardInstallError::Failed(anyhow::anyhow!(
+            "administrator authorization was denied or installation failed"
+        )));
+    }
+    Ok(())
 }
 
 fn shell_quote(path: &Path) -> String {
@@ -443,6 +543,39 @@ extends = \":workspace\"\n\n\
     Ok(text)
 }
 
+fn codex_development_requirements(hook_executable: &Path) -> Result<String> {
+    let managed_dir = hook_executable
+        .parent()
+        .context("kb-app 実行ファイルに親ディレクトリがない")
+        .map_err(CoreError::configuration)?;
+    let hook_command = format!(
+        "{} --hook-auto-retrieve --client codex-cli/gpt-5-codex",
+        shell_quote(hook_executable)
+    );
+    Ok(format!(
+        "{CODEX_MARKER}\n\
+{CODEX_DEVELOPMENT_MARKER}\n\
+allowed_sandbox_modes = [\"read-only\", \"workspace-write\", \"danger-full-access\"]\n\
+allowed_approval_policies = [\"never\"]\n\
+default_permissions = \":danger-full-access\"\n\n\
+[features]\n\
+hooks = true\n\n\
+[hooks]\n\
+managed_dir = {}\n\n\
+[[hooks.UserPromptSubmit]]\n\n\
+[[hooks.UserPromptSubmit.hooks]]\n\
+type = \"command\"\n\
+command = {}\n\
+timeout = 30\n\
+statusMessage = \"kb-app開発高速モード中（KBは停止）\"\n\
+additionalContextLimit = 12000\n\n\
+[allowed_permission_profiles]\n\
+\":danger-full-access\" = true\n",
+        toml_key(&managed_dir.to_string_lossy()),
+        toml_key(&hook_command)
+    ))
+}
+
 fn toml_key(value: &str) -> String {
     serde_json::to_string(value).expect("path string is JSON serializable")
 }
@@ -511,10 +644,10 @@ fn status_for(
         });
     }
 
-    let codex = file_state(
+    let codex = codex_file_state(
         codex_path,
         &policy.codex_requirements,
-        Some(CODEX_MARKER),
+        &policy.codex_development_requirements,
         require_managed_owner,
     )?;
     let claude = file_state(
@@ -529,6 +662,32 @@ fn status_for(
         claude,
         guarded_paths: policy.guarded_paths.clone(),
     })
+}
+
+fn codex_file_state(
+    path: &Path,
+    strict_expected: &str,
+    development_expected: &str,
+    require_managed_owner: bool,
+) -> Result<GuardTargetState> {
+    match fs::read_to_string(path) {
+        Ok(actual)
+            if actual == strict_expected
+                && managed_ownership_is_secure(path, require_managed_owner)? =>
+        {
+            Ok(GuardTargetState::Enforced)
+        }
+        Ok(actual)
+            if actual == development_expected
+                && managed_ownership_is_secure(path, require_managed_owner)? =>
+        {
+            Ok(GuardTargetState::Development)
+        }
+        Ok(actual) if actual.contains(CODEX_MARKER) => Ok(GuardTargetState::Outdated),
+        Ok(_) => Ok(GuardTargetState::Conflict),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(GuardTargetState::Missing),
+        Err(error) => Err(CoreError::configuration(error)),
+    }
 }
 
 fn file_state(
@@ -587,6 +746,8 @@ mod tests {
         let hook_executable = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
         GuardPolicy {
             codex_requirements: codex_requirements(&guarded_paths, hook_executable).unwrap(),
+            codex_development_requirements: codex_development_requirements(hook_executable)
+                .unwrap(),
             claude_settings: claude_settings(&guarded_paths, hook_executable).unwrap(),
             guarded_paths,
         }
@@ -683,6 +844,47 @@ mod tests {
     }
 
     #[test]
+    fn development_policy_enables_codex_full_access_but_disables_its_broker() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex = dir.path().join("requirements.toml");
+        let claude = dir.path().join("managed.json");
+        let policy = example_policy();
+
+        assert!(
+            policy
+                .codex_development_requirements
+                .contains("default_permissions = \":danger-full-access\"")
+        );
+        assert!(
+            policy
+                .codex_development_requirements
+                .contains("\":danger-full-access\" = true")
+        );
+        assert!(
+            policy
+                .codex_development_requirements
+                .contains("allowed_approval_policies = [\"never\"]")
+        );
+        assert!(!policy.codex_development_requirements.contains("deny_read"));
+
+        fs::write(&codex, &policy.codex_development_requirements).unwrap();
+        fs::write(&claude, &policy.claude_settings).unwrap();
+        let development = status_for(&policy, &codex, &claude, false).unwrap();
+        assert!(!development.ready);
+        assert_eq!(development.codex, GuardTargetState::Development);
+        assert_eq!(development.claude, GuardTargetState::Enforced);
+        assert!(!managed_surface_is_enforced(
+            ClientSurface::CodexCli,
+            &development
+        ));
+        assert!(managed_surface_is_enforced(
+            ClientSurface::ClaudeCode,
+            &development
+        ));
+        assert!(release_ready(development).is_err());
+    }
+
+    #[test]
     fn status_detects_missing_outdated_conflicting_and_enforced_files() {
         let dir = tempfile::tempdir().unwrap();
         let codex = dir.path().join("requirements.toml");
@@ -703,6 +905,7 @@ mod tests {
         fs::write(&claude, &policy.claude_settings).unwrap();
         let enforced = status_for(&policy, &codex, &claude, false).unwrap();
         assert!(enforced.ready);
+        assert!(release_ready(enforced).is_ok());
     }
 
     #[test]

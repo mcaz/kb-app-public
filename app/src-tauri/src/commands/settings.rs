@@ -39,6 +39,23 @@ pub fn settings_ai_guard_status() -> AppResult<kb_core::ai_guard::AiGuardStatus>
 pub fn settings_install_ai_guard() -> AppResult<kb_core::ai_guard::AiGuardStatus> {
     kb_core::ai_guard::install().map_err(|error| match error {
         kb_core::ai_guard::AiGuardInstallError::Conflict => AppError::AiGuardPolicyConflict,
+        kb_core::ai_guard::AiGuardInstallError::StrictModeRequired => {
+            AppError::AiGuardStrictModeRequired
+        }
+        kb_core::ai_guard::AiGuardInstallError::Unsupported => AppError::AiGuardUnsupported,
+        kb_core::ai_guard::AiGuardInstallError::Failed(_) => AppError::AiGuardInstallFailed,
+    })
+}
+
+/// Codex だけを Full Access に切り替える。Codex の KB 仲介は同時に fail-closed になる。
+#[tauri::command]
+#[specta::specta]
+pub fn settings_enable_ai_guard_development_mode() -> AppResult<kb_core::ai_guard::AiGuardStatus> {
+    kb_core::ai_guard::enable_development_mode().map_err(|error| match error {
+        kb_core::ai_guard::AiGuardInstallError::Conflict => AppError::AiGuardPolicyConflict,
+        kb_core::ai_guard::AiGuardInstallError::StrictModeRequired => {
+            AppError::AiGuardStrictModeRequired
+        }
         kb_core::ai_guard::AiGuardInstallError::Unsupported => AppError::AiGuardUnsupported,
         kb_core::ai_guard::AiGuardInstallError::Failed(_) => AppError::AiGuardInstallFailed,
     })

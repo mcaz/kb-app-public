@@ -32,6 +32,7 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             settings::settings_set_gpt_kb_enabled,
             settings::settings_ai_guard_status,
             settings::settings_install_ai_guard,
+            settings::settings_enable_ai_guard_development_mode,
             home::home_state,
             home::maintenance_refresh,
             home::tag_overview,

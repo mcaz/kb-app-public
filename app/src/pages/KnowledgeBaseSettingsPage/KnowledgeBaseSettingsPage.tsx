@@ -9,6 +9,7 @@ import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
 import { useErrorText } from "@/hooks/useErrorText";
 import {
   useAiGuardStatus,
+  useEnableAiGuardDevelopmentMode,
   useInstallAiGuard,
   useSetAiKbEnabled,
   useSetClaudeKbEnabled,
@@ -61,6 +62,8 @@ function guardStatusKey(state: GuardTargetState) {
   switch (state) {
     case "enforced":
       return "settings.aiGuardStatusEnforced";
+    case "development":
+      return "settings.aiGuardStatusDevelopment";
     case "missing":
       return "settings.aiGuardStatusMissing";
     case "outdated":
@@ -77,6 +80,7 @@ export function KnowledgeBaseSettingsPage() {
   const { data: settings, isPending, error } = useSettings();
   const { data: guard, isPending: isGuardPending, error: guardError } = useAiGuardStatus();
   const installGuard = useInstallAiGuard();
+  const enableDevelopmentMode = useEnableAiGuardDevelopmentMode();
   const setAiKbEnabled = useSetAiKbEnabled();
   const setClaudeKbEnabled = useSetClaudeKbEnabled();
   const setGptKbEnabled = useSetGptKbEnabled();
@@ -88,7 +92,9 @@ export function KnowledgeBaseSettingsPage() {
     setAiKbEnabled.isPending || setClaudeKbEnabled.isPending || setGptKbEnabled.isPending;
   const guardConflict = guard?.codex === "conflict" || guard?.claude === "conflict";
   const guardUnsupported = guard?.codex === "unsupported" || guard?.claude === "unsupported";
+  const guardDevelopment = guard?.codex === "development";
   const guardReady = guard?.ready ?? false;
+  const guardActionPending = installGuard.isPending || enableDevelopmentMode.isPending;
   const switchesDisabled = isPending || isGuardPending || isSaving || !guardReady;
 
   return (
@@ -98,22 +104,34 @@ export function KnowledgeBaseSettingsPage() {
 
         <div
           className={`mb-5 rounded-xl border p-4 ${
-            guardReady ? "border-grow bg-grow-soft" : "border-line bg-panel"
+            guardDevelopment
+              ? "border-danger bg-panel"
+              : guardReady
+                ? "border-grow bg-grow-soft"
+                : "border-line bg-panel"
           }`}
         >
           <div className="flex items-start gap-3">
             <Icon
               as={guardReady ? ShieldCheck : ShieldAlert}
-              className={guardReady ? "text-grow mt-0.5" : "text-muted mt-0.5"}
+              className={
+                guardDevelopment
+                  ? "text-danger mt-0.5"
+                  : guardReady
+                    ? "text-grow mt-0.5"
+                    : "text-muted mt-0.5"
+              }
             />
             <div className="min-w-0 flex-1">
               <h2 className="text-[13px] font-semibold">{t("settings.aiGuardTitle")}</h2>
               <p className="text-muted mt-1 text-xs leading-relaxed">
-                {guardReady
-                  ? t("settings.aiGuardReady")
-                  : guardConflict
-                    ? t("settings.aiGuardConflict")
-                    : t("settings.aiGuardNeeded")}
+                {guardDevelopment
+                  ? t("settings.aiGuardDevelopment")
+                  : guardReady
+                    ? t("settings.aiGuardReady")
+                    : guardConflict
+                      ? t("settings.aiGuardConflict")
+                      : t("settings.aiGuardNeeded")}
               </p>
               {guard && (
                 <div className="text-muted mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
@@ -131,12 +149,52 @@ export function KnowledgeBaseSettingsPage() {
                   </span>
                 </div>
               )}
-              {!guardReady && !guardConflict && !guardUnsupported && (
+              {guardReady && (
+                <Button
+                  type="button"
+                  variant="danger"
+                  className="mt-3"
+                  disabled={isGuardPending || guardActionPending}
+                  onClick={() => {
+                    enableDevelopmentMode.mutate(undefined, {
+                      onSuccess: () => toast(t("settings.aiGuardDevelopmentEnabled")),
+                      onError: (developmentError) => toast(errorText(developmentError)),
+                    });
+                  }}
+                >
+                  {t(
+                    enableDevelopmentMode.isPending
+                      ? "settings.aiGuardDevelopmentEnabling"
+                      : "settings.aiGuardDevelopmentEnable",
+                  )}
+                </Button>
+              )}
+              {guardDevelopment && (
                 <Button
                   type="button"
                   variant="primary"
                   className="mt-3"
-                  disabled={isGuardPending || installGuard.isPending}
+                  disabled={isGuardPending || guardActionPending}
+                  onClick={() => {
+                    installGuard.mutate(undefined, {
+                      onSuccess: () => toast(t("settings.aiGuardStrictRestored")),
+                      onError: (installError) => toast(errorText(installError)),
+                    });
+                  }}
+                >
+                  {t(
+                    installGuard.isPending
+                      ? "settings.aiGuardInstalling"
+                      : "settings.aiGuardStrictRestore",
+                  )}
+                </Button>
+              )}
+              {!guardReady && !guardDevelopment && !guardConflict && !guardUnsupported && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="mt-3"
+                  disabled={isGuardPending || guardActionPending}
                   onClick={() => {
                     installGuard.mutate(undefined, {
                       onSuccess: () => toast(t("settings.aiGuardInstalled")),

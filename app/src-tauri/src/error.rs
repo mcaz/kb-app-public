@@ -45,6 +45,8 @@ pub enum AppError {
     ClaudeDesktopLaunchFailed,
     /// 既存の管理者ポリシーへ黙って上書きできない。
     AiGuardPolicyConflict,
+    /// 開発高速モードへ入る前提となる strict guard が有効でない。
+    AiGuardStrictModeRequired,
     /// この OS では AI の生ファイルアクセスを強制的に閉じられない。
     AiGuardUnsupported,
     /// 管理者ポリシーの導入または導入後検査に失敗した。
@@ -82,6 +84,9 @@ impl std::fmt::Display for AppError {
             Self::ClaudeDesktopNotFound => write!(f, "Claude Desktop が見つからない"),
             Self::ClaudeDesktopLaunchFailed => write!(f, "Claude Desktop を起動できなかった"),
             Self::AiGuardPolicyConflict => write!(f, "既存のAI管理者ポリシーと競合している"),
+            Self::AiGuardStrictModeRequired => {
+                write!(f, "開発高速モードの前に完全保護を設定する必要がある")
+            }
             Self::AiGuardUnsupported => write!(f, "このOSではAIアクセスガードを利用できない"),
             Self::AiGuardInstallFailed => write!(f, "AIアクセスガードを導入できなかった"),
             Self::BackupFailed { kind } => write!(f, "backup failed: {kind:?}"),

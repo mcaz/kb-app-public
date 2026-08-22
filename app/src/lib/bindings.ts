@@ -24,6 +24,8 @@ export const commands = {
 	 *  既存の Codex requirements は管理者の正本なので、kb-app 所有でなければ止める。
 	 */
 	settingsInstallAiGuard: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_install_ai_guard")),
+	/**  Codex だけを Full Access に切り替える。Codex の KB 仲介は同時に fail-closed になる。 */
+	settingsEnableAiGuardDevelopmentMode: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_enable_ai_guard_development_mode")),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
 	maintenanceRefresh: () => typedError<MaintenanceReport, AppError>(__TAURI_INVOKE("maintenance_refresh")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
@@ -165,6 +167,8 @@ export type AppError =
 { code: "claude_desktop_launch_failed" } | 
 /**  既存の管理者ポリシーへ黙って上書きできない。 */
 { code: "ai_guard_policy_conflict" } | 
+/**  開発高速モードへ入る前提となる strict guard が有効でない。 */
+{ code: "ai_guard_strict_mode_required" } | 
 /**  この OS では AI の生ファイルアクセスを強制的に閉じられない。 */
 { code: "ai_guard_unsupported" } | 
 /**  管理者ポリシーの導入または導入後検査に失敗した。 */
@@ -361,7 +365,7 @@ export type GraphNode = {
 	degree: number,
 };
 
-export type GuardTargetState = "enforced" | "missing" | "outdated" | "conflict" | "unsupported";
+export type GuardTargetState = "enforced" | "development" | "missing" | "outdated" | "conflict" | "unsupported";
 
 export type Hit = Hit_Serialize | Hit_Deserialize;
 
