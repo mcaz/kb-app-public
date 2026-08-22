@@ -2,6 +2,12 @@
   "title": "Files",
   "search": "Search by file or note name",
   "count": "{{count}} files",
+  "summary": {
+    "label": "File summary",
+    "total": "Total files",
+    "size": "Total size",
+    "missing": "Not on this device"
+  },
   "filter": {
     "label": "Filter by file type",
     "all": "All types",
