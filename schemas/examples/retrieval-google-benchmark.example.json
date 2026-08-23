@@ -111,7 +111,7 @@
       "expected_id": "notes/orion-audit-record-2025",
       "title": "Orion Audit Record 2025",
       "description": "Synthetic retrieval benchmark fixture",
-      "body": "The historical Orion 2025 audit rationale records why the exception was accepted.",
+      "body": "orion 当時 理由。The historical record explains why the exception was accepted.",
       "tags": ["retrieval-eval"],
       "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "benchmark/orion-audit-2025" }
     },
@@ -119,7 +119,7 @@
       "expected_id": "notes/orion-current-policy-a",
       "title": "Orion Current Policy A",
       "description": "Synthetic retrieval benchmark fixture",
-      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "body": "orion 当時 理由 orion 当時 理由 orion 当時 理由",
       "tags": ["retrieval-eval"],
       "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-a" }
     },
@@ -127,7 +127,7 @@
       "expected_id": "notes/orion-current-policy-b",
       "title": "Orion Current Policy B",
       "description": "Synthetic retrieval benchmark fixture",
-      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "body": "orion 当時 理由 orion 当時 理由 orion 当時 理由",
       "tags": ["retrieval-eval"],
       "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-b" }
     },
@@ -135,7 +135,7 @@
       "expected_id": "notes/orion-current-policy-c",
       "title": "Orion Current Policy C",
       "description": "Synthetic retrieval benchmark fixture",
-      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "body": "orion 当時 理由 orion 当時 理由 orion 当時 理由",
       "tags": ["retrieval-eval"],
       "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-c" }
     },
@@ -143,7 +143,7 @@
       "expected_id": "notes/orion-current-policy-d",
       "title": "Orion Current Policy D",
       "description": "Synthetic retrieval benchmark fixture",
-      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "body": "orion 当時 理由 orion 当時 理由 orion 当時 理由",
       "tags": ["retrieval-eval"],
       "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-d" }
     },
@@ -151,7 +151,7 @@
       "expected_id": "notes/orion-current-policy-e",
       "title": "Orion Current Policy E",
       "description": "Synthetic retrieval benchmark fixture",
-      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "body": "orion 当時 理由 orion 当時 理由 orion 当時 理由",
       "tags": ["retrieval-eval"],
       "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-e" }
     },
@@ -325,8 +325,8 @@
     },
 
     {
-      "expected_id": "notes/mercury-budget-risk-facet",
-      "title": "Mercury Budget Risk Facet",
+      "expected_id": "notes/mercury-program-risk-facet",
+      "title": "Mercury Program Risk Facet",
       "description": "Synthetic retrieval benchmark fixture",
       "body": "mercury budget review identifies the unique cashflow risk facet.",
       "tags": ["retrieval-eval"],
@@ -423,7 +423,7 @@
       },
       {
         "id": "query-intent-historical",
-        "queries": { "codex": "orion 2025 audit rationale", "claude_code": "orion 2025 audit rationale", "chatgpt": "orion 2025 audit rationale" },
+        "queries": { "codex": "orion 当時 理由", "claude_code": "orion 当時 理由", "chatgpt": "orion 当時 理由" },
         "required": ["notes/orion-audit-record-2025"],
         "body_requirements": [{ "id": "historical-reason", "all_terms": ["why the exception was accepted"] }]
       },
@@ -450,7 +450,7 @@
       {
         "id": "dedup-diversification",
         "queries": { "codex": "mercury budget review", "claude_code": "mercury budget review", "chatgpt": "mercury budget review" },
-        "required": ["notes/mercury-budget-risk-facet"],
+        "required": ["notes/mercury-program-risk-facet"],
         "body_requirements": [{ "id": "unique-facet", "all_terms": ["unique cashflow risk facet"] }]
       }
     ]

@@ -8,6 +8,13 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::degradation::Degradation;
 use crate::tokenize::match_expr;
 
+const FIELD_RANKING_CANDIDATE_MULTIPLIER: usize = 8;
+const TITLE_TERM_WEIGHT: usize = 64;
+const DESCRIPTION_TERM_WEIGHT: usize = 16;
+const TAG_TERM_WEIGHT: usize = 12;
+const SCOPE_TERM_WEIGHT: usize = 8;
+const BODY_TERM_WEIGHT: usize = 1;
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Hit {
@@ -103,10 +110,14 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
         }),
     }
 
-    // 同じqueryに現行canonicalがあるときだけ、legacy・record・proposal・supersededより
-    // 前へ出す。候補集合自体は従来の全文・意味検索で作り、authorityだけで無関係な
-    // ノートを混ぜない。
-    hits.sort_by_key(Hit::authority_priority);
+    // 完全タイトル一致はlocatorとしての明示性が最も高い。該当しない候補間では従来どおり
+    // active canonicalを優先し、authority規律をfield rankingで失わない。
+    hits.sort_by_key(|hit| {
+        (
+            !exact_title_match(query, hit.title.as_deref()),
+            hit.authority_priority(),
+        )
+    });
 
     let related = match related_of(conn, hits.first().map(|hit| hit.id.as_str())) {
         Ok(related) => related,
@@ -133,34 +144,130 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     if expr.is_empty() {
         return Ok(Vec::new());
     }
+    let field_terms = field_terms(query);
+    // 再順位付け対象を最終件数より広く取る。8倍は10k fixtureでも最大40行に留まり、
+    // 本文反復だけが強い候補の外からtitle一致を回収できる実測上の最小余裕。
+    let candidate_limit = limit.saturating_mul(FIELD_RANKING_CANDIDATE_MULTIPLIER);
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
                 snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags, n.created, n.generated_at,
-                n.note_uid, n.namespace, n.authority_role, n.authority_status, n.authority_scope
+                n.note_uid, n.namespace, n.authority_role, n.authority_status, n.authority_scope,
+                n.description, n.body
          FROM fts_main f JOIN notes n ON n.id = f.id
          WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
          ORDER BY rank LIMIT ?2",
     )?;
-    let rows = stmt.query_map(rusqlite::params![expr, limit as i64], |r| {
-        Ok(Hit {
-            id: r.get(0)?,
-            title: r.get(1)?,
-            status: r.get(2)?,
-            snippet: r.get(3)?,
-            via: "main",
-            distance: None,
-            origin: r.get(4)?,
-            tags: split_tags(r.get::<_, Option<String>>(5)?),
-            created: r.get(6)?,
-            updated: r.get(7)?,
-            note_uid: r.get(8)?,
-            namespace: r.get(9)?,
-            authority_role: r.get(10)?,
-            authority_status: r.get(11)?,
-            authority_scope: r.get(12)?,
-        })
+    let rows = stmt.query_map(rusqlite::params![expr, candidate_limit as i64], |r| {
+        let title = r.get::<_, Option<String>>(1)?;
+        let tags = r.get::<_, Option<String>>(5)?;
+        let namespace = r.get::<_, Option<String>>(9)?;
+        let authority_scope = r.get::<_, Option<String>>(12)?;
+        let description = r.get::<_, Option<String>>(13)?;
+        let body = r.get::<_, String>(14)?;
+        let score = field_score(
+            query,
+            &field_terms,
+            FieldValues {
+                title: title.as_deref(),
+                description: description.as_deref(),
+                tags: tags.as_deref(),
+                namespace: namespace.as_deref(),
+                scope: authority_scope.as_deref(),
+                body: &body,
+            },
+        );
+        Ok((
+            Hit {
+                id: r.get(0)?,
+                title,
+                status: r.get(2)?,
+                snippet: r.get(3)?,
+                via: "main",
+                distance: None,
+                origin: r.get(4)?,
+                tags: split_tags(tags),
+                created: r.get(6)?,
+                updated: r.get(7)?,
+                note_uid: r.get(8)?,
+                namespace,
+                authority_role: r.get(10)?,
+                authority_status: r.get(11)?,
+                authority_scope,
+            },
+            score,
+        ))
     })?;
-    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    let mut candidates = rows
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .enumerate()
+        .map(|(bm25_rank, (hit, field_score))| (hit, field_score, bm25_rank))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.2.cmp(&right.2)));
+    Ok(candidates
+        .into_iter()
+        .take(limit)
+        .map(|(hit, _, _)| hit)
+        .collect())
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct FieldScore {
+    exact_title: bool,
+    weighted_term_matches: usize,
+}
+
+struct FieldValues<'a> {
+    title: Option<&'a str>,
+    description: Option<&'a str>,
+    tags: Option<&'a str>,
+    namespace: Option<&'a str>,
+    scope: Option<&'a str>,
+    body: &'a str,
+}
+
+fn field_score(query: &str, terms: &[String], fields: FieldValues<'_>) -> FieldScore {
+    let title = fields.title.unwrap_or_default();
+    FieldScore {
+        exact_title: exact_title_match(query, Some(title)),
+        weighted_term_matches: matched_terms(title, terms) * TITLE_TERM_WEIGHT
+            + matched_terms(fields.description.unwrap_or_default(), terms)
+                * DESCRIPTION_TERM_WEIGHT
+            + matched_terms(fields.tags.unwrap_or_default(), terms) * TAG_TERM_WEIGHT
+            + (matched_terms(fields.namespace.unwrap_or_default(), terms)
+                + matched_terms(fields.scope.unwrap_or_default(), terms))
+                * SCOPE_TERM_WEIGHT
+            + matched_terms(fields.body, terms) * BODY_TERM_WEIGHT,
+    }
+}
+
+fn field_terms(query: &str) -> Vec<String> {
+    let mut terms = crate::tokenize::wakati(query)
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|term| term.chars().any(char::is_alphanumeric))
+        .collect::<Vec<_>>();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn matched_terms(value: &str, terms: &[String]) -> usize {
+    let value = value.to_lowercase();
+    terms.iter().filter(|term| value.contains(*term)).count()
+}
+
+fn exact_title_match(query: &str, title: Option<&str>) -> bool {
+    let query = normalized_phrase(query);
+    !query.is_empty() && title.is_some_and(|title| query == normalized_phrase(title))
+}
+
+fn normalized_phrase(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
 }
 
 /// 意味検索(埋め込み KNN)。モデル未導入なら Ok(None)。
@@ -960,6 +1067,92 @@ mod tests {
             hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(),
             [canonical.as_str(), record.as_str(), proposal.as_str()]
         );
+    }
+
+    #[test]
+    fn exact_title_ranks_before_repeated_body_and_canonical_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let target = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "Nebula Launch Checklist",
+                    body: "go or no-go procedure",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Records,
+                        role: AuthorityRole::Record,
+                        status: AuthorityStatus::Active,
+                        scope: "test/nebula-target".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        for suffix in ["a", "b", "c", "d", "e"] {
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: &format!("Nebula Canonical {suffix}"),
+                        body: "nebula launch checklist nebula launch checklist nebula launch checklist",
+                        description: None,
+                        tags: &["test".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: format!("test/nebula-decoy-{suffix}"),
+                        },
+                        relations: Vec::new(),
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .unwrap();
+        }
+
+        let hits = super::search_mode(&conn, "nebula launch checklist", 5, true).hits;
+        assert_eq!(
+            hits.first().map(|hit| hit.id.as_str()),
+            Some(target.as_str())
+        );
+    }
+
+    #[test]
+    fn field_weights_descend_from_title_to_body_without_counting_repetition() {
+        let terms = super::field_terms("beacon");
+        let score = |title, description, tags, scope, body| {
+            super::field_score(
+                "beacon",
+                &terms,
+                super::FieldValues {
+                    title: Some(title),
+                    description: Some(description),
+                    tags: Some(tags),
+                    namespace: Some("knowledge"),
+                    scope: Some(scope),
+                    body,
+                },
+            )
+            .weighted_term_matches
+        };
+        let title = score("prefix beacon", "", "", "", "");
+        let description = score("", "beacon", "", "", "");
+        let tags = score("", "", "beacon", "", "");
+        let scope = score("", "", "", "beacon", "");
+        let body_once = score("", "", "", "", "beacon");
+        let body_repeated = score("", "", "", "", "beacon beacon beacon");
+        assert!(title > description);
+        assert!(description > tags);
+        assert!(tags > scope);
+        assert!(scope > body_once);
+        assert_eq!(body_once, body_repeated);
     }
 
     #[test]
