@@ -9,6 +9,9 @@ use crate::degradation::Degradation;
 use crate::tokenize::match_expr;
 
 const FIELD_RANKING_CANDIDATE_MULTIPLIER: usize = 8;
+const DIVERSITY_MAX_NORMALIZED_CHARS: usize = 2_048;
+const DIVERSITY_MIN_SHINGLES: usize = 8;
+const DIVERSITY_SIMILARITY_PERCENT: usize = 85;
 const TITLE_TERM_WEIGHT: usize = 64;
 const DESCRIPTION_TERM_WEIGHT: usize = 16;
 const TAG_TERM_WEIGHT: usize = 12;
@@ -137,6 +140,12 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
     // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
     // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
     rank_hits(&mut hits, query, intent);
+    match diversify_hits(conn, &hits, limit) {
+        Ok(diverse_hits) => hits = diverse_hits,
+        Err(error) => degraded.push(Degradation::DiversityRanking {
+            detail: error.to_string(),
+        }),
+    }
     hits.truncate(limit);
 
     let related = match related_of(conn, hits.first().map(|hit| hit.id.as_str())) {
@@ -229,6 +238,12 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
             role: authority_role.as_deref(),
             status: authority_status.as_deref(),
         });
+        let diversity = DiversitySignature::new(
+            authority_scope.as_deref(),
+            authority_role.as_deref(),
+            authority_status.as_deref(),
+            &body,
+        );
         Ok((
             Hit {
                 id: r.get(0)?,
@@ -252,20 +267,143 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
                 intent_alignment,
                 weighted_term_matches: field_score.weighted_term_matches,
             },
+            diversity,
         ))
     })?;
     let mut candidates = rows
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
         .enumerate()
-        .map(|(bm25_rank, (hit, field_score))| (hit, field_score, bm25_rank))
+        .map(|(bm25_rank, (hit, field_score, diversity))| (hit, field_score, bm25_rank, diversity))
         .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.2.cmp(&right.2)));
-    Ok(candidates
-        .into_iter()
-        .take(limit)
-        .map(|(hit, _, _)| hit)
-        .collect())
+    candidates.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| {
+                left.0
+                    .authority_priority()
+                    .cmp(&right.0.authority_priority())
+            })
+            .then_with(|| left.2.cmp(&right.2))
+    });
+    Ok(diversify_main_candidates(candidates, limit))
+}
+
+#[derive(Debug)]
+struct DiversitySignature {
+    scope: Option<String>,
+    role: Option<String>,
+    status: Option<String>,
+    normalized: String,
+    trigrams: Vec<(char, char, char)>,
+}
+
+impl DiversitySignature {
+    fn new(scope: Option<&str>, role: Option<&str>, status: Option<&str>, body: &str) -> Self {
+        let normalized = body
+            .chars()
+            .flat_map(char::to_lowercase)
+            .filter(|character| character.is_alphanumeric())
+            .take(DIVERSITY_MAX_NORMALIZED_CHARS)
+            .collect::<String>();
+        let characters = normalized.chars().collect::<Vec<_>>();
+        let mut trigrams = characters
+            .windows(3)
+            .map(|window| (window[0], window[1], window[2]))
+            .collect::<Vec<_>>();
+        trigrams.sort_unstable();
+        trigrams.dedup();
+        Self {
+            scope: scope.map(str::to_string),
+            role: role.map(str::to_string),
+            status: status.map(str::to_string),
+            normalized,
+            trigrams,
+        }
+    }
+
+    fn same_cluster(&self, other: &Self) -> bool {
+        let same_authority_facet = self.role == other.role && self.status == other.status;
+        if self.scope.is_some() && self.scope == other.scope && same_authority_facet {
+            return true;
+        }
+        if !same_authority_facet {
+            return false;
+        }
+        if !self.normalized.is_empty() && self.normalized == other.normalized {
+            return true;
+        }
+        if self.trigrams.len() < DIVERSITY_MIN_SHINGLES
+            || other.trigrams.len() < DIVERSITY_MIN_SHINGLES
+        {
+            return false;
+        }
+        let mut left = 0;
+        let mut right = 0;
+        let mut intersection = 0;
+        while left < self.trigrams.len() && right < other.trigrams.len() {
+            match self.trigrams[left].cmp(&other.trigrams[right]) {
+                std::cmp::Ordering::Less => left += 1,
+                std::cmp::Ordering::Greater => right += 1,
+                std::cmp::Ordering::Equal => {
+                    intersection += 1;
+                    left += 1;
+                    right += 1;
+                }
+            }
+        }
+        let union = self.trigrams.len() + other.trigrams.len() - intersection;
+        intersection.saturating_mul(100) >= union.saturating_mul(DIVERSITY_SIMILARITY_PERCENT)
+    }
+}
+
+fn diversify_main_candidates(
+    candidates: Vec<(Hit, RankingScore, usize, DiversitySignature)>,
+    limit: usize,
+) -> Vec<Hit> {
+    let mut selected: Vec<(Hit, DiversitySignature)> = Vec::new();
+    for (hit, _, _, signature) in candidates {
+        if selected
+            .iter()
+            .any(|(_, existing)| existing.same_cluster(&signature))
+        {
+            continue;
+        }
+        selected.push((hit, signature));
+        if selected.len() >= limit {
+            break;
+        }
+    }
+    selected.into_iter().map(|(hit, _)| hit).collect()
+}
+
+fn diversify_hits(conn: &Connection, hits: &[Hit], limit: usize) -> Result<Vec<Hit>> {
+    let mut selected: Vec<(Hit, DiversitySignature)> = Vec::new();
+    for hit in hits {
+        // main候補の本文比較でrecallを確保しつつ、rescue/semantic融合が同じ内容を
+        // 再投入するのを、最終結果でも同じ本文signatureにより防ぐ。
+        let body = conn.query_row("SELECT body FROM notes WHERE id=?1", [&hit.id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let signature = DiversitySignature::new(
+            hit.authority_scope.as_deref(),
+            hit.authority_role.as_deref(),
+            hit.authority_status.as_deref(),
+            &body,
+        );
+        if selected
+            .iter()
+            .any(|(_, existing)| existing.same_cluster(&signature))
+        {
+            continue;
+        }
+        selected.push((hit.clone(), signature));
+        if selected.len() >= limit {
+            break;
+        }
+    }
+    Ok(selected.into_iter().map(|(hit, _)| hit).collect())
 }
 
 fn anchor_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit>> {
@@ -1364,6 +1502,67 @@ mod tests {
         assert!(tags > scope);
         assert!(scope > body_once);
         assert_eq!(body_once, body_repeated);
+    }
+
+    #[test]
+    fn duplicate_bodies_collapse_and_leave_room_for_a_distinct_facet() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let target = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "Mercury Program Risk Facet",
+                    body: "mercury budget review identifies the unique cashflow risk facet",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Records,
+                        role: AuthorityRole::Record,
+                        status: AuthorityStatus::Active,
+                        scope: "test/mercury-risk".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        for suffix in ["a", "b", "c", "d", "e"] {
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: &format!("Mercury Program Digest {suffix}"),
+                        body: "mercury budget review mercury budget review mercury budget review",
+                        description: None,
+                        tags: &["test".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: format!("test/mercury-digest-{suffix}"),
+                        },
+                        relations: Vec::new(),
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .unwrap();
+        }
+
+        let hits = super::search_mode(&conn, "mercury budget review", 5, true).hits;
+        assert!(hits.iter().any(|hit| hit.id == target));
+        assert_eq!(
+            hits.iter()
+                .filter(|hit| hit
+                    .title
+                    .as_deref()
+                    .is_some_and(|title| title.contains("Digest")))
+                .count(),
+            1
+        );
     }
 
     #[test]

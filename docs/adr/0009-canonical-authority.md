@@ -80,7 +80,10 @@ legacy、record、historical、proposal、supersededより優先する。typed r
 textはリンク先へ紐づく派生FTS索引にし、本文OR検索より弱い信号として全query term一致時だけリンク先を
 昇格する。retrievalのseedから有向グラフを展開するときは、意味を明示する`derived_from`・`supports`・
 `updates`・`contradicts`・`supersedes`を通常Markdown linkより先にし、弱い`mentions`を最後にする。
-同じtier内はノートID順に固定し、結果を決定的にする。類似度だけでの自動mergeは行わない。
+同じtier内はノートID順に固定し、結果を決定的にする。検索候補はauthority順位を確定した後、
+同じscope・role・status、または同じrole・status内で同一正規化本文か先頭2,048正規化文字の文字trigram
+Jaccardが85%以上のclusterごとに最上位1件だけを残す。本文が同じでもrole・statusが異なるfacetは保持する。
+これは検索結果の多様化だけで、類似度によるノートの自動mergeは行わない。
 
 ## 互換性と段階移行
 

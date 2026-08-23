@@ -18,6 +18,7 @@ pub enum Degradation {
     EmbeddingIndex { detail: String },
     MainSearch { detail: String },
     AnchorSearch { detail: String },
+    DiversityRanking { detail: String },
     SemanticSearch { detail: String },
     RescueSearch { detail: String },
     RelatedNotes { detail: String },
@@ -45,6 +46,7 @@ impl Degradation {
             Self::EmbeddingIndex { .. } => "embedding_index",
             Self::MainSearch { .. } => "main_search",
             Self::AnchorSearch { .. } => "anchor_search",
+            Self::DiversityRanking { .. } => "diversity_ranking",
             Self::SemanticSearch { .. } => "semantic_search",
             Self::RescueSearch { .. } => "rescue_search",
             Self::RelatedNotes { .. } => "related_notes",
@@ -82,6 +84,9 @@ impl std::fmt::Display for Degradation {
             Self::MainSearch { detail } => write!(f, "主索引が利用できない: {detail}"),
             Self::AnchorSearch { detail } => {
                 write!(f, "リンク文言索引が利用できない: {detail}")
+            }
+            Self::DiversityRanking { detail } => {
+                write!(f, "検索結果の多様化が利用できない: {detail}")
             }
             Self::SemanticSearch { detail } => {
                 write!(f, "かしこい検索が一時停止: {detail}")
@@ -132,6 +137,7 @@ mod tests {
             Degradation::EmbeddingIndex { detail: "x".into() },
             Degradation::MainSearch { detail: "x".into() },
             Degradation::AnchorSearch { detail: "x".into() },
+            Degradation::DiversityRanking { detail: "x".into() },
             Degradation::SemanticSearch { detail: "x".into() },
             Degradation::RescueSearch { detail: "x".into() },
             Degradation::RelatedNotes { detail: "x".into() },

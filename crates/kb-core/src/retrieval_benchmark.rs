@@ -156,7 +156,7 @@ pub fn create_fixture(suite: &RetrievalBenchmarkSuite, path: &Path) -> Result<Va
 pub fn render_markdown(report: &RetrievalBenchmarkReport) -> String {
     let mut output = String::from("# Google-style retrieval benchmark\n\n");
     output.push_str(&format!(
-        "- schema: `{}`\n- core: `{}`\n- synthetic notes: {}\n- control gate: **{}**\n- challenge gate: **{}** (診断値。現行baselineではFAILを許容)\n\n",
+        "- schema: `{}`\n- core: `{}`\n- synthetic notes: {}\n- control gate: **{}**\n- challenge gate: **{}**\n\n",
         report.schema_version,
         report.core_version,
         report.fixture_note_count,
@@ -274,14 +274,8 @@ mod tests {
         assert!(report.controls.gate.passed);
         assert_eq!(report.controls.case_count, 15);
         assert_eq!(report.challenges.case_count, 18);
-        assert_eq!(
-            report.challenges.gate.failed_cases,
-            [
-                "dedup-diversification@codex",
-                "dedup-diversification@claude_code",
-                "dedup-diversification@chatgpt",
-            ]
-        );
+        assert!(report.challenges.gate.passed);
+        assert!(report.challenges.gate.failed_cases.is_empty());
         let linked = report
             .challenges
             .summaries
@@ -290,7 +284,7 @@ mod tests {
             .unwrap();
         assert_eq!(linked.spill_cases, 0);
         assert_eq!(linked.budget_exhausted_cases, 0);
-        assert!(render_markdown(&report).contains("現行baselineではFAILを許容"));
+        assert!(render_markdown(&report).contains("challenge gate: **PASS**"));
     }
 
     #[test]
