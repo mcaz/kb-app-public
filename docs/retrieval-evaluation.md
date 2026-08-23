@@ -101,6 +101,7 @@ token／spill低下は効果として扱う。
 - [Field別ランキング](retrieval-field-ranking.md)
 - [Query intentランキング](retrieval-query-intent.md)
 - [アンカーテキスト索引](retrieval-anchor-text.md)
+- [Typed relation重み付き伝播](retrieval-typed-relation-ranking.md)
 
 ## 範囲外
 

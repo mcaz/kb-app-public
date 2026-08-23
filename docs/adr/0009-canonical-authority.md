@@ -78,7 +78,9 @@ AIの自律削除が根拠・矛盾・後継の鎖を黙って切らない。
 legacy、record、historical、proposal、supersededより優先する。typed relationは既存Markdown linkと
 同じ有向グラフとして自動retrieval・関連ノート・グラフ表示へ加える。標準Markdown linkのanchor
 textはリンク先へ紐づく派生FTS索引にし、本文OR検索より弱い信号として全query term一致時だけリンク先を
-昇格する。類似度だけでの自動mergeは行わない。
+昇格する。retrievalのseedから有向グラフを展開するときは、意味を明示する`derived_from`・`supports`・
+`updates`・`contradicts`・`supersedes`を通常Markdown linkより先にし、弱い`mentions`を最後にする。
+同じtier内はノートID順に固定し、結果を決定的にする。類似度だけでの自動mergeは行わない。
 
 ## 互換性と段階移行
 

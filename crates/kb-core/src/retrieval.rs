@@ -334,15 +334,25 @@ fn push_candidate(
 fn outgoing_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut statement = conn.prepare_cached(
         "SELECT other FROM (
-             SELECT l.dst AS other FROM links l
+             SELECT l.dst AS other, 1 AS edge_priority FROM links l
              JOIN notes n ON n.id = l.dst
              WHERE l.src = ?1 AND n.status != 'deprecated'
-             UNION
-             SELECT target.id AS other FROM notes source
+             UNION ALL
+             SELECT target.id AS other,
+                    CASE relation.kind
+                        WHEN 'derived_from' THEN 0
+                        WHEN 'supports' THEN 0
+                        WHEN 'updates' THEN 0
+                        WHEN 'contradicts' THEN 0
+                        WHEN 'supersedes' THEN 0
+                        WHEN 'mentions' THEN 2
+                        ELSE 1
+                    END AS edge_priority
+             FROM notes source
              JOIN note_relations relation ON relation.src_uid = source.note_uid
              JOIN notes target ON target.note_uid = relation.target_uid
              WHERE source.id = ?1 AND target.status != 'deprecated'
-         ) ORDER BY other",
+         ) GROUP BY other ORDER BY MIN(edge_priority), other",
     )?;
     let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -351,15 +361,25 @@ fn outgoing_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
 fn incoming_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
     let mut statement = conn.prepare_cached(
         "SELECT other FROM (
-             SELECT l.src AS other FROM links l
+             SELECT l.src AS other, 1 AS edge_priority FROM links l
              JOIN notes n ON n.id = l.src
              WHERE l.dst = ?1 AND n.status != 'deprecated'
-             UNION
-             SELECT source.id AS other FROM notes target
+             UNION ALL
+             SELECT source.id AS other,
+                    CASE relation.kind
+                        WHEN 'derived_from' THEN 0
+                        WHEN 'supports' THEN 0
+                        WHEN 'updates' THEN 0
+                        WHEN 'contradicts' THEN 0
+                        WHEN 'supersedes' THEN 0
+                        WHEN 'mentions' THEN 2
+                        ELSE 1
+                    END AS edge_priority
+             FROM notes target
              JOIN note_relations relation ON relation.target_uid = target.note_uid
              JOIN notes source ON source.note_uid = relation.src_uid
              WHERE target.id = ?1 AND source.status != 'deprecated'
-         ) ORDER BY other",
+         ) GROUP BY other ORDER BY MIN(edge_priority), other",
     )?;
     let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -397,6 +417,15 @@ mod tests {
         conn.execute(
             "INSERT INTO notes(id, title, status, document) VALUES (?1, ?1, 'stable', ?2)",
             rusqlite::params![id, text],
+        )
+        .unwrap();
+    }
+
+    fn add_note_with_uid(conn: &Connection, id: &str, uid: &str) {
+        conn.execute(
+            "INSERT INTO notes(id, note_uid, title, status, document)
+             VALUES (?1, ?2, ?1, 'stable', ?1)",
+            rusqlite::params![id, uid],
         )
         .unwrap();
     }
@@ -511,6 +540,48 @@ mod tests {
                 .map(|document| document.id.as_str())
                 .collect::<Vec<_>>(),
             ["seed", "alive", "shared"]
+        );
+    }
+
+    #[test]
+    fn explicit_typed_relations_rank_before_links_and_mentions() {
+        let conn = setup();
+        for (id, uid) in [
+            ("seed", "uid-seed"),
+            ("zeta-evidence", "uid-evidence"),
+            ("middle-link", "uid-link"),
+            ("aster-mention", "uid-mention"),
+        ] {
+            add_note_with_uid(&conn, id, uid);
+        }
+        conn.execute_batch(
+            "INSERT INTO links VALUES ('seed', 'middle-link');
+             INSERT INTO note_relations VALUES ('uid-seed', 'mentions', 'uid-mention');
+             INSERT INTO note_relations VALUES ('uid-seed', 'supports', 'uid-evidence');",
+        )
+        .unwrap();
+
+        assert_eq!(
+            outgoing_ids(&conn, "seed").unwrap(),
+            ["zeta-evidence", "middle-link", "aster-mention"]
+        );
+        let bundle = context_documents(
+            &conn,
+            &["seed".into()],
+            RetrievalOptions {
+                document_limit: 3,
+                include_incoming: false,
+                ..RetrievalOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            bundle
+                .documents
+                .iter()
+                .map(|document| document.id.as_str())
+                .collect::<Vec<_>>(),
+            ["seed", "zeta-evidence", "middle-link"]
         );
     }
 
