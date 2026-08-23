@@ -1913,7 +1913,9 @@ fn call_tool_with_search_options(
                     .map(|hit| hit.id.clone())
                     .collect::<Vec<_>>();
                 let options = crate::retrieval::RetrievalOptions::default();
-                match crate::retrieval::context_documents(&snapshot, &hit_ids, options) {
+                match crate::retrieval::context_documents_for_query(
+                    &snapshot, &hit_ids, query, options,
+                ) {
                     Ok(bundle) => Some(bundle),
                     Err(error) => {
                         // リンク表だけが壊れても検索seed本文は返す。正常な0リンクとは
@@ -1922,9 +1924,10 @@ fn call_tool_with_search_options(
                             .push(crate::degradation::Degradation::ContextRetrieval {
                                 detail: error.to_string(),
                             });
-                        Some(crate::retrieval::context_documents(
+                        Some(crate::retrieval::context_documents_for_query(
                             &snapshot,
                             &hit_ids,
+                            query,
                             crate::retrieval::RetrievalOptions {
                                 max_depth: 0,
                                 include_incoming: false,

@@ -288,8 +288,8 @@ mod tests {
             .iter()
             .find(|summary| summary.strategy == crate::retrieval_eval::EvaluationStrategy::LinkedV1)
             .unwrap();
-        assert_eq!(linked.spill_cases, 3);
-        assert_eq!(linked.budget_exhausted_cases, 3);
+        assert_eq!(linked.spill_cases, 0);
+        assert_eq!(linked.budget_exhausted_cases, 0);
         assert!(render_markdown(&report).contains("現行baselineではFAILを許容"));
     }
 
