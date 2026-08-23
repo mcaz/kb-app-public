@@ -1,0 +1,564 @@
+{
+  "schema_version": "1.0.0",
+  "notes": [
+    {
+      "expected_id": "notes/aurora-backup-guide",
+      "title": "Aurora Backup Guide",
+      "description": "夜間バックアップと復元確認の標準手順",
+      "body": "Aurora backup guideでは、夜間snapshotの取得後にrestore verificationを実行する。",
+      "tags": ["retrieval-holdout", "operations"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "holdout/aurora-backup" }
+    },
+    {
+      "expected_id": "notes/認証障害対応",
+      "title": "認証障害対応",
+      "description": "認証基盤で障害が発生した際の初動",
+      "body": "認証の失敗率を確認し、鍵更新とセッション失効の順に切り分ける。",
+      "tags": ["retrieval-holdout", "security"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "holdout/auth-incident" }
+    },
+    {
+      "expected_id": "notes/polaris-change-index",
+      "title": "Polaris Change Index",
+      "description": "Polaris変更作業の入口",
+      "body": "Polaris change index。緊急時は[rollback authority](/notes/polaris-rollback-policy.md)を参照する。",
+      "tags": ["retrieval-holdout", "release"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/polaris-index" }
+    },
+    {
+      "expected_id": "notes/polaris-rollback-policy",
+      "title": "Polaris Rollback Policy",
+      "description": "Polarisを切り戻す判断基準",
+      "body": "Rollbackには当番責任者の承認コードPOL-17と影響範囲の記録が必要である。",
+      "tags": ["retrieval-holdout", "release"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "holdout/polaris-rollback" }
+    },
+    {
+      "expected_id": "notes/luna-access-policy",
+      "title": "Luna Access Policy",
+      "description": "Lunaへの現在のアクセス規則",
+      "body": "luna access policyの現行規則では、管理端末と短期認証tokenを必須とする。",
+      "tags": ["retrieval-holdout", "security"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/luna-access" }
+    },
+    {
+      "expected_id": "notes/luna-access-audit-record",
+      "title": "Luna Access Audit Record",
+      "description": "Luna access policyの監査記録",
+      "body": "luna access policyの導入監査では、旧端末からの移行件数を確認した。",
+      "tags": ["retrieval-holdout", "security"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/luna-access" }
+    },
+    {
+      "expected_id": "notes/payroll-cutoff-tokyo",
+      "title": "Payroll Cutoff Tokyo",
+      "description": "給与締めの地域別切替記録",
+      "body": "給与締め 地域別切替記録。移行担当、承認経路、照合項目、再実行条件、通知先、監査保存期間を共通テンプレートに沿って記録する。処理前後の件数を照合し、差分がある場合は確定を止める。地域固有事項は東京例外として、祝日前日の締切を16時へ繰り上げる。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/payroll-tokyo" }
+    },
+    {
+      "expected_id": "notes/payroll-cutoff-osaka",
+      "title": "Payroll Cutoff Osaka",
+      "description": "給与締めの地域別切替記録",
+      "body": "給与締め 地域別切替記録。移行担当、承認経路、照合項目、再実行条件、通知先、監査保存期間を共通テンプレートに沿って記録する。処理前後の件数を照合し、差分がある場合は確定を止める。地域固有事項は大阪例外として、月末営業日の締切を17時まで延長する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/payroll-osaka" }
+    },
+
+    {
+      "expected_id": "notes/請求アラート運用",
+      "title": "請求アラート運用",
+      "description": "請求額の異常検知に対する一次対応手順",
+      "body": "しきい値超過時は請求担当へ連絡し、利用量と単価の双方を照合する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "holdout/billing-alert" }
+    },
+    {
+      "expected_id": "notes/billing-operations-report-a",
+      "title": "Billing Operations Report A",
+      "description": "請求基盤の月次運用記録",
+      "body": "請求アラート運用の検索語を含む月次報告。請求アラート運用の通知件数と処理時間を集計した。請求アラート運用の改善候補を記録する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/billing-report-a" }
+    },
+    {
+      "expected_id": "notes/billing-operations-report-b",
+      "title": "Billing Operations Report B",
+      "description": "請求基盤の月次運用記録",
+      "body": "請求アラート運用の検索語を含む月次報告。請求アラート運用の通知件数と処理時間を集計した。請求アラート運用の改善候補を記録する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/billing-report-b" }
+    },
+    {
+      "expected_id": "notes/billing-operations-report-c",
+      "title": "Billing Operations Report C",
+      "description": "請求基盤の月次運用記録",
+      "body": "請求アラート運用の検索語を含む月次報告。請求アラート運用の通知件数と処理時間を集計した。請求アラート運用の改善候補を記録する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/billing-report-c" }
+    },
+    {
+      "expected_id": "notes/billing-operations-report-d",
+      "title": "Billing Operations Report D",
+      "description": "請求基盤の月次運用記録",
+      "body": "請求アラート運用の検索語を含む月次報告。請求アラート運用の通知件数と処理時間を集計した。請求アラート運用の改善候補を記録する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/billing-report-d" }
+    },
+    {
+      "expected_id": "notes/billing-operations-report-e",
+      "title": "Billing Operations Report E",
+      "description": "請求基盤の月次運用記録",
+      "body": "請求アラート運用の検索語を含む月次報告。請求アラート運用の通知件数と処理時間を集計した。請求アラート運用の改善候補を記録する。",
+      "tags": ["retrieval-holdout", "finance"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/billing-report-e" }
+    },
+
+    {
+      "expected_id": "notes/helios-migration-review-2024",
+      "title": "Helios Migration Review 2024",
+      "description": "Helios移行時の判断記録",
+      "body": "helios 移行 当時 判断理由。二重書き期間を二週間にした理由は、照合遅延を観測するためだった。",
+      "tags": ["retrieval-holdout", "migration"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "holdout/helios-migration-2024" }
+    },
+    {
+      "expected_id": "notes/helios-current-plan-a",
+      "title": "Helios Current Plan A",
+      "description": "Heliosの現行移行計画",
+      "body": "helios 移行 当時 判断理由を参照する現行計画。helios 移行 当時 判断理由の検索導線を維持する。",
+      "tags": ["retrieval-holdout", "migration"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/helios-current-a" }
+    },
+    {
+      "expected_id": "notes/helios-current-plan-b",
+      "title": "Helios Current Plan B",
+      "description": "Heliosの現行移行計画",
+      "body": "helios 移行 当時 判断理由を参照する現行計画。helios 移行 当時 判断理由の検索導線を維持する。",
+      "tags": ["retrieval-holdout", "migration"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/helios-current-b" }
+    },
+    {
+      "expected_id": "notes/helios-current-plan-c",
+      "title": "Helios Current Plan C",
+      "description": "Heliosの現行移行計画",
+      "body": "helios 移行 当時 判断理由を参照する現行計画。helios 移行 当時 判断理由の検索導線を維持する。",
+      "tags": ["retrieval-holdout", "migration"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/helios-current-c" }
+    },
+    {
+      "expected_id": "notes/helios-current-plan-d",
+      "title": "Helios Current Plan D",
+      "description": "Heliosの現行移行計画",
+      "body": "helios 移行 当時 判断理由を参照する現行計画。helios 移行 当時 判断理由の検索導線を維持する。",
+      "tags": ["retrieval-holdout", "migration"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/helios-current-d" }
+    },
+    {
+      "expected_id": "notes/helios-current-plan-e",
+      "title": "Helios Current Plan E",
+      "description": "Heliosの現行移行計画",
+      "body": "helios 移行 当時 判断理由を参照する現行計画。helios 移行 当時 判断理由の検索導線を維持する。",
+      "tags": ["retrieval-holdout", "migration"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/helios-current-e" }
+    },
+
+    {
+      "expected_id": "notes/orchid-export-procedure",
+      "title": "Orchid Export Procedure",
+      "description": "アカウント終了時のデータexport手順",
+      "body": "対象者の承認番号を確認し、暗号化したexportを期限付き領域へ配置する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "holdout/orchid-export" }
+    },
+    {
+      "expected_id": "notes/people-operations-map",
+      "title": "People Operations Map",
+      "description": "人事関連手順の索引",
+      "body": "退職処理では[紫鞄プロトコル](/notes/orchid-export-procedure.md)を利用する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/people-map" }
+    },
+    {
+      "expected_id": "notes/offboarding-search-note-a",
+      "title": "Offboarding Search Note A",
+      "description": "退職処理の検索メモ",
+      "body": "紫鞄プロトコルという旧称で問い合わせがあったことを記録する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/offboarding-a" }
+    },
+    {
+      "expected_id": "notes/offboarding-search-note-b",
+      "title": "Offboarding Search Note B",
+      "description": "退職処理の検索メモ",
+      "body": "紫鞄プロトコルという旧称で問い合わせがあったことを記録する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/offboarding-b" }
+    },
+    {
+      "expected_id": "notes/offboarding-search-note-c",
+      "title": "Offboarding Search Note C",
+      "description": "退職処理の検索メモ",
+      "body": "紫鞄プロトコルという旧称で問い合わせがあったことを記録する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/offboarding-c" }
+    },
+    {
+      "expected_id": "notes/offboarding-search-note-d",
+      "title": "Offboarding Search Note D",
+      "description": "退職処理の検索メモ",
+      "body": "紫鞄プロトコルという旧称で問い合わせがあったことを記録する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/offboarding-d" }
+    },
+    {
+      "expected_id": "notes/offboarding-search-note-e",
+      "title": "Offboarding Search Note E",
+      "description": "退職処理の検索メモ",
+      "body": "紫鞄プロトコルという旧称で問い合わせがあったことを記録する。",
+      "tags": ["retrieval-holdout", "privacy"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/offboarding-e" }
+    },
+
+    {
+      "expected_id": "notes/nova-incident-decision",
+      "title": "Nova Incident Decision",
+      "description": "Nova障害の原因判定",
+      "body": "nova 障害 原因 証拠を比較し、復旧方法を決定した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "holdout/nova-incident" },
+      "relations": [
+        { "type": "mentions", "target_id": "notes/nova-timeline-01" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-02" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-03" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-04" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-05" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-06" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-07" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-08" },
+        { "type": "mentions", "target_id": "notes/nova-timeline-09" },
+        { "type": "supports", "target_id": "notes/tls-capture-record" }
+      ]
+    },
+    {
+      "expected_id": "notes/tls-capture-record",
+      "title": "TLS Capture Record",
+      "description": "一次通信記録",
+      "body": "取得したpacket captureはTLS再交渉の直後に接続が切れたことを示す。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-evidence" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-01",
+      "title": "Nova Timeline 01",
+      "description": "Nova障害の時系列メモ",
+      "body": "監視通知を受信した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-01" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-02",
+      "title": "Nova Timeline 02",
+      "description": "Nova障害の時系列メモ",
+      "body": "担当者が調査を開始した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-02" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-03",
+      "title": "Nova Timeline 03",
+      "description": "Nova障害の時系列メモ",
+      "body": "一次切り分けを完了した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-03" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-04",
+      "title": "Nova Timeline 04",
+      "description": "Nova障害の時系列メモ",
+      "body": "暫定対処を適用した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-04" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-05",
+      "title": "Nova Timeline 05",
+      "description": "Nova障害の時系列メモ",
+      "body": "利用者への告知時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-05" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-06",
+      "title": "Nova Timeline 06",
+      "description": "Nova障害の時系列メモ",
+      "body": "恒久対応を完了した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-06" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-07",
+      "title": "Nova Timeline 07",
+      "description": "Nova障害の時系列メモ",
+      "body": "監視しきい値を通常値へ戻した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-07" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-08",
+      "title": "Nova Timeline 08",
+      "description": "Nova障害の時系列メモ",
+      "body": "事後レビューを開始した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-08" }
+    },
+    {
+      "expected_id": "notes/nova-timeline-09",
+      "title": "Nova Timeline 09",
+      "description": "Nova障害の時系列メモ",
+      "body": "改善項目を担当チームへ移管した時刻を記録した。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/nova-timeline-09" }
+    },
+
+    {
+      "expected_id": "notes/quasar-recovery-manual",
+      "title": "Quasar Recovery Manual",
+      "description": "Quasarの災害復旧手順書",
+      "body": "## Quasar災害復旧\nquasar 災害復旧 checksum 手順。整合性不一致後は鍵をローテーションしてから再同期する。\n## 定期確認\n担当者、実施時刻、対象範囲、結果、再試行回数を記録し、通常運用の監査証跡として保存する。\n",
+      "body_repetitions": 350,
+      "tags": ["retrieval-holdout", "recovery"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "holdout/quasar-recovery" }
+    },
+    {
+      "expected_id": "notes/quasar-weekly-check-a",
+      "title": "Quasar Weekly Check A",
+      "description": "Quasar復旧訓練の週次記録",
+      "body": "quasar 災害復旧 checksum 手順の確認日と参加者を記録した。",
+      "tags": ["retrieval-holdout", "recovery"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/quasar-weekly-a" }
+    },
+    {
+      "expected_id": "notes/quasar-weekly-check-b",
+      "title": "Quasar Weekly Check B",
+      "description": "Quasar復旧訓練の週次記録",
+      "body": "quasar 災害復旧 checksum 手順の確認日と参加者を記録した。",
+      "tags": ["retrieval-holdout", "recovery"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/quasar-weekly-b" }
+    },
+    {
+      "expected_id": "notes/quasar-weekly-check-c",
+      "title": "Quasar Weekly Check C",
+      "description": "Quasar復旧訓練の週次記録",
+      "body": "quasar 災害復旧 checksum 手順の確認日と参加者を記録した。",
+      "tags": ["retrieval-holdout", "recovery"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/quasar-weekly-c" }
+    },
+
+    {
+      "expected_id": "notes/atlas-capacity-risk",
+      "title": "Atlas Capacity Risk",
+      "description": "Atlas容量計画の独立リスク評価",
+      "body": "atlas 四半期 容量レビューでは、backup windowが月末処理と衝突する固有リスクを確認した。",
+      "tags": ["retrieval-holdout", "capacity"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "holdout/atlas-risk" }
+    },
+    {
+      "expected_id": "notes/atlas-capacity-digest-a",
+      "title": "Atlas Capacity Digest A",
+      "description": "Atlas容量レビューの配布用digest",
+      "body": "atlas 四半期 容量レビュー。利用率、予約量、増設時期をまとめた定型digest。",
+      "tags": ["retrieval-holdout", "capacity"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/atlas-digest-a" }
+    },
+    {
+      "expected_id": "notes/atlas-capacity-digest-b",
+      "title": "Atlas Capacity Digest B",
+      "description": "Atlas容量レビューの配布用digest",
+      "body": "atlas 四半期 容量レビュー。利用率、予約量、増設時期をまとめた定型digest。",
+      "tags": ["retrieval-holdout", "capacity"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/atlas-digest-b" }
+    },
+    {
+      "expected_id": "notes/atlas-capacity-digest-c",
+      "title": "Atlas Capacity Digest C",
+      "description": "Atlas容量レビューの配布用digest",
+      "body": "atlas 四半期 容量レビュー。利用率、予約量、増設時期をまとめた定型digest。",
+      "tags": ["retrieval-holdout", "capacity"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/atlas-digest-c" }
+    },
+    {
+      "expected_id": "notes/atlas-capacity-digest-d",
+      "title": "Atlas Capacity Digest D",
+      "description": "Atlas容量レビューの配布用digest",
+      "body": "atlas 四半期 容量レビュー。利用率、予約量、増設時期をまとめた定型digest。",
+      "tags": ["retrieval-holdout", "capacity"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/atlas-digest-d" }
+    },
+    {
+      "expected_id": "notes/atlas-capacity-digest-e",
+      "title": "Atlas Capacity Digest E",
+      "description": "Atlas容量レビューの配布用digest",
+      "body": "atlas 四半期 容量レビュー。利用率、予約量、増設時期をまとめた定型digest。",
+      "tags": ["retrieval-holdout", "capacity"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/atlas-digest-e" }
+    },
+
+    {
+      "expected_id": "notes/blue-lantern-incident-record",
+      "title": "Blue Lantern Incident Record",
+      "description": "旧監視基盤で発生した障害の判断記録",
+      "body": "切替を延期した理由は、夜間batchの再送確認が完了していなかったためである。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "holdout/blue-lantern-history" }
+    },
+    {
+      "expected_id": "notes/monitoring-history-map",
+      "title": "Monitoring History Map",
+      "description": "監視基盤の過去記録への索引",
+      "body": "旧監視基盤については[青い灯台 障害 当時 理由](/notes/blue-lantern-incident-record.md)を参照する。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/monitoring-map" }
+    },
+    {
+      "expected_id": "notes/blue-lantern-current-a",
+      "title": "Blue Lantern Current A",
+      "description": "現行監視基盤の運用メモ",
+      "body": "青い灯台 障害 当時 理由という旧称から現行ページへ誘導する。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/blue-lantern-current-a" }
+    },
+    {
+      "expected_id": "notes/blue-lantern-current-b",
+      "title": "Blue Lantern Current B",
+      "description": "現行監視基盤の運用メモ",
+      "body": "青い灯台 障害 当時 理由という旧称から現行ページへ誘導する。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/blue-lantern-current-b" }
+    },
+    {
+      "expected_id": "notes/blue-lantern-current-c",
+      "title": "Blue Lantern Current C",
+      "description": "現行監視基盤の運用メモ",
+      "body": "青い灯台 障害 当時 理由という旧称から現行ページへ誘導する。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/blue-lantern-current-c" }
+    },
+    {
+      "expected_id": "notes/blue-lantern-current-d",
+      "title": "Blue Lantern Current D",
+      "description": "現行監視基盤の運用メモ",
+      "body": "青い灯台 障害 当時 理由という旧称から現行ページへ誘導する。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/blue-lantern-current-d" }
+    },
+    {
+      "expected_id": "notes/blue-lantern-current-e",
+      "title": "Blue Lantern Current E",
+      "description": "現行監視基盤の運用メモ",
+      "body": "青い灯台 障害 当時 理由という旧称から現行ページへ誘導する。",
+      "tags": ["retrieval-holdout", "incident"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "holdout/blue-lantern-current-e" }
+    }
+  ],
+  "controls": {
+    "schema_version": "2.0.0",
+    "stability_runs": 3,
+    "cases": [
+      {
+        "id": "holdout-exact-title",
+        "queries": { "codex": "aurora backup guide", "claude_code": "aurora backup guide", "chatgpt": "aurora backup guide" },
+        "required": ["notes/aurora-backup-guide"],
+        "body_requirements": [{ "id": "restore-verification", "all_terms": ["restore verification"] }]
+      },
+      {
+        "id": "holdout-short-japanese",
+        "queries": { "codex": "認証", "claude_code": "認証", "chatgpt": "認証" },
+        "required": ["notes/認証障害対応"],
+        "body_requirements": [{ "id": "auth-response", "all_terms": ["セッション失効"] }]
+      },
+      {
+        "id": "holdout-linked-policy",
+        "queries": { "codex": "polaris change index", "claude_code": "polaris change index", "chatgpt": "polaris change index" },
+        "required": ["notes/polaris-rollback-policy"],
+        "relevant": ["notes/polaris-change-index"],
+        "body_requirements": [{ "id": "approval-code", "all_terms": ["POL-17"] }]
+      },
+      {
+        "id": "holdout-current-canonical",
+        "queries": { "codex": "luna access policy", "claude_code": "luna access policy", "chatgpt": "luna access policy" },
+        "required": ["notes/luna-access-policy"],
+        "relevant": ["notes/luna-access-audit-record"],
+        "body_requirements": [{ "id": "current-device-rule", "all_terms": ["管理端末"] }]
+      },
+      {
+        "id": "holdout-similar-template-distinct-regions",
+        "queries": { "codex": "給与締め 地域別切替記録", "claude_code": "給与締め 地域別切替記録", "chatgpt": "給与締め 地域別切替記録" },
+        "required": ["notes/payroll-cutoff-tokyo", "notes/payroll-cutoff-osaka"],
+        "body_requirements": [
+          { "id": "tokyo-exception", "all_terms": ["東京例外"] },
+          { "id": "osaka-exception", "all_terms": ["大阪例外"] }
+        ]
+      }
+    ]
+  },
+  "challenges": {
+    "schema_version": "2.0.0",
+    "stability_runs": 3,
+    "cases": [
+      {
+        "id": "holdout-field-ranking",
+        "queries": { "codex": "請求アラート運用", "claude_code": "請求アラート 運用", "chatgpt": "請求アラート運用" },
+        "required": ["notes/請求アラート運用"],
+        "body_requirements": [{ "id": "billing-response", "all_terms": ["利用量と単価"] }]
+      },
+      {
+        "id": "holdout-historical-intent",
+        "queries": { "codex": "helios 移行 当時 判断理由", "claude_code": "helios 移行 当時の判断理由", "chatgpt": "helios 移行 なぜ 当時" },
+        "required": ["notes/helios-migration-review-2024"],
+        "body_requirements": [{ "id": "dual-write-reason", "all_terms": ["二週間", "照合遅延"] }]
+      },
+      {
+        "id": "holdout-anchor-alias",
+        "queries": { "codex": "紫鞄プロトコル", "claude_code": "紫鞄プロトコル", "chatgpt": "紫鞄プロトコル" },
+        "required": ["notes/orchid-export-procedure"],
+        "relevant": ["notes/people-operations-map"],
+        "body_requirements": [{ "id": "export-approval", "all_terms": ["承認番号", "期限付き領域"] }]
+      },
+      {
+        "id": "holdout-relation-evidence",
+        "queries": { "codex": "nova 障害 原因 証拠", "claude_code": "nova 障害 原因 証拠", "chatgpt": "nova 障害 原因 証拠" },
+        "required": ["notes/tls-capture-record"],
+        "relevant": ["notes/nova-incident-decision"],
+        "body_requirements": [{ "id": "packet-proof", "all_terms": ["packet capture", "TLS再交渉"] }]
+      },
+      {
+        "id": "holdout-long-passage",
+        "queries": { "codex": "quasar 災害復旧 checksum 手順", "claude_code": "quasar 災害復旧 checksum 手順", "chatgpt": "quasar 災害復旧 checksum 手順" },
+        "required": ["notes/quasar-recovery-manual"],
+        "body_requirements": [{ "id": "recovery-action", "all_terms": ["整合性不一致後は鍵をローテーション"] }]
+      },
+      {
+        "id": "holdout-dedup-facets",
+        "queries": { "codex": "atlas 四半期 容量レビュー", "claude_code": "atlas 四半期 容量レビュー", "chatgpt": "atlas 四半期 容量レビュー" },
+        "required": ["notes/atlas-capacity-risk"],
+        "relevant": [
+          "notes/atlas-capacity-digest-a",
+          "notes/atlas-capacity-digest-b",
+          "notes/atlas-capacity-digest-c",
+          "notes/atlas-capacity-digest-d",
+          "notes/atlas-capacity-digest-e"
+        ],
+        "body_requirements": [{ "id": "capacity-risk", "all_terms": ["backup window", "月末処理"] }]
+      },
+      {
+        "id": "holdout-anchor-intent-combined",
+        "queries": { "codex": "青い灯台 障害 当時 理由", "claude_code": "青い灯台 障害 当時 理由", "chatgpt": "青い灯台 障害 当時 理由" },
+        "required": ["notes/blue-lantern-incident-record"],
+        "relevant": ["notes/monitoring-history-map"],
+        "body_requirements": [{ "id": "postponement-reason", "all_terms": ["夜間batch", "再送確認"] }]
+      }
+    ]
+  }
+}
