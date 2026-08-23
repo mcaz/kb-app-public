@@ -99,6 +99,7 @@ token／spill低下は効果として扱う。
 個別実験:
 
 - [Field別ランキング](retrieval-field-ranking.md)
+- [Query intentランキング](retrieval-query-intent.md)
 
 ## 範囲外
 

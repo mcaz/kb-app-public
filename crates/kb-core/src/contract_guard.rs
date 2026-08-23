@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
-const CONTRACT_SHA256: &str = "89677c57b6cf59f60d14a5cc6ce47eb6403a8abc531cc20fb6d0e184d3de2e6f";
+const CONTRACT_SHA256: &str = "c458ce0c158d246a2003c56ff0e320f20b93bb521ec5bb0f98dea4658c6db2dd";
 
 #[test]
 fn contract_document_matches_reviewed_core_enforcement() {

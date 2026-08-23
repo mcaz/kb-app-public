@@ -73,9 +73,11 @@ AIの自律削除が根拠・矛盾・後継の鎖を黙って切らない。
 
 ### 5. retrieval
 
-全文・意味検索が作る候補集合は変えず、その中でactive canonicalをlegacy、record、historical、
-proposal、supersededより優先する。typed relationは既存Markdown linkと同じ有向グラフとして
-自動retrieval・関連ノート・グラフ表示へ加える。類似度だけでの自動mergeは行わない。
+完全タイトル一致をlocatorとして最優先にする。queryに現行・履歴・記録・理由を示す明示語がある
+場合はauthorityのstatus・role・namespaceとの整合を加点し、それ以外の候補間ではactive canonicalを
+legacy、record、historical、proposal、supersededより優先する。typed relationは既存Markdown linkと
+同じ有向グラフとして自動retrieval・関連ノート・グラフ表示へ加える。類似度だけでの自動mergeは
+行わない。
 
 ## 互換性と段階移行
 
