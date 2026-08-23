@@ -768,7 +768,11 @@ pub(crate) fn upsert(
         rusqlite::params![id, search_text],
     )?;
     conn.execute("DELETE FROM links WHERE src=?1", [id])?;
-    conn.execute("DELETE FROM fts_anchor WHERE src=?1", [id])?;
+    // srcはFTS上でUNINDEXEDなので全走査になる。新規ノートには旧rowが存在しないため省略し、
+    // 更新時だけ削除することで10k初回rebuildを二次時間にしない。
+    if old_body.is_some() {
+        conn.execute("DELETE FROM fts_anchor WHERE src=?1", [id])?;
+    }
     for link in extract_link_entries(id, &note.body) {
         conn.execute(
             "INSERT OR IGNORE INTO links(src, dst) VALUES(?1, ?2)",
@@ -951,6 +955,56 @@ mod tests {
             .unwrap();
         assert_eq!(schema, "8");
         assert_eq!(dst, "notes/kepler");
+    }
+
+    #[test]
+    fn updating_a_note_replaces_its_anchor_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "Storage Map",
+                "See [old blue alias](/notes/kepler.md).",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+
+        vault
+            .agent_update_note(
+                &conn,
+                crate::vault::NoteUpdate {
+                    id: &id,
+                    title: None,
+                    body: Some("See [new green alias](/notes/kepler.md)."),
+                    description: None,
+                    tags: None,
+                    authority: None,
+                    relations: None,
+                    allow_new_tags: false,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+
+        let old_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM fts_anchor WHERE fts_anchor MATCH ?1",
+                [crate::tokenize::match_expr("old blue alias")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let new_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM fts_anchor WHERE fts_anchor MATCH ?1",
+                [crate::tokenize::match_expr("new green alias")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_count, 0);
+        assert_eq!(new_count, 1);
     }
 
     /// 2026-08-20、`runtime_store=db-v1`を持つ既存v3 DBへ`document`列だけを
