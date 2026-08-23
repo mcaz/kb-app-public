@@ -53,6 +53,14 @@ impl Hit {
             _ => 2,
         }
     }
+
+    fn intent_alignment(&self, intent: QueryIntent) -> u8 {
+        intent.alignment(AuthorityValues {
+            namespace: self.namespace.as_deref(),
+            role: self.authority_role.as_deref(),
+            status: self.authority_status.as_deref(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -74,6 +82,7 @@ pub fn search(conn: &Connection, query: &str, limit: usize) -> SearchOutcome {
 pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> SearchOutcome {
     let mut hits: Vec<Hit> = Vec::new();
     let mut degraded = Vec::new();
+    let intent = QueryIntent::from_query(query);
 
     // 主経路: lindera 分かち書き + bm25
     match main_search(conn, query, limit, any) {
@@ -110,11 +119,12 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
         }),
     }
 
-    // 完全タイトル一致はlocatorとしての明示性が最も高い。該当しない候補間では従来どおり
-    // active canonicalを優先し、authority規律をfield rankingで失わない。
+    // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
+    // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
     hits.sort_by_key(|hit| {
         (
             !exact_title_match(query, hit.title.as_deref()),
+            std::cmp::Reverse(hit.intent_alignment(intent)),
             hit.authority_priority(),
         )
     });
@@ -145,6 +155,7 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
         return Ok(Vec::new());
     }
     let field_terms = field_terms(query);
+    let intent = QueryIntent::from_query(query);
     // 再順位付け対象を最終件数より広く取る。8倍は10k fixtureでも最大40行に留まり、
     // 本文反復だけが強い候補の外からtitle一致を回収できる実測上の最小余裕。
     let candidate_limit = limit.saturating_mul(FIELD_RANKING_CANDIDATE_MULTIPLIER);
@@ -164,7 +175,9 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
         let authority_scope = r.get::<_, Option<String>>(12)?;
         let description = r.get::<_, Option<String>>(13)?;
         let body = r.get::<_, String>(14)?;
-        let score = field_score(
+        let authority_role = r.get::<_, Option<String>>(10)?;
+        let authority_status = r.get::<_, Option<String>>(11)?;
+        let field_score = field_score(
             query,
             &field_terms,
             FieldValues {
@@ -176,6 +189,11 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
                 body: &body,
             },
         );
+        let intent_alignment = intent.alignment(AuthorityValues {
+            namespace: namespace.as_deref(),
+            role: authority_role.as_deref(),
+            status: authority_status.as_deref(),
+        });
         Ok((
             Hit {
                 id: r.get(0)?,
@@ -190,11 +208,15 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
                 updated: r.get(7)?,
                 note_uid: r.get(8)?,
                 namespace,
-                authority_role: r.get(10)?,
-                authority_status: r.get(11)?,
+                authority_role,
+                authority_status,
                 authority_scope,
             },
-            score,
+            RankingScore {
+                exact_title: field_score.exact_title,
+                intent_alignment,
+                weighted_term_matches: field_score.weighted_term_matches,
+            },
         ))
     })?;
     let mut candidates = rows
@@ -215,6 +237,114 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
 struct FieldScore {
     exact_title: bool,
     weighted_term_matches: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct RankingScore {
+    exact_title: bool,
+    intent_alignment: u8,
+    weighted_term_matches: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct QueryIntent {
+    current: bool,
+    historical: bool,
+    record: bool,
+    rationale: bool,
+}
+
+impl QueryIntent {
+    fn from_query(query: &str) -> Self {
+        let query = query.to_lowercase();
+        let latin_terms = query
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .filter(|term| !term.is_empty())
+            .collect::<Vec<_>>();
+        Self {
+            current: contains_intent_marker(
+                &query,
+                &latin_terms,
+                &["現行", "現在", "最新", "いま", "今の"],
+                &["current", "latest", "now"],
+            ),
+            historical: contains_intent_marker(
+                &query,
+                &latin_terms,
+                &["当時", "過去", "以前", "履歴", "旧版"],
+                &["historical", "history", "previous", "former"],
+            ),
+            record: contains_intent_marker(
+                &query,
+                &latin_terms,
+                &["記録", "ログ", "監査", "日付", "日時", "いつ"],
+                &["record", "records", "log", "logs", "audit", "date", "when"],
+            ),
+            rationale: contains_intent_marker(
+                &query,
+                &latin_terms,
+                &["理由", "根拠", "経緯", "なぜ", "どうして"],
+                &["rationale", "reason", "reasons", "why", "decision"],
+            ),
+        }
+    }
+
+    fn alignment(self, authority: AuthorityValues<'_>) -> u8 {
+        let mut score = 0;
+        if self.current {
+            score += match authority.status {
+                Some("active") => 32,
+                _ => 0,
+            };
+            score += match authority.role {
+                Some("canonical") => 16,
+                _ => 0,
+            };
+        }
+        if self.historical {
+            score += match authority.status {
+                Some("historical") => 32,
+                Some("superseded") => 16,
+                _ => 0,
+            };
+        }
+        if self.record {
+            score += match authority.role {
+                Some("record") => 16,
+                _ => 0,
+            };
+            score += match authority.namespace {
+                Some("records") => 8,
+                _ => 0,
+            };
+        }
+        if self.rationale {
+            score += match authority.namespace {
+                Some("decisions" | "records") => 8,
+                _ => 0,
+            };
+        }
+        score
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AuthorityValues<'a> {
+    namespace: Option<&'a str>,
+    role: Option<&'a str>,
+    status: Option<&'a str>,
+}
+
+fn contains_intent_marker(
+    query: &str,
+    latin_terms: &[&str],
+    japanese_markers: &[&str],
+    latin_markers: &[&str],
+) -> bool {
+    japanese_markers.iter().any(|marker| query.contains(marker))
+        || latin_markers
+            .iter()
+            .any(|marker| latin_terms.contains(marker))
 }
 
 struct FieldValues<'a> {
@@ -1153,6 +1283,86 @@ mod tests {
         assert!(tags > scope);
         assert!(scope > body_once);
         assert_eq!(body_once, body_repeated);
+    }
+
+    #[test]
+    fn explicit_historical_intent_ranks_a_record_before_active_canonical_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let target = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "Orion Audit Record 2025",
+                    body: "orion 当時 理由。The historical record explains the accepted exception.",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Records,
+                        role: AuthorityRole::Record,
+                        status: AuthorityStatus::Historical,
+                        scope: "test/orion-history".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        for suffix in ["a", "b", "c", "d", "e"] {
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: &format!("Orion Current Policy {suffix}"),
+                        body: "orion 当時 理由 orion 当時 理由 orion 当時 理由",
+                        description: None,
+                        tags: &["test".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: format!("test/orion-current-{suffix}"),
+                        },
+                        relations: Vec::new(),
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .unwrap();
+        }
+
+        let hits = super::search_mode(&conn, "orion 当時 理由", 5, true).hits;
+        assert_eq!(
+            hits.first().map(|hit| hit.id.as_str()),
+            Some(target.as_str())
+        );
+    }
+
+    #[test]
+    fn query_intent_alignment_is_explicit_and_neutral_queries_add_no_bias() {
+        let active_canonical = super::AuthorityValues {
+            namespace: Some("knowledge"),
+            role: Some("canonical"),
+            status: Some("active"),
+        };
+        let historical_record = super::AuthorityValues {
+            namespace: Some("records"),
+            role: Some("record"),
+            status: Some("historical"),
+        };
+        let historical = super::QueryIntent::from_query("当時の理由");
+        let current = super::QueryIntent::from_query("現行の手順");
+        let neutral = super::QueryIntent::from_query("orion policy");
+        let substring_only = super::QueryIntent::from_query("unknown catalog");
+
+        assert!(historical.alignment(historical_record) > historical.alignment(active_canonical));
+        assert!(current.alignment(active_canonical) > current.alignment(historical_record));
+        assert_eq!(neutral.alignment(active_canonical), 0);
+        assert_eq!(neutral.alignment(historical_record), 0);
+        assert_eq!(substring_only.alignment(active_canonical), 0);
+        assert_eq!(substring_only.alignment(historical_record), 0);
     }
 
     #[test]

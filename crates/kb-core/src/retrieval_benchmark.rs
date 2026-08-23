@@ -277,9 +277,6 @@ mod tests {
         assert_eq!(
             report.challenges.gate.failed_cases,
             [
-                "query-intent-historical@codex",
-                "query-intent-historical@claude_code",
-                "query-intent-historical@chatgpt",
                 "anchor-text-alias@codex",
                 "anchor-text-alias@claude_code",
                 "anchor-text-alias@chatgpt",
