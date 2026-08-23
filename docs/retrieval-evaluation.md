@@ -60,6 +60,42 @@ kb --vault <name> eval retrieval --cases /private/path/golden.json --gate
 
 集計はcaseごとのmacro average。JSONとMarkdownの両方に`linked_v1 - top3`の差を残す。
 
+## Google型改善の合成benchmark
+
+実KB由来のqueryをcommitせず、field別ranking、query intent、anchor text、typed relation
+ranking、passage ranking、重複排除・多様化の改善前後を固定条件で測るため、
+[実行可能な合成suite](../schemas/examples/retrieval-google-benchmark.example.json)を用意した。
+形式は[benchmark schema](../schemas/retrieval-benchmark.schema.json)に従う。
+
+```bash
+kb eval retrieval-benchmark \
+  --suite schemas/examples/retrieval-google-benchmark.example.json
+kb eval retrieval-benchmark \
+  --suite schemas/examples/retrieval-google-benchmark.example.json \
+  --format json --output /private/path/baseline.json
+```
+
+コマンドは44件のsynthetic noteを一時Vaultへ作り、終了時に破棄する。既定vault、実KB、
+外部analyticsは使わない。suiteは次の2集合を同じ検索・評価実装へ渡す。
+
+- `controls`: 現行で守る5ケース。完全タイトル、日本語2文字語、日本語部分語、1-hop link、
+  active canonicalを3 surfaceで測り、gateはPASSでなければ回帰
+- `challenges`: 改善対象6ケース。現行でFAILすること自体をgateにせず、改善前後のrecall、
+  precision、token、上限到達、失敗surfaceを比較する
+
+`core 0.0.1`での初期baselineは次のとおり。時間は端末差が大きいためbaseline契約に含めない。
+
+| suite | surfaces | linked selected recall | linked precision | avg tokens | spill | budget exhausted | failed surfaces |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| controls | 15 | 100.0% | 73.7% | 806 | 0 | 0 | 0 |
+| challenges | 18 | 16.7% | 18.3% | 5,693 | 3 | 3 | 15 |
+
+challengeの15 failureは、field別ranking、historical intent、anchor text、typed relation ranking、
+重複排除・多様化の各3 surface。passage rankingケースはrequired本文を取得できる一方、巨大本文を
+丸ごと選ぶため3 surfaceともspill／budget exhaustedになる。各改善PRでは同じJSON reportを保存し、
+このsemantic baselineとの差分を示す。controlの低下は回帰、challengeのrecall／precision改善と
+token／spill低下は効果として扱う。
+
 ## 範囲外
 
 この評価器は発話本文を自動記録せず、外部analyticsへ送信しない。本文要件は意味を表す

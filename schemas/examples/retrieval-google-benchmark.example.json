@@ -1,0 +1,458 @@
+{
+  "schema_version": "1.0.0",
+  "notes": [
+    {
+      "expected_id": "notes/sirius-deployment-guide",
+      "title": "Sirius Deployment Guide",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Sirius deployment guide defines the release verification sequence.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "benchmark/sirius-deployment" }
+    },
+    {
+      "expected_id": "notes/認証運用",
+      "title": "認証運用",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "認証の更新手順と失敗時の確認項目。",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "benchmark/authentication" }
+    },
+    {
+      "expected_id": "notes/製品ライフサイクル",
+      "title": "製品ライフサイクル",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "製品ライフサイクルの各段階を管理する。",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/product-lifecycle" }
+    },
+    {
+      "expected_id": "notes/retrieval-beacon",
+      "title": "Retrieval Beacon",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "retrieval beacon points to the [linked policy](/notes/hidden-context-policy.md).",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/retrieval-beacon" }
+    },
+    {
+      "expected_id": "notes/hidden-context-policy",
+      "title": "Hidden Context Policy",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Linked context policy requires the hidden evidence to be included.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/hidden-context" }
+    },
+    {
+      "expected_id": "notes/vega-access-policy-canonical",
+      "title": "Vega Access Policy Canonical",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "vega access policy is the current canonical rule.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/vega-access" }
+    },
+    {
+      "expected_id": "notes/vega-access-policy-record",
+      "title": "Vega Access Policy Record",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "vega access policy implementation record.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/vega-access" }
+    },
+
+    {
+      "expected_id": "notes/nebula-launch-checklist",
+      "title": "Nebula Launch Checklist",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Exact go or no-go procedure for the Nebula release.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/nebula-checklist" }
+    },
+    {
+      "expected_id": "notes/nebula-operations-canonical-a",
+      "title": "Nebula Operations Canonical A",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "nebula launch checklist nebula launch checklist nebula launch checklist nebula launch checklist",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/nebula-decoy-a" }
+    },
+    {
+      "expected_id": "notes/nebula-operations-canonical-b",
+      "title": "Nebula Operations Canonical B",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "nebula launch checklist nebula launch checklist nebula launch checklist nebula launch checklist",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/nebula-decoy-b" }
+    },
+    {
+      "expected_id": "notes/nebula-operations-canonical-c",
+      "title": "Nebula Operations Canonical C",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "nebula launch checklist nebula launch checklist nebula launch checklist nebula launch checklist",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/nebula-decoy-c" }
+    },
+    {
+      "expected_id": "notes/nebula-operations-canonical-d",
+      "title": "Nebula Operations Canonical D",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "nebula launch checklist nebula launch checklist nebula launch checklist nebula launch checklist",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/nebula-decoy-d" }
+    },
+    {
+      "expected_id": "notes/nebula-operations-canonical-e",
+      "title": "Nebula Operations Canonical E",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "nebula launch checklist nebula launch checklist nebula launch checklist nebula launch checklist",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/nebula-decoy-e" }
+    },
+
+    {
+      "expected_id": "notes/orion-audit-record-2025",
+      "title": "Orion Audit Record 2025",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "The historical Orion 2025 audit rationale records why the exception was accepted.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "benchmark/orion-audit-2025" }
+    },
+    {
+      "expected_id": "notes/orion-current-policy-a",
+      "title": "Orion Current Policy A",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-a" }
+    },
+    {
+      "expected_id": "notes/orion-current-policy-b",
+      "title": "Orion Current Policy B",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-b" }
+    },
+    {
+      "expected_id": "notes/orion-current-policy-c",
+      "title": "Orion Current Policy C",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-c" }
+    },
+    {
+      "expected_id": "notes/orion-current-policy-d",
+      "title": "Orion Current Policy D",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-d" }
+    },
+    {
+      "expected_id": "notes/orion-current-policy-e",
+      "title": "Orion Current Policy E",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "orion 2025 audit rationale orion 2025 audit rationale orion 2025 audit rationale",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/orion-current-e" }
+    },
+
+    {
+      "expected_id": "notes/kepler-retention-procedure",
+      "title": "Kepler Retention Procedure",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Retained material is encrypted and removed after the approved interval.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "benchmark/kepler-retention" }
+    },
+    {
+      "expected_id": "notes/storage-map",
+      "title": "Storage Map",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "See the [blue comet policy](/notes/kepler-retention-procedure.md) for the authoritative steps.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/storage-map" }
+    },
+    {
+      "expected_id": "notes/blue-comet-index-a",
+      "title": "Blue Comet Index A",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "blue comet policy blue comet policy blue comet policy blue comet policy",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/blue-comet-a" }
+    },
+    {
+      "expected_id": "notes/blue-comet-index-b",
+      "title": "Blue Comet Index B",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "blue comet policy blue comet policy blue comet policy blue comet policy",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/blue-comet-b" }
+    },
+    {
+      "expected_id": "notes/blue-comet-index-c",
+      "title": "Blue Comet Index C",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "blue comet policy blue comet policy blue comet policy blue comet policy",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/blue-comet-c" }
+    },
+    {
+      "expected_id": "notes/blue-comet-index-d",
+      "title": "Blue Comet Index D",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "blue comet policy blue comet policy blue comet policy blue comet policy",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/blue-comet-d" }
+    },
+    {
+      "expected_id": "notes/blue-comet-index-e",
+      "title": "Blue Comet Index E",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "blue comet policy blue comet policy blue comet policy blue comet policy",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/blue-comet-e" }
+    },
+
+    {
+      "expected_id": "notes/rhea-incident-decision",
+      "title": "Rhea Incident Decision",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "rhea incident cause evidence is evaluated by this decision.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "benchmark/rhea-incident" },
+      "relations": [
+        { "type": "mentions", "target_id": "notes/aster-mention-01" },
+        { "type": "mentions", "target_id": "notes/aster-mention-02" },
+        { "type": "mentions", "target_id": "notes/aster-mention-03" },
+        { "type": "mentions", "target_id": "notes/aster-mention-04" },
+        { "type": "mentions", "target_id": "notes/aster-mention-05" },
+        { "type": "mentions", "target_id": "notes/aster-mention-06" },
+        { "type": "mentions", "target_id": "notes/aster-mention-07" },
+        { "type": "mentions", "target_id": "notes/aster-mention-08" },
+        { "type": "mentions", "target_id": "notes/aster-mention-09" },
+        { "type": "supports", "target_id": "notes/zeta-telemetry-record" }
+      ]
+    },
+    {
+      "expected_id": "notes/aster-mention-01",
+      "title": "Aster Mention 01",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention one.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-01" }
+    },
+    {
+      "expected_id": "notes/aster-mention-02",
+      "title": "Aster Mention 02",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention two.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-02" }
+    },
+    {
+      "expected_id": "notes/aster-mention-03",
+      "title": "Aster Mention 03",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention three.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-03" }
+    },
+    {
+      "expected_id": "notes/aster-mention-04",
+      "title": "Aster Mention 04",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention four.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-04" }
+    },
+    {
+      "expected_id": "notes/aster-mention-05",
+      "title": "Aster Mention 05",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention five.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-05" }
+    },
+    {
+      "expected_id": "notes/aster-mention-06",
+      "title": "Aster Mention 06",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention six.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-06" }
+    },
+    {
+      "expected_id": "notes/aster-mention-07",
+      "title": "Aster Mention 07",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention seven.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-07" }
+    },
+    {
+      "expected_id": "notes/aster-mention-08",
+      "title": "Aster Mention 08",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention eight.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-08" }
+    },
+    {
+      "expected_id": "notes/aster-mention-09",
+      "title": "Aster Mention 09",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Background mention nine.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/aster-09" }
+    },
+    {
+      "expected_id": "notes/zeta-telemetry-record",
+      "title": "Zeta Telemetry Record",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "Primary telemetry validates the root finding without repeating its lookup phrase.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/zeta-telemetry" }
+    },
+
+    {
+      "expected_id": "notes/atlas-recovery-handbook",
+      "title": "Atlas Recovery Handbook",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "atlas recovery checksum procedure. Relevant passage: rotate the key after a checksum mismatch. Supporting filler explains routine recovery context.\n",
+      "body_repetitions": 350,
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "benchmark/atlas-recovery" }
+    },
+
+    {
+      "expected_id": "notes/mercury-budget-risk-facet",
+      "title": "Mercury Budget Risk Facet",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "mercury budget review identifies the unique cashflow risk facet.",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "benchmark/mercury-risk" }
+    },
+    {
+      "expected_id": "notes/mercury-program-digest-a",
+      "title": "Mercury Program Digest A",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "mercury budget review mercury budget review mercury budget review mercury budget review",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/mercury-digest-a" }
+    },
+    {
+      "expected_id": "notes/mercury-program-digest-b",
+      "title": "Mercury Program Digest B",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "mercury budget review mercury budget review mercury budget review mercury budget review",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/mercury-digest-b" }
+    },
+    {
+      "expected_id": "notes/mercury-program-digest-c",
+      "title": "Mercury Program Digest C",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "mercury budget review mercury budget review mercury budget review mercury budget review",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/mercury-digest-c" }
+    },
+    {
+      "expected_id": "notes/mercury-program-digest-d",
+      "title": "Mercury Program Digest D",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "mercury budget review mercury budget review mercury budget review mercury budget review",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/mercury-digest-d" }
+    },
+    {
+      "expected_id": "notes/mercury-program-digest-e",
+      "title": "Mercury Program Digest E",
+      "description": "Synthetic retrieval benchmark fixture",
+      "body": "mercury budget review mercury budget review mercury budget review mercury budget review",
+      "tags": ["retrieval-eval"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "benchmark/mercury-digest-e" }
+    }
+  ],
+  "controls": {
+    "schema_version": "2.0.0",
+    "stability_runs": 3,
+    "cases": [
+      {
+        "id": "control-exact-title",
+        "queries": { "codex": "sirius deployment guide", "claude_code": "sirius deployment guide", "chatgpt": "sirius deployment guide" },
+        "required": ["notes/sirius-deployment-guide"],
+        "body_requirements": [{ "id": "release-sequence", "all_terms": ["release verification sequence"] }]
+      },
+      {
+        "id": "control-two-character-japanese",
+        "queries": { "codex": "認証", "claude_code": "認証", "chatgpt": "認証" },
+        "required": ["notes/認証運用"],
+        "body_requirements": [{ "id": "authentication", "all_terms": ["認証の更新手順"] }]
+      },
+      {
+        "id": "control-partial-japanese",
+        "queries": { "codex": "サイクル", "claude_code": "サイクル", "chatgpt": "サイクル" },
+        "required": ["notes/製品ライフサイクル"],
+        "body_requirements": [{ "id": "lifecycle", "all_terms": ["ライフサイクル"] }]
+      },
+      {
+        "id": "control-linked-one-hop",
+        "queries": { "codex": "retrieval beacon", "claude_code": "retrieval beacon", "chatgpt": "retrieval beacon" },
+        "required": ["notes/hidden-context-policy"],
+        "relevant": ["notes/retrieval-beacon"],
+        "body_requirements": [{ "id": "linked-context", "all_terms": ["hidden evidence"] }]
+      },
+      {
+        "id": "control-current-canonical",
+        "queries": { "codex": "vega access policy", "claude_code": "vega access policy", "chatgpt": "vega access policy" },
+        "required": ["notes/vega-access-policy-canonical"],
+        "relevant": ["notes/vega-access-policy-record"],
+        "body_requirements": [{ "id": "current-policy", "all_terms": ["current canonical rule"] }]
+      }
+    ]
+  },
+  "challenges": {
+    "schema_version": "2.0.0",
+    "stability_runs": 3,
+    "cases": [
+      {
+        "id": "fielded-title-ranking",
+        "queries": { "codex": "nebula launch checklist", "claude_code": "nebula launch checklist", "chatgpt": "nebula launch checklist" },
+        "required": ["notes/nebula-launch-checklist"],
+        "body_requirements": [{ "id": "go-no-go", "all_terms": ["go or no-go procedure"] }]
+      },
+      {
+        "id": "query-intent-historical",
+        "queries": { "codex": "orion 2025 audit rationale", "claude_code": "orion 2025 audit rationale", "chatgpt": "orion 2025 audit rationale" },
+        "required": ["notes/orion-audit-record-2025"],
+        "body_requirements": [{ "id": "historical-reason", "all_terms": ["why the exception was accepted"] }]
+      },
+      {
+        "id": "anchor-text-alias",
+        "queries": { "codex": "blue comet policy", "claude_code": "blue comet policy", "chatgpt": "blue comet policy" },
+        "required": ["notes/kepler-retention-procedure"],
+        "relevant": ["notes/storage-map"],
+        "body_requirements": [{ "id": "retention", "all_terms": ["approved interval"] }]
+      },
+      {
+        "id": "typed-relation-ranking",
+        "queries": { "codex": "rhea incident cause evidence", "claude_code": "rhea incident cause evidence", "chatgpt": "rhea incident cause evidence" },
+        "required": ["notes/zeta-telemetry-record"],
+        "relevant": ["notes/rhea-incident-decision"],
+        "body_requirements": [{ "id": "telemetry", "all_terms": ["Primary telemetry"] }]
+      },
+      {
+        "id": "passage-ranking-cost",
+        "queries": { "codex": "atlas recovery checksum procedure", "claude_code": "atlas recovery checksum procedure", "chatgpt": "atlas recovery checksum procedure" },
+        "required": ["notes/atlas-recovery-handbook"],
+        "body_requirements": [{ "id": "recovery-action", "all_terms": ["rotate the key after a checksum mismatch"] }]
+      },
+      {
+        "id": "dedup-diversification",
+        "queries": { "codex": "mercury budget review", "claude_code": "mercury budget review", "chatgpt": "mercury budget review" },
+        "required": ["notes/mercury-budget-risk-facet"],
+        "body_requirements": [{ "id": "unique-facet", "all_terms": ["unique cashflow risk facet"] }]
+      }
+    ]
+  }
+}

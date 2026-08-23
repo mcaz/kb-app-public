@@ -277,6 +277,17 @@ enum EvalCommand {
         #[arg(long)]
         gate: bool,
     },
+    /// 合成fixtureで現行controlとGoogle型retrieval challengeを測る
+    RetrievalBenchmark {
+        /// schemas/retrieval-benchmark.schema.jsonに従う合成suite
+        #[arg(long)]
+        suite: PathBuf,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
+        format: ReportFormat,
+        /// 省略時はstdoutへ出力
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// 固定20ケースについて4方式のRule配信contextを生成する
     RuleDeliveryPlan {
         /// schemas/rule-delivery-eval.schema.jsonに従うsuite
@@ -900,6 +911,27 @@ fn main() -> Result<()> {
                     );
                 }
             }
+            EvalCommand::RetrievalBenchmark {
+                suite,
+                format,
+                output,
+            } => {
+                let input = fs::read_to_string(&suite).with_context(|| {
+                    format!("retrieval benchmark suiteを読めない: {}", suite.display())
+                })?;
+                let suite: kb_core::retrieval_benchmark::RetrievalBenchmarkSuite =
+                    serde_json::from_str(&input).with_context(|| {
+                        format!("retrieval benchmark suite JSONが不正: {}", suite.display())
+                    })?;
+                let report = kb_core::retrieval_benchmark::evaluate(&suite)?;
+                let rendered = match format {
+                    ReportFormat::Json => serde_json::to_string_pretty(&report)?,
+                    ReportFormat::Markdown => {
+                        kb_core::retrieval_benchmark::render_markdown(&report)
+                    }
+                };
+                write_eval_output(output.as_ref(), &rendered, "Retrieval benchmark report")?;
+            }
             EvalCommand::RuleDeliveryPlan {
                 suite,
                 mode,
@@ -1079,6 +1111,7 @@ mod tests {
             "embed status".to_string(),
             "eval".to_string(),
             "eval retrieval".to_string(),
+            "eval retrieval-benchmark".to_string(),
             "eval rule-delivery-fixture".to_string(),
             "eval rule-delivery-plan".to_string(),
             "eval rule-delivery-score".to_string(),
@@ -1152,6 +1185,32 @@ mod tests {
         assert!(matches!(format, ReportFormat::Markdown));
         assert!(output.is_none());
         assert!(!gate);
+    }
+
+    #[test]
+    fn retrieval_benchmark_is_isolated_and_defaults_to_markdown() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "eval",
+            "retrieval-benchmark",
+            "--suite",
+            "/repo/synthetic.json",
+        ])
+        .unwrap();
+        let Command::Eval {
+            command:
+                EvalCommand::RetrievalBenchmark {
+                    suite,
+                    format,
+                    output,
+                },
+        } = cli.command
+        else {
+            panic!("eval retrieval-benchmarkとして解釈されなかった");
+        };
+        assert_eq!(suite, PathBuf::from("/repo/synthetic.json"));
+        assert!(matches!(format, ReportFormat::Markdown));
+        assert!(output.is_none());
     }
 
     #[test]
