@@ -76,8 +76,9 @@ AIの自律削除が根拠・矛盾・後継の鎖を黙って切らない。
 完全タイトル一致をlocatorとして最優先にする。queryに現行・履歴・記録・理由を示す明示語がある
 場合はauthorityのstatus・role・namespaceとの整合を加点し、それ以外の候補間ではactive canonicalを
 legacy、record、historical、proposal、supersededより優先する。typed relationは既存Markdown linkと
-同じ有向グラフとして自動retrieval・関連ノート・グラフ表示へ加える。類似度だけでの自動mergeは
-行わない。
+同じ有向グラフとして自動retrieval・関連ノート・グラフ表示へ加える。標準Markdown linkのanchor
+textはリンク先へ紐づく派生FTS索引にし、本文OR検索より弱い信号として全query term一致時だけリンク先を
+昇格する。類似度だけでの自動mergeは行わない。
 
 ## 互換性と段階移行
 

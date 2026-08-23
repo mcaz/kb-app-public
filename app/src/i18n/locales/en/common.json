@@ -117,6 +117,7 @@
     "embedding_index_pending": "The smart-search index is catching up ({{remaining}} remaining)",
     "embedding_index": "The smart-search index could not be updated: {{detail}}",
     "main_search": "Primary search is unavailable. Showing the results that were retrieved: {{detail}}",
+    "anchor_search": "Link-text search is unavailable. Showing the results that were retrieved: {{detail}}",
     "semantic_search": "Smart search is unavailable. Showing full-text results: {{detail}}",
     "rescue_search": "Partial-match search is unavailable. Showing the results that were retrieved: {{detail}}",
     "related_notes": "Linked notes could not be retrieved. An empty list may not mean zero: {{detail}}",

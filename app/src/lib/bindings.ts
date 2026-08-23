@@ -231,7 +231,7 @@ export type ConnectState = {
 export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
 
 /**  データ本体を返し続けられる部分失敗。 */
-export type Degradation = { code: "remote_sync"; detail: string } | { code: "markdown_export"; detail: string } | { code: "index_sync"; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
+export type Degradation = { code: "remote_sync"; detail: string } | { code: "markdown_export"; detail: string } | { code: "index_sync"; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
 
 export type DeliveryStatus = 
 /**  `local_only` なので送信対象ではない。 */
@@ -374,7 +374,10 @@ export type Hit_Deserialize = {
 	title: string | null,
 	status: string,
 	snippet: string,
-	/**  "main"(分かち書き bm25)/ "vec"(意味検索)/ "rescue"(trigram/LIKE) */
+	/**
+	 *  "main"(分かち書き bm25)/ "anchor"(リンク文言)/ "vec"(意味検索)/
+	 *  "rescue"(trigram/LIKE)と融合形
+	 */
 	via: string,
 	/**  意味検索のコサイン距離(関連判定は RRF でなく生距離で — 旧 KB の実測教訓) */
 	distance: number | null,
@@ -397,7 +400,10 @@ export type Hit_Serialize = {
 	title: string | null,
 	status: string,
 	snippet: string,
-	/**  "main"(分かち書き bm25)/ "vec"(意味検索)/ "rescue"(trigram/LIKE) */
+	/**
+	 *  "main"(分かち書き bm25)/ "anchor"(リンク文言)/ "vec"(意味検索)/
+	 *  "rescue"(trigram/LIKE)と融合形
+	 */
 	via: string,
 	/**  意味検索のコサイン距離(関連判定は RRF でなく生距離で — 旧 KB の実測教訓) */
 	distance?: number | null,

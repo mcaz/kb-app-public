@@ -277,9 +277,6 @@ mod tests {
         assert_eq!(
             report.challenges.gate.failed_cases,
             [
-                "anchor-text-alias@codex",
-                "anchor-text-alias@claude_code",
-                "anchor-text-alias@chatgpt",
                 "typed-relation-ranking@codex",
                 "typed-relation-ranking@claude_code",
                 "typed-relation-ranking@chatgpt",
