@@ -277,9 +277,6 @@ mod tests {
         assert_eq!(
             report.challenges.gate.failed_cases,
             [
-                "typed-relation-ranking@codex",
-                "typed-relation-ranking@claude_code",
-                "typed-relation-ranking@chatgpt",
                 "dedup-diversification@codex",
                 "dedup-diversification@claude_code",
                 "dedup-diversification@chatgpt",
