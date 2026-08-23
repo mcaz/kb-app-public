@@ -277,9 +277,6 @@ mod tests {
         assert_eq!(
             report.challenges.gate.failed_cases,
             [
-                "fielded-title-ranking@codex",
-                "fielded-title-ranking@claude_code",
-                "fielded-title-ranking@chatgpt",
                 "query-intent-historical@codex",
                 "query-intent-historical@claude_code",
                 "query-intent-historical@chatgpt",

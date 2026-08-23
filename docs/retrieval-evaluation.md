@@ -88,13 +88,17 @@ kb eval retrieval-benchmark \
 | suite | surfaces | linked selected recall | linked precision | avg tokens | spill | budget exhausted | failed surfaces |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | controls | 15 | 100.0% | 73.7% | 806 | 0 | 0 | 0 |
-| challenges | 18 | 16.7% | 18.3% | 5,693 | 3 | 3 | 15 |
+| challenges | 18 | 16.7% | 18.3% | 5,684 | 3 | 3 | 15 |
 
 challengeの15 failureは、field別ranking、historical intent、anchor text、typed relation ranking、
 重複排除・多様化の各3 surface。passage rankingケースはrequired本文を取得できる一方、巨大本文を
 丸ごと選ぶため3 surfaceともspill／budget exhaustedになる。各改善PRでは同じJSON reportを保存し、
 このsemantic baselineとの差分を示す。controlの低下は回帰、challengeのrecall／precision改善と
 token／spill低下は効果として扱う。
+
+個別実験:
+
+- [Field別ランキング](retrieval-field-ranking.md)
 
 ## 範囲外
 
