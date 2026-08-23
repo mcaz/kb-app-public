@@ -17,6 +17,7 @@ pub enum Degradation {
     EmbeddingIndexPending { remaining: usize },
     EmbeddingIndex { detail: String },
     MainSearch { detail: String },
+    AnchorSearch { detail: String },
     SemanticSearch { detail: String },
     RescueSearch { detail: String },
     RelatedNotes { detail: String },
@@ -43,6 +44,7 @@ impl Degradation {
             Self::EmbeddingIndexPending { .. } => "embedding_index_pending",
             Self::EmbeddingIndex { .. } => "embedding_index",
             Self::MainSearch { .. } => "main_search",
+            Self::AnchorSearch { .. } => "anchor_search",
             Self::SemanticSearch { .. } => "semantic_search",
             Self::RescueSearch { .. } => "rescue_search",
             Self::RelatedNotes { .. } => "related_notes",
@@ -78,6 +80,9 @@ impl std::fmt::Display for Degradation {
                 write!(f, "かしこい検索の索引更新に失敗: {detail}")
             }
             Self::MainSearch { detail } => write!(f, "主索引が利用できない: {detail}"),
+            Self::AnchorSearch { detail } => {
+                write!(f, "リンク文言索引が利用できない: {detail}")
+            }
             Self::SemanticSearch { detail } => {
                 write!(f, "かしこい検索が一時停止: {detail}")
             }
@@ -126,6 +131,7 @@ mod tests {
             Degradation::EmbeddingIndexPending { remaining: 3 },
             Degradation::EmbeddingIndex { detail: "x".into() },
             Degradation::MainSearch { detail: "x".into() },
+            Degradation::AnchorSearch { detail: "x".into() },
             Degradation::SemanticSearch { detail: "x".into() },
             Degradation::RescueSearch { detail: "x".into() },
             Degradation::RelatedNotes { detail: "x".into() },

@@ -22,7 +22,8 @@ pub struct Hit {
     pub title: Option<String>,
     pub status: String,
     pub snippet: String,
-    /// "main"(分かち書き bm25)/ "vec"(意味検索)/ "rescue"(trigram/LIKE)
+    /// "main"(分かち書き bm25)/ "anchor"(リンク文言)/ "vec"(意味検索)/
+    /// "rescue"(trigram/LIKE)と融合形
     pub via: &'static str,
     /// 意味検索のコサイン距離(関連判定は RRF でなく生距離で — 旧 KB の実測教訓)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,6 +62,10 @@ impl Hit {
             status: self.authority_status.as_deref(),
         })
     }
+
+    fn anchor_matched(&self) -> bool {
+        matches!(self.via, "anchor" | "main_anchor" | "both_anchor")
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -92,6 +97,16 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
         }),
     }
 
+    // リンク文言はリンク先自身に語が無い別名を拾うための弱い索引として扱う。
+    match anchor_search(conn, query, limit) {
+        Ok(anchor_hits) => merge_anchor_hits(&mut hits, anchor_hits),
+        Err(error) => degraded.push(Degradation::AnchorSearch {
+            detail: error.to_string(),
+        }),
+    }
+    rank_hits(&mut hits, query, intent);
+    hits.truncate(limit);
+
     // 意味検索(段1)。モデル未導入なら黙って全文のみ(段0 の正常形)。
     // 導入済みで失敗した場合は必ず劣化として見せる(沈黙停止の教訓)。
     match vec_search(conn, query, limit) {
@@ -121,13 +136,8 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
 
     // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
     // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
-    hits.sort_by_key(|hit| {
-        (
-            !exact_title_match(query, hit.title.as_deref()),
-            std::cmp::Reverse(hit.intent_alignment(intent)),
-            hit.authority_priority(),
-        )
-    });
+    rank_hits(&mut hits, query, intent);
+    hits.truncate(limit);
 
     let related = match related_of(conn, hits.first().map(|hit| hit.id.as_str())) {
         Ok(related) => related,
@@ -142,6 +152,31 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
         hits,
         related,
         degraded,
+    }
+}
+
+fn rank_hits(hits: &mut [Hit], query: &str, intent: QueryIntent) {
+    hits.sort_by_key(|hit| {
+        (
+            !exact_title_match(query, hit.title.as_deref()),
+            std::cmp::Reverse(hit.intent_alignment(intent)),
+            !hit.anchor_matched(),
+            hit.authority_priority(),
+        )
+    });
+}
+
+fn merge_anchor_hits(hits: &mut Vec<Hit>, anchor_hits: Vec<Hit>) {
+    for anchor in anchor_hits {
+        if let Some(existing) = hits.iter_mut().find(|hit| hit.id == anchor.id) {
+            existing.via = match existing.via {
+                "main" => "main_anchor",
+                "both" => "both_anchor",
+                other => other,
+            };
+        } else {
+            hits.push(anchor);
+        }
     }
 }
 
@@ -230,6 +265,48 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
         .into_iter()
         .take(limit)
         .map(|(hit, _, _)| hit)
+        .collect())
+}
+
+fn anchor_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit>> {
+    // 本文OR検索より弱い補助信号なので、別名全体が一致したときだけリンク先を昇格する。
+    let expr = match_expr(query);
+    if expr.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut statement = conn.prepare_cached(
+        "SELECT anchor.dst, note.title, note.status,
+                snippet(fts_anchor, 2, '[', ']', '…', 12), note.origin, note.tags,
+                note.created, note.generated_at, note.note_uid, note.namespace,
+                note.authority_role, note.authority_status, note.authority_scope
+         FROM fts_anchor anchor JOIN notes note ON note.id = anchor.dst
+         WHERE fts_anchor MATCH ?1 AND note.status != 'deprecated'
+         ORDER BY rank LIMIT ?2",
+    )?;
+    let rows = statement.query_map(rusqlite::params![expr, limit as i64], |row| {
+        Ok(Hit {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            status: row.get(2)?,
+            snippet: row.get(3)?,
+            via: "anchor",
+            distance: None,
+            origin: row.get(4)?,
+            tags: split_tags(row.get::<_, Option<String>>(5)?),
+            created: row.get(6)?,
+            updated: row.get(7)?,
+            note_uid: row.get(8)?,
+            namespace: row.get(9)?,
+            authority_role: row.get(10)?,
+            authority_status: row.get(11)?,
+            authority_scope: row.get(12)?,
+        })
+    })?;
+    let mut seen = std::collections::HashSet::new();
+    Ok(rows
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|hit| seen.insert(hit.id.clone()))
         .collect())
 }
 
@@ -489,7 +566,11 @@ fn fuse(fts: Vec<Hit>, vec_hits: Vec<(Hit, f32)>, limit: usize) -> Vec<Hit> {
         byid.entry(h.id.clone())
             .and_modify(|e| {
                 e.distance = Some(dist);
-                e.via = "both";
+                e.via = if e.anchor_matched() {
+                    "both_anchor"
+                } else {
+                    "both"
+                };
             })
             .or_insert(h);
     }
@@ -1363,6 +1444,81 @@ mod tests {
         assert_eq!(neutral.alignment(historical_record), 0);
         assert_eq!(substring_only.alignment(active_canonical), 0);
         assert_eq!(substring_only.alignment(historical_record), 0);
+    }
+
+    #[test]
+    fn matching_anchor_text_ranks_the_link_target_without_target_term_repetition() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let target = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "Kepler Retention Procedure",
+                    body: "Retained material is removed after the approved interval.",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Procedures,
+                        role: AuthorityRole::Canonical,
+                        status: AuthorityStatus::Active,
+                        scope: "test/kepler-retention".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    title: "Storage Map",
+                    body: &format!("See [blue comet policy](/{target}.md)."),
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Records,
+                        role: AuthorityRole::Record,
+                        status: AuthorityStatus::Active,
+                        scope: "test/storage-map".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: false,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+        for suffix in ["a", "b", "c", "d", "e"] {
+            vault
+                .propose(
+                    &conn,
+                    NoteProposal {
+                        title: &format!("Blue Comet Index {suffix}"),
+                        body: "blue comet policy blue comet policy blue comet policy",
+                        description: None,
+                        tags: &["test".into()],
+                        authority: Authority {
+                            namespace: NoteNamespace::Knowledge,
+                            role: AuthorityRole::Canonical,
+                            status: AuthorityStatus::Active,
+                            scope: format!("test/blue-comet-{suffix}"),
+                        },
+                        relations: Vec::new(),
+                        allow_new_tags: false,
+                        client: "test/client",
+                    },
+                )
+                .unwrap();
+        }
+
+        let hits = super::search_mode(&conn, "blue comet policy", 5, true).hits;
+        assert_eq!(
+            hits.first().map(|hit| (hit.id.as_str(), hit.via)),
+            Some((target.as_str(), "anchor"))
+        );
     }
 
     #[test]

@@ -912,7 +912,10 @@ mod tests {
              CREATE INDEX note_relations_target ON note_relations(target_uid);
              CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
              CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
-             CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');",
+             CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');
+             CREATE VIRTUAL TABLE fts_anchor USING fts5(
+                 src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
+             );",
         )
         .unwrap();
         conn

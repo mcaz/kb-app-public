@@ -117,6 +117,7 @@
     "embedding_index_pending": "かしこい検索の索引が追い付き中です(残り {{remaining}} 件)",
     "embedding_index": "かしこい検索の索引を更新できませんでした: {{detail}}",
     "main_search": "主検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
+    "anchor_search": "リンク文言検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
     "semantic_search": "かしこい検索を利用できません。全文検索の結果を表示しています: {{detail}}",
     "rescue_search": "部分一致検索を利用できません。取得できた結果だけを表示しています: {{detail}}",
     "related_notes": "つながりを取得できませんでした。0件とは限りません: {{detail}}",

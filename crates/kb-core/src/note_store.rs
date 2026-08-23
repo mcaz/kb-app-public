@@ -163,6 +163,10 @@ pub(crate) fn delete(
     )?;
     transaction.execute("DELETE FROM fts_main WHERE id = ?1", [id.as_str()])?;
     transaction.execute("DELETE FROM fts_tri WHERE id = ?1", [id.as_str()])?;
+    transaction.execute(
+        "DELETE FROM fts_anchor WHERE src = ?1 OR dst = ?1",
+        [id.as_str()],
+    )?;
     transaction.execute("DELETE FROM note_vecs WHERE id = ?1", [id.as_str()])?;
     if let Some(note_uid) = note_uid {
         transaction.execute("DELETE FROM note_relations WHERE src_uid = ?1", [&note_uid])?;

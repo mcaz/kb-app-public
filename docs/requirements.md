@@ -99,7 +99,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     安定scopeを持つ。同じnamespace+scopeのactive canonicalは1件だけにし、根拠・更新・矛盾・後継は
     `note_uid`を端点にするtyped relationで表す。`proposal`は下書きや人間承認待ちを意味せず、
     AIが正本候補を区別する内部分類である。検索は完全タイトル一致を最優先とし、明示された現行・
-    履歴・記録・理由intentだけauthorityの既定順を上書きする。legacyノートは明示移行まで
+    履歴・記録・理由intentだけauthorityの既定順を上書きする。標準Markdown linkのanchor textは
+    全query term一致時だけリンク先を昇格する弱い派生索引にする。legacyノートは明示移行まで
     envelope不在で読める。
 11. **継続蒸留は固定snapshotから再現可能に始める**。read-only plannerは同一SQLite read transactionの
     全documentへ入力hashを付け、snapshot digestと決定的plan IDを返す。previewはpull・sync・migration・

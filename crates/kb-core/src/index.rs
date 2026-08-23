@@ -13,7 +13,7 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "7";
+const SCHEMA_VERSION: &str = "8";
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let conn = open_db_recovery(vault)?;
@@ -145,7 +145,11 @@ fn init_schema(conn: &Connection) -> Result<()> {
             r.get(0)
         })
         .ok();
-    if matches!(ver.as_deref(), Some("3" | "4" | "5" | "6" | SCHEMA_VERSION)) {
+    if matches!(
+        ver.as_deref(),
+        Some("3" | "4" | "5" | "6" | "7" | SCHEMA_VERSION)
+    ) {
+        let rebuild_anchor_index = ver.as_deref() != Some(SCHEMA_VERSION);
         // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
         // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
         for (col, ddl) in [
@@ -192,6 +196,9 @@ fn init_schema(conn: &Connection) -> Result<()> {
                  PRIMARY KEY(src_uid, kind, target_uid)
              );
              CREATE INDEX IF NOT EXISTS note_relations_target ON note_relations(target_uid);
+             CREATE VIRTUAL TABLE IF NOT EXISTS fts_anchor USING fts5(
+                 src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
+             );
              CREATE TABLE IF NOT EXISTS note_exports(
                  seq INTEGER PRIMARY KEY AUTOINCREMENT,
                  op_id TEXT NOT NULL UNIQUE,
@@ -262,6 +269,9 @@ fn init_schema(conn: &Connection) -> Result<()> {
                 conn.execute_batch(ddl)?;
             }
         }
+        if rebuild_anchor_index {
+            rebuild_anchor_index_from_notes(conn)?;
+        }
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?1)",
             [SCHEMA_VERSION],
@@ -272,6 +282,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
         "
         DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS links;
         DROP TABLE IF EXISTS fts_main; DROP TABLE IF EXISTS fts_tri;
+        DROP TABLE IF EXISTS fts_anchor;
         CREATE TABLE meta_new(key TEXT PRIMARY KEY, value TEXT);
         DROP TABLE IF EXISTS meta;
         ALTER TABLE meta_new RENAME TO meta;
@@ -297,6 +308,9 @@ fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
         CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
         CREATE VIRTUAL TABLE fts_tri  USING fts5(id UNINDEXED, text, tokenize='trigram');
+        CREATE VIRTUAL TABLE fts_anchor USING fts5(
+            src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
+        );
         CREATE TABLE note_exports(
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
             op_id TEXT NOT NULL UNIQUE,
@@ -346,6 +360,27 @@ fn init_schema(conn: &Connection) -> Result<()> {
         );
         "
     ))?;
+    Ok(())
+}
+
+fn rebuild_anchor_index_from_notes(conn: &Connection) -> Result<()> {
+    let notes = {
+        let mut statement = conn.prepare("SELECT id, body FROM notes")?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    conn.execute("DELETE FROM fts_anchor", [])?;
+    let mut insert = conn.prepare("INSERT INTO fts_anchor(src, dst, text) VALUES(?1, ?2, ?3)")?;
+    for (src, body) in notes {
+        for link in extract_link_entries(&src, &body) {
+            if !link.anchor.is_empty() {
+                insert.execute(rusqlite::params![src, link.dst, wakati(&link.anchor)])?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -518,9 +553,10 @@ fn sync_files(
             [gone],
         )?;
         transaction.execute("DELETE FROM notes WHERE id=?1", [gone])?;
-        transaction.execute("DELETE FROM links WHERE src=?1", [gone])?;
+        transaction.execute("DELETE FROM links WHERE src=?1 OR dst=?1", [gone])?;
         transaction.execute("DELETE FROM fts_main WHERE id=?1", [gone])?;
         transaction.execute("DELETE FROM fts_tri WHERE id=?1", [gone])?;
+        transaction.execute("DELETE FROM fts_anchor WHERE src=?1 OR dst=?1", [gone])?;
         transaction.execute("DELETE FROM note_vecs WHERE id=?1", [gone])?;
         updated += 1;
     }
@@ -732,21 +768,42 @@ pub(crate) fn upsert(
         rusqlite::params![id, search_text],
     )?;
     conn.execute("DELETE FROM links WHERE src=?1", [id])?;
-    for dst in extract_links(id, &note.body, vault) {
+    // srcはFTS上でUNINDEXEDなので全走査になる。新規ノートには旧rowが存在しないため省略し、
+    // 更新時だけ削除することで10k初回rebuildを二次時間にしない。
+    if old_body.is_some() {
+        conn.execute("DELETE FROM fts_anchor WHERE src=?1", [id])?;
+    }
+    for link in extract_link_entries(id, &note.body) {
         conn.execute(
             "INSERT OR IGNORE INTO links(src, dst) VALUES(?1, ?2)",
-            rusqlite::params![id, dst],
+            rusqlite::params![id, link.dst],
         )?;
+        if !link.anchor.is_empty() {
+            conn.execute(
+                "INSERT INTO fts_anchor(src, dst, text) VALUES(?1, ?2, ?3)",
+                rusqlite::params![id, link.dst, wakati(&link.anchor)],
+            )?;
+        }
     }
     Ok(())
 }
 
 /// 標準 markdown リンクから .md 宛先をノート ID へ解決(OKF §6.1)。
 /// バンドル相対(/x.md)と相対(./x.md, ../x.md)の両形を受ける。
-fn extract_links(src_id: &str, body: &str, _vault: &Vault) -> Vec<String> {
+#[derive(Debug, Eq, PartialEq)]
+struct LinkEntry {
+    dst: String,
+    anchor: String,
+}
+
+fn extract_link_entries(src_id: &str, body: &str) -> Vec<LinkEntry> {
     let mut out = Vec::new();
     let mut rest = body;
     while let Some(pos) = rest.find("](") {
+        let anchor = rest[..pos]
+            .rfind('[')
+            .map(|start| rest[start + 1..pos].trim())
+            .unwrap_or_default();
         rest = &rest[pos + 2..];
         let Some(end) = rest.find(')') else { break };
         let target = &rest[..end];
@@ -773,7 +830,13 @@ fn extract_links(src_id: &str, body: &str, _vault: &Vault) -> Vec<String> {
             }
             parts.join("/")
         };
-        out.push(resolved.trim_end_matches(".md").to_string());
+        let entry = LinkEntry {
+            dst: resolved.trim_end_matches(".md").to_string(),
+            anchor: anchor.to_string(),
+        };
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
     }
     out
 }
@@ -837,6 +900,113 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    #[test]
+    fn link_entries_keep_anchor_text_and_resolve_relative_targets() {
+        assert_eq!(
+            extract_link_entries(
+                "notes/maps/storage",
+                "See [blue comet policy](../kepler.md) and [external](https://example.com/x.md)."
+            ),
+            vec![LinkEntry {
+                dst: "notes/kepler".into(),
+                anchor: "blue comet policy".into(),
+            }]
+        );
+        assert_eq!(
+            extract_link_entries("notes/source", "[](/notes/target.md)"),
+            vec![LinkEntry {
+                dst: "notes/target".into(),
+                anchor: String::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn existing_v7_index_backfills_anchor_text_from_db_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "Storage Map",
+                "See [blue comet policy](/notes/kepler.md).",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute("UPDATE meta SET value='7' WHERE key='schema'", [])
+            .unwrap();
+        conn.execute("DROP TABLE fts_anchor", []).unwrap();
+        drop(conn);
+
+        let migrated = open_db(&vault).unwrap();
+        let schema: String = migrated
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let dst: String = migrated
+            .query_row(
+                "SELECT dst FROM fts_anchor WHERE fts_anchor MATCH ?1",
+                [crate::tokenize::match_expr("blue comet policy")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(schema, "8");
+        assert_eq!(dst, "notes/kepler");
+    }
+
+    #[test]
+    fn updating_a_note_replaces_its_anchor_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "Storage Map",
+                "See [old blue alias](/notes/kepler.md).",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+
+        vault
+            .agent_update_note(
+                &conn,
+                crate::vault::NoteUpdate {
+                    id: &id,
+                    title: None,
+                    body: Some("See [new green alias](/notes/kepler.md)."),
+                    description: None,
+                    tags: None,
+                    authority: None,
+                    relations: None,
+                    allow_new_tags: false,
+                    client: "test/client",
+                },
+            )
+            .unwrap();
+
+        let old_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM fts_anchor WHERE fts_anchor MATCH ?1",
+                [crate::tokenize::match_expr("old blue alias")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let new_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM fts_anchor WHERE fts_anchor MATCH ?1",
+                [crate::tokenize::match_expr("new green alias")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_count, 0);
+        assert_eq!(new_count, 1);
+    }
+
     /// 2026-08-20、`runtime_store=db-v1`を持つ既存v3 DBへ`document`列だけを
     /// 追加すると、検索行は残る一方で詳細取得が空本文として失敗した。
     #[test]
@@ -886,7 +1056,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "7");
+        assert_eq!(schema, "8");
         assert!(migrated.prepare("SELECT note_uid, namespace, authority_role, authority_status, authority_scope FROM notes LIMIT 0").is_ok());
         assert!(
             migrated
@@ -955,7 +1125,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "7");
+        assert_eq!(schema, "8");
         assert!(
             migrated
                 .prepare(
@@ -1021,7 +1191,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "7");
+        assert_eq!(schema, "8");
         let preserved: (String, Option<String>, Option<i64>, Option<i64>) = migrated
             .query_row(
                 "SELECT receipt_id, external_target, compensation_deadline, compensated_at
@@ -1067,7 +1237,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "7");
+        assert_eq!(schema, "8");
         assert!(
             migrated
                 .prepare(
