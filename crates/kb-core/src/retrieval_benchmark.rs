@@ -288,6 +288,23 @@ mod tests {
     }
 
     #[test]
+    fn realistic_holdout_keeps_distinct_templates_and_all_challenges() {
+        let suite: RetrievalBenchmarkSuite = serde_json::from_str(include_str!(
+            "../../../schemas/examples/retrieval-realistic-holdout.example.json"
+        ))
+        .unwrap();
+        let report = evaluate(&suite).unwrap();
+
+        assert_eq!(report.fixture_note_count, 55);
+        assert_eq!(report.controls.case_count, 15);
+        assert_eq!(report.challenges.case_count, 21);
+        assert!(report.controls.gate.passed);
+        assert!(report.challenges.gate.passed);
+        assert!(report.controls.gate.failed_cases.is_empty());
+        assert!(report.challenges.gate.failed_cases.is_empty());
+    }
+
+    #[test]
     fn fixture_rejects_unknown_relation_targets_before_writing() {
         let mut suite: RetrievalBenchmarkSuite = serde_json::from_str(include_str!(
             "../../../schemas/examples/retrieval-google-benchmark.example.json"
