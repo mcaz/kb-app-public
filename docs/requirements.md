@@ -188,6 +188,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     後方互換に限定する。hostがどの面を遅延ロードするかはhost設定でありserverからは強制しない
   - 自動retrievalは`search(include_documents)`の1 callで、上位5件をseedに出リンク最大2ホップを
     展開し、最大50候補から推定10,000 token以内・最大10本文を同じSQLite snapshotで返す。
+    推定4,000 tokenを超える長文はfrontmatterを保持し、query語coverageでMarkdown見出しsectionまたは
+    2,400 byte以下のpassageを順位付けして、最大3 passage・推定3,600 tokenだけを返す。
     被リンクは出リンクより低く扱い、重複・循環・deprecatedを除外する。選外候補はID・タイトル・
     選外理由を構造化応答へ残し、必要な場合だけ追加のMCP `get`で取得できる。候補ごとのMarkdown再読・
     索引同期・埋め込み追い付きを行わない

@@ -16,6 +16,10 @@ pub const AUTO_CANDIDATE_LIMIT: usize = 50;
 pub const AUTO_DOCUMENT_LIMIT: usize = 10;
 /// Codex hook側の約12,000 token spill閾値へ、見出し等の余白を残す。
 pub const AUTO_ESTIMATED_TOKEN_BUDGET: usize = 10_000;
+const PASSAGE_RANKING_TRIGGER_TOKENS: usize = 4_000;
+const PASSAGE_MAX_BYTES: usize = 2_400;
+const PASSAGE_DOCUMENT_LIMIT: usize = 3;
+const PASSAGE_DOCUMENT_TOKEN_BUDGET: usize = 3_600;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RetrievalOptions {
@@ -112,6 +116,25 @@ struct Candidate {
 pub fn context_documents(
     conn: &Connection,
     ranked_hit_ids: &[String],
+    options: RetrievalOptions,
+) -> Result<RetrievalBundle> {
+    context_documents_inner(conn, ranked_hit_ids, None, options)
+}
+
+/// 検索queryに合う見出し・passageだけへ長文ノートを縮約して返す本番retrieval経路。
+pub fn context_documents_for_query(
+    conn: &Connection,
+    ranked_hit_ids: &[String],
+    query: &str,
+    options: RetrievalOptions,
+) -> Result<RetrievalBundle> {
+    context_documents_inner(conn, ranked_hit_ids, Some(query), options)
+}
+
+fn context_documents_inner(
+    conn: &Connection,
+    ranked_hit_ids: &[String],
+    query: Option<&str>,
     options: RetrievalOptions,
 ) -> Result<RetrievalBundle> {
     let started = Instant::now();
@@ -211,7 +234,7 @@ pub fn context_documents(
                 |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
-        let Some((title, text)) = row.filter(|(_, text)| !text.is_empty()) else {
+        let Some((title, original_text)) = row.filter(|(_, text)| !text.is_empty()) else {
             missing_documents += 1;
             candidate_summaries.push(RetrievalCandidate {
                 id: candidate.id,
@@ -237,6 +260,10 @@ pub fn context_documents(
             });
             continue;
         }
+        let text = query
+            .filter(|query| !query.trim().is_empty())
+            .map(|query| rank_document_passages(&original_text, query))
+            .unwrap_or(original_text);
         let tokens = estimate_tokens(&text);
         // 最上位seedが巨大でも空応答にはしない。Codex hookのspillが最後の安全網になる。
         if !documents.is_empty()
@@ -310,6 +337,166 @@ pub fn context_documents(
         documents,
         candidates: candidate_summaries,
     })
+}
+
+#[derive(Debug)]
+struct RankedPassage {
+    index: usize,
+    text: String,
+    exact_query: bool,
+    matched_terms: usize,
+}
+
+fn rank_document_passages(document: &str, query: &str) -> String {
+    if estimate_tokens(document) <= PASSAGE_RANKING_TRIGGER_TOKENS {
+        return document.to_string();
+    }
+    let Ok(mut note) = crate::frontmatter::Note::parse(document) else {
+        return document.to_string();
+    };
+    let query_lower = query.to_lowercase();
+    let terms = passage_query_terms(query);
+    let mut seen = HashSet::new();
+    let mut passages = split_markdown_passages(&note.body)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, text)| {
+            let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if normalized.is_empty() || !seen.insert(normalized) {
+                return None;
+            }
+            let lower = text.to_lowercase();
+            Some(RankedPassage {
+                index,
+                exact_query: lower.contains(&query_lower),
+                matched_terms: terms.iter().filter(|term| lower.contains(*term)).count(),
+                text,
+            })
+        })
+        .collect::<Vec<_>>();
+    if passages.is_empty() {
+        return document.to_string();
+    }
+    passages.sort_by_key(|passage| {
+        (
+            !passage.exact_query,
+            std::cmp::Reverse(passage.matched_terms),
+            passage.index,
+        )
+    });
+
+    let has_match = passages.iter().any(|passage| passage.matched_terms > 0);
+    let mut selected = Vec::new();
+    let mut selected_tokens = 0usize;
+    for passage in passages {
+        if selected.len() >= PASSAGE_DOCUMENT_LIMIT || (has_match && passage.matched_terms == 0) {
+            continue;
+        }
+        let tokens = estimate_tokens(&passage.text);
+        if !selected.is_empty()
+            && selected_tokens.saturating_add(tokens) > PASSAGE_DOCUMENT_TOKEN_BUDGET
+        {
+            continue;
+        }
+        selected_tokens = selected_tokens.saturating_add(tokens);
+        selected.push(passage);
+    }
+    selected.sort_by_key(|passage| passage.index);
+    note.body = format!(
+        "<!-- kb-app: query-ranked passages; omitted unrelated sections -->\n\n{}",
+        selected
+            .into_iter()
+            .map(|passage| passage.text.trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    );
+    note.to_file_string()
+        .unwrap_or_else(|_| document.to_string())
+}
+
+fn passage_query_terms(query: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    crate::tokenize::wakati(query)
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .filter(|term| {
+            term.chars().any(char::is_alphanumeric)
+                && (term.chars().count() >= 2 || term.is_ascii())
+                && seen.insert(term.clone())
+        })
+        .collect()
+}
+
+fn split_markdown_passages(body: &str) -> Vec<String> {
+    let mut sections = Vec::new();
+    let mut current = String::new();
+    for line in body.split_inclusive('\n') {
+        if is_markdown_heading(line) && !current.trim().is_empty() {
+            sections.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+    }
+    if !current.trim().is_empty() {
+        sections.push(current);
+    }
+
+    sections
+        .into_iter()
+        .flat_map(|section| split_oversized_passage(&section))
+        .collect()
+}
+
+fn is_markdown_heading(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let marks = trimmed
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    (1..=6).contains(&marks) && trimmed.chars().nth(marks).is_some_and(char::is_whitespace)
+}
+
+fn split_oversized_passage(section: &str) -> Vec<String> {
+    let (heading, mut remaining) = section
+        .split_once('\n')
+        .filter(|(first, _)| is_markdown_heading(first))
+        .map(|(first, rest)| (Some(first.trim_end()), rest))
+        .unwrap_or((None, section));
+    let prefix_bytes = heading.map_or(0, |value| value.len() + 2);
+    let content_limit = PASSAGE_MAX_BYTES.saturating_sub(prefix_bytes).max(64);
+    let mut chunks = Vec::new();
+    while !remaining.trim().is_empty() {
+        let end = passage_boundary(remaining, content_limit);
+        let content = remaining[..end].trim();
+        if !content.is_empty() {
+            chunks.push(match heading {
+                Some(heading) => format!("{heading}\n\n{content}"),
+                None => content.to_string(),
+            });
+        }
+        remaining = remaining[end..].trim_start();
+    }
+    chunks
+}
+
+fn passage_boundary(value: &str, max_bytes: usize) -> usize {
+    if value.len() <= max_bytes {
+        return value.len();
+    }
+    let mut end = max_bytes.min(value.len());
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let prefix = &value[..end];
+    ["\n\n", "\n", "。", ". "]
+        .into_iter()
+        .filter_map(|delimiter| {
+            prefix
+                .rfind(delimiter)
+                .map(|position| position + delimiter.len())
+        })
+        .filter(|position| *position >= end / 2)
+        .max()
+        .unwrap_or(end)
 }
 
 /// Codex tokenizerはkb-appの必須依存にしない。UTF-8 2 bytes/tokenを保守的な近似とし、
@@ -583,6 +770,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["seed", "zeta-evidence", "middle-link"]
         );
+    }
+
+    #[test]
+    fn long_markdown_keeps_only_query_ranked_passages() {
+        let note = crate::frontmatter::Note {
+            front: crate::frontmatter::Frontmatter::new_note("Atlas Recovery Handbook"),
+            body: format!(
+                "# Routine maintenance\n\n{}\n\n# Checksum recovery procedure\n\n\
+                 Rotate the key after a checksum mismatch.\n\n# Appendix\n\n{}",
+                "Routine filler with no incident action. ".repeat(300),
+                "Unrelated appendix material. ".repeat(300),
+            ),
+        };
+        let document = note.to_file_string().unwrap();
+        assert!(estimate_tokens(&document) > PASSAGE_RANKING_TRIGGER_TOKENS);
+
+        let ranked = rank_document_passages(&document, "atlas recovery checksum procedure");
+
+        assert!(ranked.contains("Rotate the key after a checksum mismatch"));
+        assert!(ranked.contains("Checksum recovery procedure"));
+        assert!(!ranked.contains("Unrelated appendix material"));
+        assert!(estimate_tokens(&ranked) < 1_000);
+    }
+
+    #[test]
+    fn repeated_unheaded_passages_are_deduplicated() {
+        let note = crate::frontmatter::Note {
+            front: crate::frontmatter::Frontmatter::new_note("Atlas Recovery Handbook"),
+            body: "atlas recovery checksum procedure. Rotate the key after a checksum mismatch.\n"
+                .repeat(350),
+        };
+        let document = note.to_file_string().unwrap();
+
+        let ranked = rank_document_passages(&document, "atlas recovery checksum procedure");
+
+        assert!(ranked.contains("Rotate the key after a checksum mismatch"));
+        assert!(estimate_tokens(&ranked) < 4_000);
     }
 
     #[test]

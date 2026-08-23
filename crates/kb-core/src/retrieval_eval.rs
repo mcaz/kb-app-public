@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::degradation::Degradation;
 use crate::retrieval::{
     AUTO_SEED_LIMIT, RetrievalBundle, RetrievalOptions, RetrievalSource, context_documents,
+    context_documents_for_query,
 };
 
 pub const EVALUATION_SCHEMA_VERSION: &str = "2.0.0";
@@ -346,11 +347,13 @@ fn evaluate_case(
 
     let mut strategies = Vec::with_capacity(2);
     for strategy in [EvaluationStrategy::Top3, EvaluationStrategy::LinkedV1] {
-        let bundle = context_documents(
-            conn,
-            &ranked_hit_ids,
-            configuration_for(strategy).retrieval_options(),
-        )?;
+        let options = configuration_for(strategy).retrieval_options();
+        let bundle = match strategy {
+            EvaluationStrategy::Top3 => context_documents(conn, &ranked_hit_ids, options)?,
+            EvaluationStrategy::LinkedV1 => {
+                context_documents_for_query(conn, &ranked_hit_ids, query, options)?
+            }
+        };
         strategies.push(score_case(case, strategy, search_elapsed_us, bundle));
     }
 

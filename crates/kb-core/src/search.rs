@@ -1809,9 +1809,10 @@ mod tests {
             .collect::<Vec<_>>();
         let (retrieval, linked_context) = timed(|| {
             repeat_last(20, || {
-                crate::retrieval::context_documents(
+                crate::retrieval::context_documents_for_query(
                     &conn,
                     &retrieval_seed_ids,
+                    "検索番兵オーロラ",
                     crate::retrieval::RetrievalOptions::default(),
                 )
                 .unwrap()
