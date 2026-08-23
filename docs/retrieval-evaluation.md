@@ -103,6 +103,7 @@ token／spill低下は効果として扱う。
 - [アンカーテキスト索引](retrieval-anchor-text.md)
 - [Typed relation重み付き伝播](retrieval-typed-relation-ranking.md)
 - [Passage ranking](retrieval-passage-ranking.md)
+- [重複排除・多様化](retrieval-dedup-diversification.md)
 
 ## 範囲外
 

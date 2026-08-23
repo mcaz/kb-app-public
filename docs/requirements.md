@@ -102,7 +102,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     履歴・記録・理由intentだけauthorityの既定順を上書きする。標準Markdown linkのanchor textは
     全query term一致時だけリンク先を昇格する弱い派生索引にする。retrievalのseed展開では
     `derived_from`・`supports`・`updates`・`contradicts`・`supersedes`、通常link、`mentions`の順で
-    候補化する。legacyノートは明示移行までenvelope不在で読める。
+    候補化する。同じscope・role・status、または同じrole・status内で同一正規化本文か文字trigram
+    Jaccard 85%以上の候補は最上位1件へ束ね、重複候補で検索limitを埋め戻さない。本文が同じでも
+    role・statusが異なるfacetは保持する。legacyノートは明示移行までenvelope不在で読める。
 11. **継続蒸留は固定snapshotから再現可能に始める**。read-only plannerは同一SQLite read transactionの
     全documentへ入力hashを付け、snapshot digestと決定的plan IDを返す。previewはpull・sync・migration・
     care・outbox・KB本文を変更せず、承認キューにも実行権限にもならない。意味判断と複数ノートの変更は、
