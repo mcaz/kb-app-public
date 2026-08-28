@@ -25,7 +25,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::client_surface::ClientSurface;
-use crate::index::{open_db, open_db_read_only, open_db_recovery, sync_with_degradations};
+use crate::index::{open_db_read_only, open_db_recovery, sync_with_degradations};
 use crate::search::{recent, search};
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
@@ -1453,7 +1453,11 @@ fn call_tool_with_search_options(
     } else if distillation_closed_world {
         open_db_read_only(vault)?
     } else {
-        open_db(vault)?
+        // open時の自己修復・修復失敗・write停止(S-3)を通常のdegradationへ合流し、
+        // 応答のdegradedとしてAI/ユーザーへ見せる。
+        let outcome = crate::index::open_db_with_outcome(vault)?;
+        degraded.extend(outcome.degraded);
+        outcome.conn
     };
     // DBが実行時正本なので、全文取得は検索時のsnapshotをそのまま読む。索引の追い付きと
     // 埋め込み生成は検索時に一度だけ行い、上位候補ごとのgetでは繰り返さない。
@@ -2447,6 +2451,7 @@ fn with_degradations(mut text: String, degraded: &[crate::degradation::Degradati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::open_db;
 
     #[test]
     fn disabled_initialize_keeps_tools_visible_with_only_the_no_bypass_rule() {
@@ -2675,6 +2680,43 @@ mod tests {
         .unwrap();
         let structured = output.structured.unwrap();
         assert_eq!(structured["degraded"], serde_json::json!([]));
+    }
+
+    /// open時の自己修復(S-3)の通知は、tool応答のdegraded(構造化出力)へ合流する。
+    #[test]
+    fn open_time_recovery_notice_reaches_tool_degradations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "修復通知の確認",
+                "本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        rusqlite::Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch("DROP TABLE fts_anchor;")
+            .unwrap();
+
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "search",
+            &serde_json::json!({"query": "修復通知"}),
+            false,
+        )
+        .unwrap();
+        let degraded = output.structured.unwrap()["degraded"].clone();
+        let codes: Vec<&str> = degraded
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["code"].as_str())
+            .collect();
+        assert!(codes.contains(&"index_recovered"), "{degraded}");
     }
 
     #[test]

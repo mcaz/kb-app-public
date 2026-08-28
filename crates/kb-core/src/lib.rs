@@ -15,6 +15,7 @@ pub mod care;
 pub mod client_surface;
 pub mod connect;
 pub mod degradation;
+pub mod derived_index;
 pub mod distillation;
 pub mod distillation_audit;
 pub mod distillation_cadence;

@@ -849,16 +849,17 @@ pub fn similar_notes(
     limit: usize,
 ) -> Result<Vec<(String, Option<String>, f32)>> {
     use crate::embed;
-    let blob: Option<Vec<u8>> = conn
+    let row: Option<(String, Vec<u8>)> = conn
         .query_row(
-            "SELECT embedding FROM note_vecs WHERE id = ?1 AND stamp = ?2",
-            rusqlite::params![id, embed::EMBED_STAMP],
-            |r| r.get(0),
+            "SELECT stamp, embedding FROM note_vecs WHERE id = ?1 AND stamp IS NOT NULL",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    let Some(blob) = blob else {
+    let Some(blob) = row.and_then(|(stamp, blob)| embed::is_current_stamp(&stamp).then_some(blob))
+    else {
         return Ok(Vec::new());
-    }; // 未埋め込み・段0 は空
+    }; // 未埋め込み・旧stamp・段0 は空
     let me = embed::from_blob(&blob);
     let linked: std::collections::HashSet<String> = {
         let mut stmt = conn.prepare_cached(
@@ -1099,16 +1100,21 @@ fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Resu
     use crate::embed;
     let vectors: std::collections::HashMap<String, Vec<f32>> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT v.id, v.embedding
+            "SELECT v.id, v.stamp, v.embedding
              FROM note_vecs v JOIN notes n ON n.id = v.id
-             WHERE v.stamp = ?1 AND n.status != 'deprecated'",
+             WHERE v.stamp IS NOT NULL AND n.status != 'deprecated'",
         )?;
-        let rows = stmt.query_map([embed::EMBED_STAMP], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
-            .map(|(id, blob)| (id, embed::from_blob(&blob)))
+            .filter(|(_, stamp, _)| embed::is_current_stamp(stamp))
+            .map(|(id, _, blob)| (id, embed::from_blob(&blob)))
             .collect()
     };
     if vectors.is_empty() {
@@ -1175,12 +1181,18 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
         Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as usize)
     };
     let embedded = conn
-        .query_row(
-            "SELECT count(*) FROM note_vecs WHERE stamp = ?1",
-            [crate::embed::EMBED_STAMP],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0) as usize;
+        .prepare("SELECT stamp FROM note_vecs WHERE stamp IS NOT NULL")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut count = 0usize;
+            for stamp in rows {
+                if crate::embed::is_current_stamp(&stamp?) {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        })
+        .unwrap_or(0);
     Ok(Stats {
         total: count("SELECT count(*) FROM notes")?,
         deprecated: count("SELECT count(*) FROM notes WHERE status='deprecated'")?,
@@ -1910,7 +1922,7 @@ mod tests {
                 "INSERT INTO note_vecs(id,stamp,embedding) VALUES (?1,?2,?3)",
                 rusqlite::params![
                     id,
-                    crate::embed::EMBED_STAMP,
+                    crate::embed::embedding_stamp("fixture"),
                     crate::embed::to_blob(&vector)
                 ],
             )
@@ -2118,6 +2130,7 @@ mod tests {
                 crate::embed::to_blob(&vector)
             })
             .collect();
+        let stamp = crate::embed::embedding_stamp("performance-fixture");
         let transaction = conn.unchecked_transaction().unwrap();
         {
             let mut insert = transaction
@@ -2127,7 +2140,7 @@ mod tests {
                 insert
                     .execute(rusqlite::params![
                         performance_note_id(index),
-                        crate::embed::EMBED_STAMP,
+                        stamp,
                         &blobs[index % PERFORMANCE_VECTOR_DIM]
                     ])
                     .unwrap();

@@ -18,10 +18,44 @@ use ort::{
 use rusqlite::Connection;
 use tokenizers::Tokenizer;
 
-/// 埋め込みの複合バージョンスタンプ(書式|provider:model:dim|チャンク規則)。
+/// 埋め込みのproducerスタンプ(書式|provider:model:dim|チャンク規則)。
 /// モデル・規則を変えたら必ず上げる — 旧 KB の「旧ベクトル混在を検知できない」教訓。
-pub const EMBED_STAMP: &str = "v1|ort:bge-m3-int8:1024|whole1500";
+/// 保存行の `note_vecs.stamp` はこれ単体ではなく、入力hashを加えた複合形
+/// (`embedding_stamp`)を使う — title/description変更のstale検知(R1 A-5)。
+pub const EMBED_PRODUCER_STAMP: &str = "v1|ort:bge-m3-int8:1024|whole1500";
 const MAX_EMBED_CHARS: usize = 1500;
+
+/// 埋め込み入力の唯一の組み立て。hash・埋め込み生成・invalidationの全てが
+/// この文字列を共用する(別実装の分岐が境界衝突バグの温床 — spec S-4)。
+/// 単純連結の境界衝突(`"a b"+""` と `"a"+"b"`)は入力文字列自体の同一性なので、
+/// 同一入力 → 同一埋め込み → 同一stampとなり意味的に無害。
+pub fn embedding_input(title: Option<&str>, description: Option<&str>, body: &str) -> String {
+    format!(
+        "{} {} {}",
+        title.unwrap_or(""),
+        description.unwrap_or(""),
+        body
+    )
+}
+
+/// 保存stamp = `{producer}|sha256:{埋め込み入力のhash}` の複合形。
+/// 入力が1文字でも変われば別stampになり、既存行は自動的にpending扱いへ落ちる。
+pub fn embedding_stamp(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{EMBED_PRODUCER_STAMP}|sha256:{:x}", hasher.finalize())
+}
+
+/// 現行producerの複合形stampか(prefix一致)。旧単体形式・他producerの行は
+/// 検索(knn等)の対象外 = 全てpending。旧バイナリとの併存は二段階rollout制約:
+/// 旧バイナリはtitle/description変更で複合stamp行を無効化しないため、
+/// 新旧バイナリが同じDBへ交互に書く期間はstale埋め込みが残り得る。
+pub fn is_current_stamp(stamp: &str) -> bool {
+    stamp
+        .strip_prefix(EMBED_PRODUCER_STAMP)
+        .is_some_and(|rest| rest.starts_with("|sha256:"))
+}
 /// 前出し・意味ヒットの関連閾値(コサイン距離)。旧較正 0.95 をパリティ実測で移植。
 pub const RELATED_DISTANCE: f32 = 0.95;
 
@@ -256,38 +290,66 @@ pub fn from_blob(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// 未埋め込み・旧スタンプのノートを埋め込む(最大 `cap` 件)。残件数を返す。
-/// cap を超えた分は次回に回る — 残があることは呼び側が劣化情報として見せる。
+/// 未埋め込み・旧スタンプ・内容とstampが食い違うノートを埋め込む(最大 `cap` 件)。
+/// 残件数を返す。cap を超えた分は次回に回る — 残は呼び側が劣化情報として見せる。
+/// 期待stampはノートごとの複合形なのでSQL定数比較では判定できず、Rust側で
+/// `embedding_input` → `embedding_stamp` を再計算して照合する(単一実装の共用)。
 pub fn embed_pending(conn: &Connection, cap: usize) -> Result<usize> {
-    let ids: Vec<(String, String)> = {
+    let pending: Vec<(String, String, String)> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT n.id, coalesce(n.title,'') || ' ' || coalesce(n.description,'') || ' ' || n.body
-             FROM notes n LEFT JOIN note_vecs v ON v.id = n.id AND v.stamp = ?1
-             WHERE v.id IS NULL",
+            "SELECT n.id, n.title, n.description, n.body, v.stamp
+             FROM notes n LEFT JOIN note_vecs v ON v.id = n.id",
         )?;
-        let rows = stmt.query_map([EMBED_STAMP], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let mut pending = Vec::new();
+        for row in rows {
+            let (id, title, description, body, stamp) = row?;
+            let input = embedding_input(title.as_deref(), description.as_deref(), &body);
+            let expected = embedding_stamp(&input);
+            if stamp.as_deref() != Some(expected.as_str()) {
+                pending.push((id, input, expected));
+            }
+        }
+        pending
     };
-    let total = ids.len();
-    for (id, text) in ids.iter().take(cap) {
-        let v = embed_text(text)?;
+    let total = pending.len();
+    for (id, input, stamp) in pending.iter().take(cap) {
+        let v = embed_text(input)?;
         conn.execute(
             "INSERT OR REPLACE INTO note_vecs(id, stamp, embedding) VALUES(?1, ?2, ?3)",
-            rusqlite::params![id, EMBED_STAMP, to_blob(&v)],
+            rusqlite::params![id, stamp, to_blob(&v)],
         )?;
     }
     Ok(total.saturating_sub(cap.min(total)))
 }
 
 /// クエリベクトルとの総当たり KNN。(id, コサイン距離) を近い順に返す。
+/// 現行producerの複合形stamp(`is_current_stamp`)の行だけを対象にする —
+/// 旧形式stampの行は再埋め込みが追い付くまで意味検索に混ぜない。
 pub fn knn(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
-    let mut stmt = conn.prepare_cached("SELECT id, embedding FROM note_vecs WHERE stamp = ?1")?;
-    let rows = stmt.query_map([EMBED_STAMP], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+    let mut stmt =
+        conn.prepare_cached("SELECT id, stamp, embedding FROM note_vecs WHERE stamp IS NOT NULL")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Vec<u8>>(2)?,
+        ))
     })?;
     let mut scored: Vec<(String, f32)> = Vec::new();
     for row in rows {
-        let (id, blob) = row?;
+        let (id, stamp, blob) = row?;
+        if !is_current_stamp(&stamp) {
+            continue;
+        }
         let v = from_blob(&blob);
         if v.len() != query.len() {
             continue;
@@ -308,5 +370,33 @@ mod tests {
     fn blob_roundtrip() {
         let v = vec![0.25f32, -1.5, 3.0];
         assert_eq!(from_blob(&to_blob(&v)), v);
+    }
+
+    /// stampは「producer|sha256:入力hash」の複合形。producer単体(旧形式)は
+    /// 現行と判定されず、入力のどんな変化も別stampになる。
+    #[test]
+    fn composite_stamp_is_producer_prefixed_and_input_sensitive() {
+        let base = embedding_stamp(&embedding_input(Some("題"), Some("説明"), "本文"));
+        assert!(is_current_stamp(&base), "{base}");
+        assert!(base.starts_with(EMBED_PRODUCER_STAMP));
+        assert!(
+            !is_current_stamp(EMBED_PRODUCER_STAMP),
+            "旧形式を現行扱いしない"
+        );
+        assert!(!is_current_stamp("v0|other|sha256:abc"));
+
+        for changed in [
+            embedding_stamp(&embedding_input(Some("別題"), Some("説明"), "本文")),
+            embedding_stamp(&embedding_input(Some("題"), Some("別説明"), "本文")),
+            embedding_stamp(&embedding_input(Some("題"), Some("説明"), "別本文")),
+        ] {
+            assert_ne!(base, changed);
+            assert!(is_current_stamp(&changed));
+        }
+        // 決定的(同一入力 → 同一stamp)
+        assert_eq!(
+            base,
+            embedding_stamp(&embedding_input(Some("題"), Some("説明"), "本文"))
+        );
     }
 }

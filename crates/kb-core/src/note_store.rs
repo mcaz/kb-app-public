@@ -92,6 +92,9 @@ pub(crate) fn queue_put(
     log_entry: &str,
     commit_message: &str,
 ) -> Result<()> {
+    // governance台帳(note_relations)が欠損・不整合の間はnote writeをfail-closed。
+    // open時の自己修復が成功していれば透過(spec S-3の修復契約)。
+    crate::derived_index::require_governance_ready(conn)?;
     let id = NoteId::parse(raw)?;
     let base_document = conn
         .query_row(
@@ -119,11 +122,14 @@ pub(crate) fn queue_put(
 }
 
 pub(crate) fn delete(
+    vault: &Vault,
     conn: &Connection,
     raw: &str,
     log_entry: &str,
     commit_message: &str,
 ) -> Result<()> {
+    // queue_putと同じfail-closedゲート。削除もgovernance台帳を書き換える。
+    crate::derived_index::require_governance_ready(conn)?;
     let id = NoteId::parse(raw)?;
     let transaction = conn.unchecked_transaction()?;
     let base_document = transaction
@@ -142,35 +148,16 @@ pub(crate) fn delete(
         )
         .optional()?
         .flatten();
-    if let Some(note_uid) = &note_uid {
-        let source: Option<String> = transaction
-            .query_row(
-                "SELECT source.id FROM note_relations relation
-                 JOIN notes source ON source.note_uid = relation.src_uid
-                 WHERE relation.target_uid = ?1 LIMIT 1",
-                [note_uid],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(source) = source {
-            bail!("typed relationの参照先は削除できない: {source} -> {id}");
-        }
-    }
+    // 派生行の削除(inbound relation存在時の拒否を含む)はregistry走査へ統一。
+    crate::derived_index::apply_note_change(
+        vault,
+        &transaction,
+        crate::derived_index::NoteChange::Remove {
+            note_id: id.as_str(),
+            note_uid: note_uid.as_deref(),
+        },
+    )?;
     transaction.execute("DELETE FROM notes WHERE id = ?1", [id.as_str()])?;
-    transaction.execute(
-        "DELETE FROM links WHERE src = ?1 OR dst = ?1",
-        [id.as_str()],
-    )?;
-    transaction.execute("DELETE FROM fts_main WHERE id = ?1", [id.as_str()])?;
-    transaction.execute("DELETE FROM fts_tri WHERE id = ?1", [id.as_str()])?;
-    transaction.execute(
-        "DELETE FROM fts_anchor WHERE src = ?1 OR dst = ?1",
-        [id.as_str()],
-    )?;
-    transaction.execute("DELETE FROM note_vecs WHERE id = ?1", [id.as_str()])?;
-    if let Some(note_uid) = note_uid {
-        transaction.execute("DELETE FROM note_relations WHERE src_uid = ?1", [&note_uid])?;
-    }
     transaction.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
          VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, NULL, ?4, ?5)",
@@ -401,7 +388,7 @@ mod tests {
         put(&vault, &conn, id, &note("本文"), "export", "export note").unwrap();
         vault.flush_note_exports(&conn).unwrap();
 
-        delete(&conn, id, "delete", "delete note").unwrap();
+        delete(&vault, &conn, id, "delete", "delete note").unwrap();
         assert!(read(&conn, id).is_err());
         assert!(vault.note_path(id).unwrap().exists());
 

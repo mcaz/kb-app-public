@@ -21,7 +21,28 @@ const CURRENT_SCHEMA: u32 = 8;
 const OLDEST_SUPPORTED_SCHEMA: u32 = 3;
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
+    Ok(open_db_with_outcome(vault)?.conn)
+}
+
+/// open時のhealth check・自己修復の結果を含むopen。修復・劣化・write停止は
+/// openを失敗させずここへ載せる(呼び出し面が劣化情報としてユーザーへ見せる)。
+/// note writeのfail-closed自体は接続に依存せず、書込側の
+/// `derived_index::require_governance_ready` が毎回強制する。
+#[must_use = "degraded/write_blockersを捨てると修復失敗を正常に見せるため、必ず処理する"]
+pub struct OpenDbOutcome {
+    pub conn: Connection,
+    /// 今回のopenで再構築に成功した派生索引(一回限りのrecovery notice)。
+    pub recovered: Vec<crate::derived_index::DerivedArtifact>,
+    pub degraded: Vec<crate::degradation::Degradation>,
+    /// 修復できなかったgovernance-critical索引。空でなければnote writeは拒否される。
+    pub write_blockers: Vec<crate::derived_index::DerivedArtifact>,
+}
+
+pub fn open_db_with_outcome(vault: &Vault) -> Result<OpenDbOutcome> {
     let conn = open_db_recovery(vault)?;
+    // 派生索引の修復はMarkdown復元・importより前 — 復元経由のupsertも
+    // 修復済みのobjectへ書けるようにする。health OKなら書込は発生しない。
+    let repair = crate::derived_index::check_and_repair(vault, &conn)?;
     restore_missing_documents(vault, &conn)?;
     if !runtime_store_is_db(&conn) {
         let report = import_markdown_snapshot(vault, &conn)?;
@@ -37,7 +58,12 @@ pub fn open_db(vault: &Vault) -> Result<Connection> {
             );
         }
     }
-    Ok(conn)
+    Ok(OpenDbOutcome {
+        conn,
+        recovered: repair.recovered,
+        degraded: repair.degraded,
+        write_blockers: repair.write_blockers,
+    })
 }
 
 /// Markdown import/exportが衝突して通常起動できない場合の限定的な復旧接続。
@@ -262,6 +288,8 @@ fn verify_durable_tables(conn: &Connection, version: u32) -> Result<()> {
 
 /// fresh DB(sqlite_schemaが空)にだけ全オブジェクトを生成する。単一transactionで、
 /// meta schema書込は最後 — 途中失敗はfreshのまま残り、次回openが再試行する。
+/// 派生索引のDDLはregistry(derived_index)の`create_sql`が正本 — fresh作成と
+/// 自己修復のDROP/CREATEが同じ文字列を使い、形の分岐を作らない。
 fn create_fresh_schema(conn: &Connection) -> Result<()> {
     let transaction = conn.unchecked_transaction()?;
     transaction.execute_batch(
@@ -277,19 +305,6 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
         CREATE UNIQUE INDEX notes_note_uid ON notes(note_uid) WHERE note_uid IS NOT NULL;
         CREATE UNIQUE INDEX notes_active_canonical_scope ON notes(namespace, authority_scope)
             WHERE authority_role = 'canonical' AND authority_status = 'active';
-        CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
-        CREATE INDEX links_dst ON links(dst);
-        CREATE TABLE note_relations(
-            src_uid TEXT NOT NULL, kind TEXT NOT NULL, target_uid TEXT NOT NULL,
-            PRIMARY KEY(src_uid, kind, target_uid)
-        );
-        CREATE INDEX note_relations_target ON note_relations(target_uid);
-        CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
-        CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
-        CREATE VIRTUAL TABLE fts_tri  USING fts5(id UNINDEXED, text, tokenize='trigram');
-        CREATE VIRTUAL TABLE fts_anchor USING fts5(
-            src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
-        );
         CREATE TABLE note_exports(
             seq INTEGER PRIMARY KEY AUTOINCREMENT,
             op_id TEXT NOT NULL UNIQUE,
@@ -339,6 +354,11 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
         );
         ",
     )?;
+    for artifact in crate::derived_index::DerivedArtifact::ALL {
+        for object in artifact.spec().objects {
+            transaction.execute_batch(object.create_sql)?;
+        }
+    }
     transaction.execute(
         "INSERT INTO meta(key, value) VALUES('schema', ?1)",
         [SCHEMA_VERSION],
@@ -530,7 +550,7 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn rebuild_anchor_index_from_notes(conn: &Connection) -> Result<()> {
+pub(crate) fn rebuild_anchor_index_from_notes(conn: &Connection) -> Result<()> {
     let notes = {
         let mut statement = conn.prepare("SELECT id, body FROM notes")?;
         statement
@@ -701,30 +721,23 @@ fn sync_files(
     }
 
     for gone in known.keys().filter(|k| !seen.contains(*k)) {
-        let referenced: Option<String> = transaction
-            .query_row(
-                "SELECT source.id FROM notes target
-                 JOIN note_relations relation ON relation.target_uid = target.note_uid
-                 JOIN notes source ON source.note_uid = relation.src_uid
-                 WHERE target.id=?1 LIMIT 1",
-                [gone],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(source) = referenced {
-            bail!("typed relationの参照先は削除できない: {source} -> {gone}");
-        }
-        transaction.execute(
-            "DELETE FROM note_relations
-             WHERE src_uid = (SELECT note_uid FROM notes WHERE id=?1)",
-            [gone],
+        // 派生行の削除(inbound relation存在時の拒否を含む)はregistry走査へ統一。
+        // durableのnotes行だけをここで消す。
+        let note_uid: Option<String> = transaction
+            .query_row("SELECT note_uid FROM notes WHERE id=?1", [gone], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .flatten();
+        crate::derived_index::apply_note_change(
+            vault,
+            &transaction,
+            crate::derived_index::NoteChange::Remove {
+                note_id: gone,
+                note_uid: note_uid.as_deref(),
+            },
         )?;
         transaction.execute("DELETE FROM notes WHERE id=?1", [gone])?;
-        transaction.execute("DELETE FROM links WHERE src=?1 OR dst=?1", [gone])?;
-        transaction.execute("DELETE FROM fts_main WHERE id=?1", [gone])?;
-        transaction.execute("DELETE FROM fts_tri WHERE id=?1", [gone])?;
-        transaction.execute("DELETE FROM fts_anchor WHERE src=?1 OR dst=?1", [gone])?;
-        transaction.execute("DELETE FROM note_vecs WHERE id=?1", [gone])?;
         updated += 1;
     }
     validate_authority_index(&transaction)?;
@@ -825,33 +838,8 @@ pub(crate) fn upsert(
     note: &Note,
 ) -> Result<()> {
     let f = &note.front;
-    // 添付ファイル名も検索対象に(「あの PDF どこだっけ」を引けるように。FR-C8)
-    let attach_names: String = vault
-        .list_attachments(id)?
-        .iter()
-        .map(|(n, _)| n.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let search_text = format!(
-        "{} {} {} {} {} {} {}",
-        f.title.as_deref().unwrap_or(""),
-        f.description.as_deref().unwrap_or(""),
-        f.tags.join(" "),
-        f.authority
-            .as_ref()
-            .map(|authority| authority.namespace.as_str())
-            .unwrap_or(""),
-        f.authority
-            .as_ref()
-            .map(|authority| authority.scope.as_str())
-            .unwrap_or(""),
-        attach_names,
-        note.body
-    );
-    // 旧本文は notes を上書きする前に取っておく(埋め込み保持判定に使う)
-    let old_body: Option<String> = conn
-        .query_row("SELECT body FROM notes WHERE id=?1", [id], |r| r.get(0))
-        .ok();
+    // 旧行の有無とuidは notes を上書きする前に取っておく(uid不変検査と、
+    // registry走査へ渡すNoteChangeの材料)。
     let old_uid: Option<Option<String>> = conn
         .query_row("SELECT note_uid FROM notes WHERE id=?1", [id], |row| {
             row.get(0)
@@ -861,9 +849,6 @@ pub(crate) fn upsert(
         && f.note_uid.as_ref().map(|uid| uid.as_str()) != Some(old_uid.as_str())
     {
         bail!("note_uidは作成後に変更・削除できない: {id}");
-    }
-    if let Some(Some(old_uid)) = old_uid {
-        conn.execute("DELETE FROM note_relations WHERE src_uid=?1", [&old_uid])?;
     }
     conn.execute(
         "INSERT INTO notes(
@@ -907,63 +892,30 @@ pub(crate) fn upsert(
                 .map(|authority| authority.scope.as_str()),
         ],
     )?;
-    if let Some(uid) = &f.note_uid {
-        for relation in &f.relations {
-            conn.execute(
-                "INSERT OR IGNORE INTO note_relations(src_uid, kind, target_uid) VALUES(?1, ?2, ?3)",
-                rusqlite::params![
-                    uid.as_str(),
-                    relation.kind.as_str(),
-                    relation.target.as_str()
-                ],
-            )?;
-        }
-    }
-    conn.execute("DELETE FROM fts_main WHERE id=?1", [id])?;
-    conn.execute("DELETE FROM fts_tri WHERE id=?1", [id])?;
-    // 本文が実際に変わったときだけ埋め込みを捨てる(メタ変更や mtime 精度移行で
-    // 全ノート再埋め込みの嵐を起こさない)
-    if old_body.as_deref() != Some(note.body.as_str()) {
-        conn.execute("DELETE FROM note_vecs WHERE id=?1", [id])?;
-    }
-    conn.execute(
-        "INSERT INTO fts_main(id, text) VALUES(?1, ?2)",
-        rusqlite::params![id, wakati(&search_text)],
+    // 派生索引(fts_main/fts_tri/links/fts_anchor/note_relations/note_vecs)は
+    // registryのapply_change走査が同じtransaction内で維持する。
+    crate::derived_index::apply_note_change(
+        vault,
+        conn,
+        crate::derived_index::NoteChange::Upsert {
+            note_id: id,
+            previous_uid: old_uid.as_ref().and_then(|uid| uid.as_deref()),
+            previously_indexed: old_uid.is_some(),
+            note,
+        },
     )?;
-    conn.execute(
-        "INSERT INTO fts_tri(id, text) VALUES(?1, ?2)",
-        rusqlite::params![id, search_text],
-    )?;
-    conn.execute("DELETE FROM links WHERE src=?1", [id])?;
-    // srcはFTS上でUNINDEXEDなので全走査になる。新規ノートには旧rowが存在しないため省略し、
-    // 更新時だけ削除することで10k初回rebuildを二次時間にしない。
-    if old_body.is_some() {
-        conn.execute("DELETE FROM fts_anchor WHERE src=?1", [id])?;
-    }
-    for link in extract_link_entries(id, &note.body) {
-        conn.execute(
-            "INSERT OR IGNORE INTO links(src, dst) VALUES(?1, ?2)",
-            rusqlite::params![id, link.dst],
-        )?;
-        if !link.anchor.is_empty() {
-            conn.execute(
-                "INSERT INTO fts_anchor(src, dst, text) VALUES(?1, ?2, ?3)",
-                rusqlite::params![id, link.dst, wakati(&link.anchor)],
-            )?;
-        }
-    }
     Ok(())
 }
 
 /// 標準 markdown リンクから .md 宛先をノート ID へ解決(OKF §6.1)。
 /// バンドル相対(/x.md)と相対(./x.md, ../x.md)の両形を受ける。
 #[derive(Debug, Eq, PartialEq)]
-struct LinkEntry {
-    dst: String,
-    anchor: String,
+pub(crate) struct LinkEntry {
+    pub(crate) dst: String,
+    pub(crate) anchor: String,
 }
 
-fn extract_link_entries(src_id: &str, body: &str) -> Vec<LinkEntry> {
+pub(crate) fn extract_link_entries(src_id: &str, body: &str) -> Vec<LinkEntry> {
     let mut out = Vec::new();
     let mut rest = body;
     while let Some(pos) = rest.find("](") {
@@ -1008,8 +960,103 @@ fn extract_link_entries(src_id: &str, body: &str) -> Vec<LinkEntry> {
     out
 }
 
+/// 論理snapshot(durable不変の検証部品)。index.rsとderived_index.rsのテストが共用する。
+#[cfg(test)]
+pub(crate) mod test_support {
+    use rusqlite::{Connection, OpenFlags};
+
+    /// spec S-1のdurable table集合(metaはclassifyで検証されるがdumpには含める)。
+    pub(crate) const DURABLE_TABLES: [&str; 6] = [
+        "meta",
+        "notes",
+        "note_exports",
+        "distillation_runs",
+        "action_receipts",
+        "action_capability_uses",
+    ];
+
+    /// `sqlite_schema` と全durable tableの論理dump。ファイルbyteではなく
+    /// 論理内容を比較する(WAL変換などSQLite都合のbyte変化は保証対象外)。
+    pub(crate) fn logical_snapshot(path: &std::path::Path) -> Vec<String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut snapshot = Vec::new();
+        {
+            let mut statement = conn
+                .prepare(
+                    "SELECT type, name, tbl_name, coalesce(sql, '')
+                     FROM sqlite_schema ORDER BY type, name",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(format!(
+                        "schema|{}|{}|{}|{}",
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?
+                    ))
+                })
+                .unwrap();
+            for row in rows {
+                snapshot.push(row.unwrap());
+            }
+        }
+        snapshot.extend(durable_rows_snapshot(&conn));
+        snapshot
+    }
+
+    /// durable tableの行だけの論理dump(schema抜き)。派生索引の修復・rollback検証で
+    /// 「durable stateはどのrebuildでも変更禁止」を固定するのに使う。
+    pub(crate) fn durable_rows_snapshot(conn: &Connection) -> Vec<String> {
+        let mut snapshot = Vec::new();
+        for table in DURABLE_TABLES {
+            let mut statement = match conn.prepare(&format!("SELECT * FROM {table}")) {
+                Ok(statement) => statement,
+                Err(_) => {
+                    snapshot.push(format!("{table}|<absent>"));
+                    continue;
+                }
+            };
+            snapshot.append(&mut table_rows_via(&mut statement, table));
+        }
+        snapshot
+    }
+
+    /// 任意tableの論理行dump(rebuild同値性の比較部品)。
+    pub(crate) fn table_rows(conn: &Connection, table: &str, columns: &str) -> Vec<String> {
+        let mut statement = conn
+            .prepare(&format!("SELECT {columns} FROM {table}"))
+            .unwrap();
+        table_rows_via(&mut statement, table)
+    }
+
+    fn table_rows_via(statement: &mut rusqlite::Statement<'_>, label: &str) -> Vec<String> {
+        let columns = statement.column_count();
+        let mut rows_out = Vec::new();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let mut cells = Vec::with_capacity(columns);
+            for index in 0..columns {
+                use rusqlite::types::ValueRef;
+                cells.push(match row.get_ref(index).unwrap() {
+                    ValueRef::Null => "NULL".to_owned(),
+                    ValueRef::Integer(value) => value.to_string(),
+                    ValueRef::Real(value) => value.to_string(),
+                    ValueRef::Text(value) => String::from_utf8_lossy(value).into_owned(),
+                    ValueRef::Blob(value) => format!("blob:{}", value.len()),
+                });
+            }
+            rows_out.push(format!("{label}|{}", cells.join("|")));
+        }
+        rows_out.sort();
+        rows_out
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_support::{DURABLE_TABLES, logical_snapshot};
     use super::*;
     use crate::authority::{
         Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteRelation, NoteUid,
@@ -1744,74 +1791,6 @@ mod tests {
     // migration state machine(S-1)のfixtureとテスト
     // ------------------------------------------------------------------
 
-    /// spec S-1のdurable table集合(metaはclassifyで検証されるがdumpには含める)。
-    const DURABLE_TABLES: [&str; 6] = [
-        "meta",
-        "notes",
-        "note_exports",
-        "distillation_runs",
-        "action_receipts",
-        "action_capability_uses",
-    ];
-
-    /// `sqlite_schema` と全durable tableの論理dump。ファイルbyteではなく
-    /// 論理内容を比較する(WAL変換などSQLite都合のbyte変化は保証対象外)。
-    fn logical_snapshot(path: &std::path::Path) -> Vec<String> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-        let mut snapshot = Vec::new();
-        {
-            let mut statement = conn
-                .prepare(
-                    "SELECT type, name, tbl_name, coalesce(sql, '')
-                     FROM sqlite_schema ORDER BY type, name",
-                )
-                .unwrap();
-            let rows = statement
-                .query_map([], |row| {
-                    Ok(format!(
-                        "schema|{}|{}|{}|{}",
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?
-                    ))
-                })
-                .unwrap();
-            for row in rows {
-                snapshot.push(row.unwrap());
-            }
-        }
-        for table in DURABLE_TABLES {
-            let mut statement = match conn.prepare(&format!("SELECT * FROM {table}")) {
-                Ok(statement) => statement,
-                Err(_) => {
-                    snapshot.push(format!("{table}|<absent>"));
-                    continue;
-                }
-            };
-            let columns = statement.column_count();
-            let mut table_rows = Vec::new();
-            let mut rows = statement.query([]).unwrap();
-            while let Some(row) = rows.next().unwrap() {
-                let mut cells = Vec::with_capacity(columns);
-                for index in 0..columns {
-                    use rusqlite::types::ValueRef;
-                    cells.push(match row.get_ref(index).unwrap() {
-                        ValueRef::Null => "NULL".to_owned(),
-                        ValueRef::Integer(value) => value.to_string(),
-                        ValueRef::Real(value) => value.to_string(),
-                        ValueRef::Text(value) => String::from_utf8_lossy(value).into_owned(),
-                        ValueRef::Blob(value) => format!("blob:{}", value.len()),
-                    });
-                }
-                table_rows.push(format!("{table}|{}", cells.join("|")));
-            }
-            table_rows.sort();
-            snapshot.append(&mut table_rows);
-        }
-        snapshot
-    }
-
     /// 歴史上のfresh DDLを版順に再現し、各版に存在したdurable tableへ実データ行
     /// (note本文 / pending export / 蒸留履歴 / action receipt)を実装した
     /// fixture DBを作る。戻り値は保存したnote document文字列。
@@ -1848,6 +1827,18 @@ mod tests {
             "INSERT INTO notes(id, title, status, origin, mtime, body, tags)
              VALUES('notes/migrate', '移行', 'stable', 'agent', 0, ?1, 'test')",
             [&note.body],
+        )
+        .unwrap();
+        // 実機のv3同様、索引済みnoteはfts行も持つ(open時のカバレッジhealth checkが
+        // 「行の無いfts」を正しく欠損と見なすため、健全fixtureには行を入れる)。
+        conn.execute(
+            "INSERT INTO fts_main(id, text) VALUES('notes/migrate', ?1)",
+            [crate::tokenize::wakati(&format!("移行 test {}", note.body))],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO fts_tri(id, text) VALUES('notes/migrate', ?1)",
+            [format!("移行 test {}", note.body)],
         )
         .unwrap();
         if version >= 4 {

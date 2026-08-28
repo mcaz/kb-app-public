@@ -8,28 +8,89 @@
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum Degradation {
-    RemoteSync { detail: String },
-    MarkdownExport { detail: String },
-    IndexSync { detail: String },
-    IndexMetadata { note: String, detail: String },
-    IndexRead { note: String, detail: String },
-    IndexParse { note: String, detail: String },
-    EmbeddingIndexPending { remaining: usize },
-    EmbeddingIndex { detail: String },
-    MainSearch { detail: String },
-    AnchorSearch { detail: String },
-    DiversityRanking { detail: String },
-    SemanticSearch { detail: String },
-    RescueSearch { detail: String },
-    RelatedNotes { detail: String },
-    ContextRetrieval { detail: String },
-    SimilarNotes { detail: String },
-    CurrentNoteContext { detail: String },
-    CareDetection { detail: String },
-    CareList { detail: String },
-    TagCounts { detail: String },
-    GraphNodes { detail: String },
-    GraphEdges { detail: String },
+    RemoteSync {
+        detail: String,
+    },
+    MarkdownExport {
+        detail: String,
+    },
+    IndexSync {
+        detail: String,
+    },
+    /// open時の自己修復で派生索引を再構築した(今回だけのrecovery notice)。
+    IndexRecovered {
+        artifact: String,
+        detail: String,
+    },
+    /// 派生索引の修復に失敗した(検索はfallback継続、次回openで再試行)。
+    IndexRepair {
+        artifact: String,
+        detail: String,
+    },
+    /// governance台帳を修復できず、note書込をfail-closedで停止中。
+    GovernanceWriteBlocked {
+        detail: String,
+    },
+    IndexMetadata {
+        note: String,
+        detail: String,
+    },
+    IndexRead {
+        note: String,
+        detail: String,
+    },
+    IndexParse {
+        note: String,
+        detail: String,
+    },
+    EmbeddingIndexPending {
+        remaining: usize,
+    },
+    EmbeddingIndex {
+        detail: String,
+    },
+    MainSearch {
+        detail: String,
+    },
+    AnchorSearch {
+        detail: String,
+    },
+    DiversityRanking {
+        detail: String,
+    },
+    SemanticSearch {
+        detail: String,
+    },
+    RescueSearch {
+        detail: String,
+    },
+    RelatedNotes {
+        detail: String,
+    },
+    ContextRetrieval {
+        detail: String,
+    },
+    SimilarNotes {
+        detail: String,
+    },
+    CurrentNoteContext {
+        detail: String,
+    },
+    CareDetection {
+        detail: String,
+    },
+    CareList {
+        detail: String,
+    },
+    TagCounts {
+        detail: String,
+    },
+    GraphNodes {
+        detail: String,
+    },
+    GraphEdges {
+        detail: String,
+    },
 }
 
 impl Degradation {
@@ -39,6 +100,9 @@ impl Degradation {
             Self::RemoteSync { .. } => "remote_sync",
             Self::MarkdownExport { .. } => "markdown_export",
             Self::IndexSync { .. } => "index_sync",
+            Self::IndexRecovered { .. } => "index_recovered",
+            Self::IndexRepair { .. } => "index_repair",
+            Self::GovernanceWriteBlocked { .. } => "governance_write_blocked",
             Self::IndexMetadata { .. } => "index_metadata",
             Self::IndexRead { .. } => "index_read",
             Self::IndexParse { .. } => "index_parse",
@@ -70,6 +134,15 @@ impl std::fmt::Display for Degradation {
                 write!(f, "Markdownバックアップの更新に失敗: {detail}")
             }
             Self::IndexSync { detail } => write!(f, "索引の更新に失敗: {detail}"),
+            Self::IndexRecovered { artifact, detail } => {
+                write!(f, "派生索引 {artifact} を自動修復した(原因: {detail})")
+            }
+            Self::IndexRepair { artifact, detail } => {
+                write!(f, "派生索引 {artifact} を修復できない: {detail}")
+            }
+            Self::GovernanceWriteBlocked { detail } => {
+                write!(f, "ノートの書込を停止中: {detail}")
+            }
             Self::IndexMetadata { note, detail } => {
                 write!(f, "{note} の更新日時を取得できない: {detail}")
             }
@@ -121,6 +194,15 @@ mod tests {
             Degradation::RemoteSync { detail: "x".into() },
             Degradation::MarkdownExport { detail: "x".into() },
             Degradation::IndexSync { detail: "x".into() },
+            Degradation::IndexRecovered {
+                artifact: "fts_main".into(),
+                detail: "x".into(),
+            },
+            Degradation::IndexRepair {
+                artifact: "fts_tri".into(),
+                detail: "x".into(),
+            },
+            Degradation::GovernanceWriteBlocked { detail: "x".into() },
             Degradation::IndexMetadata {
                 note: "notes/a".into(),
                 detail: "x".into(),
