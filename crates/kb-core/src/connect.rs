@@ -578,7 +578,8 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
         RemoteContents::Empty => push_now(vault),
         RemoteContents::Vault { .. } => {
             configure_existing_upstream(vault)?;
-            pull_now(vault)?;
+            // 初回接続のopen劣化は次の通常open(MCP/GUI)が毎回再検査・再報告する
+            let _ = pull_now(vault)?;
             push_now(vault)?;
             crate::lfs::restore_all(vault)?;
             Ok(())
@@ -854,37 +855,52 @@ fn pull_is_throttled(st: &SyncState, now: u64) -> bool {
 
 /// メッセージのやり取り・画面更新の際の pull(複数デバイス同期)。
 /// 時間スロットリング付き — 全呼び出しで同期待ちしない(旧 KB のレイテンシ教訓)。
-/// 戻り値: 劣化情報(None = 正常またはスキップ)。
-pub fn pull_if_stale(vault: &Vault) -> Option<crate::degradation::Degradation> {
+/// 戻り値: 劣化情報(pull時のDB open自己修復・修復失敗の劣化を含む。空 = 正常
+/// またはスキップ)。
+pub fn pull_if_stale(vault: &Vault) -> Vec<crate::degradation::Degradation> {
     if !has_origin(vault) {
-        return None;
+        return Vec::new();
     }
     let now = epoch_now();
     let current = sync_state(vault);
     if pull_is_throttled(&current, now) {
         return current
             .last_error
-            .map(|detail| crate::degradation::Degradation::RemoteSync { detail });
+            .map(|detail| crate::degradation::Degradation::RemoteSync { detail })
+            .into_iter()
+            .collect();
     }
     // Keychain拒否のようにgit起動前で失敗しても、この時刻を残して次の画面queryや
     // MCP tool callが即座に同じ認証を要求しない。
+    let mut degraded = Vec::new();
     record_pull_attempt(vault, now);
-    if let Err(error) = pull_now(vault) {
-        record_sync_error(
-            vault,
-            &error.to_string(),
-            failure_kind(&error).or(Some(BackupFailureKind::GitPull)),
-        );
+    match pull_now(vault) {
+        // pull時のopenが行った自己修復・修復失敗の劣化を握り潰さず呼び出し元へ
+        // 合流する(レビュー指摘: pull経路がOpenDbOutcomeを捨てていた)。
+        Ok(open_degraded) => degraded.extend(open_degraded),
+        Err(error) => {
+            record_sync_error(
+                vault,
+                &error.to_string(),
+                failure_kind(&error).or(Some(BackupFailureKind::GitPull)),
+            );
+        }
     }
-    sync_state(vault)
-        .last_error
-        .map(|detail| crate::degradation::Degradation::RemoteSync { detail })
+    degraded.extend(
+        sync_state(vault)
+            .last_error
+            .map(|detail| crate::degradation::Degradation::RemoteSync { detail }),
+    );
+    degraded
 }
 
 /// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復
 /// (merge=ours で相手側が勝った場合や、他デバイス追加分の反映)。
-pub fn pull_now(vault: &Vault) -> Result<()> {
-    let conn = crate::index::open_db(vault)?;
+/// 戻り値: pull時のDB openが報告した劣化(自己修復notice・修復失敗)。
+pub fn pull_now(vault: &Vault) -> Result<Vec<crate::degradation::Degradation>> {
+    let outcome = crate::index::open_db_with_outcome(vault)?;
+    let conn = outcome.conn;
+    let degraded = outcome.degraded;
     vault.flush_note_exports(&conn)?;
     ensure_note_exports_clean(vault)?;
     let _lock = sync_lock(vault)?;
@@ -894,7 +910,7 @@ pub fn pull_now(vault: &Vault) -> Result<()> {
         record_pull_success(vault);
         ensure_import_succeeded(crate::index::import_markdown_snapshot(vault, &conn)?)?;
         let _ = vault.write_index_md();
-        Ok(())
+        Ok(degraded)
     } else {
         let error = git_failure("pull 失敗", &stderr_of(&out), BackupFailureKind::GitPull);
         record_sync_error(vault, &error.to_string(), failure_kind(&error));
@@ -949,7 +965,8 @@ pub fn backup_push(vault: &Vault) -> Result<String> {
             "バックアップ先が未設定(繋ぐ画面で GitHub リポジトリの URL を設定)",
         ));
     }
-    pull_now(vault)?;
+    // 明示同期のopen劣化は次の通常open(MCP/GUI)が毎回再検査・再報告する
+    let _ = pull_now(vault)?;
     push_now(vault)?;
     Ok(format!("同期完了({} 件を送信)", status.pending))
 }
@@ -1205,8 +1222,8 @@ mod tests {
         );
         assert_eq!(after_pull.privacy_latch, latched.privacy_latch);
         assert!(matches!(
-            pull_if_stale(&vault),
-            Some(crate::degradation::Degradation::RemoteSync { detail })
+            pull_if_stale(&vault).as_slice(),
+            [crate::degradation::Degradation::RemoteSync { detail }]
                 if detail == "repository became public"
         ));
 
@@ -1323,7 +1340,20 @@ mod tests {
             "test/client",
         )
         .unwrap();
-        pull_now(&b).unwrap();
+        // pull時のopenで走った自己修復の劣化は握り潰されず呼び出し元へ届く
+        // (レビュー指摘: pull経路がOpenDbOutcomeのdegraded/recoveredを捨てていた)
+        drop(crate::index::open_db(&b).unwrap());
+        rusqlite::Connection::open(b.index_db_path())
+            .unwrap()
+            .execute_batch("DROP TABLE fts_anchor;")
+            .unwrap();
+        let pull_degraded = pull_now(&b).unwrap();
+        assert!(
+            pull_degraded
+                .iter()
+                .any(|item| item.code() == "index_recovered"),
+            "{pull_degraded:?}"
+        );
         assert_eq!(
             b.list_note_files().unwrap().len(),
             2,

@@ -360,6 +360,7 @@ impl Vault {
             .title
             .unwrap_or_else(|| id.to_string());
         crate::note_store::delete(
+            self,
             conn,
             id,
             &format!("**Deletion**: 「{title}」({id})を削除。理由: {reason}"),

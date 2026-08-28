@@ -1,0 +1,1148 @@
+{
+  "schema_version": "1.1.0",
+  "profiles": ["session_auto", "session_explicit", "routine_auto"],
+  "rerank": "off",
+  "notes": [
+    {
+      "expected_id": "notes/common-meeting-room-booking",
+      "title": "Common Meeting Room Booking",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Book shared rooms through the calendar and cancel unused slots the day before so other teams can use them. Rooms with video units are reserved for calls with more than four remote participants.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-meeting-room-booking" }
+    },
+    {
+      "expected_id": "notes/common-travel-request-form",
+      "title": "Common Travel Request Form",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Submit travel requests two weeks ahead with the destination, purpose, and estimated cost. Late requests need a manager note and are settled at the standard rate only.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-travel-request-form" }
+    },
+    {
+      "expected_id": "notes/common-laptop-setup-guide",
+      "title": "Common Laptop Setup Guide",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "New laptops get full-disk encryption, the password manager, and the VPN client on the first day. Return the loaner unit within a week of receiving the permanent machine.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-laptop-setup-guide" }
+    },
+    {
+      "expected_id": "notes/common-visitor-badge-rules",
+      "title": "Common Visitor Badge Rules",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Visitors sign in at reception, wear a badge at all times, and are escorted inside secure areas. Badges are returned at departure and reprinted for each visit.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-visitor-badge-rules" }
+    },
+    {
+      "expected_id": "notes/common-printer-maintenance",
+      "title": "Common Printer Maintenance",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Replace toner when the panel warns and write paper jams in the shared sheet. The facilities team services every printer on the first Wednesday of the month.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-printer-maintenance" }
+    },
+    {
+      "expected_id": "notes/common-holiday-calendar",
+      "title": "Common Holiday Calendar",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Office holidays follow the national calendar plus two company holidays in August. Teams with on-call duty swap the company holidays for a weekday of their choice.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-holiday-calendar" }
+    },
+    {
+      "expected_id": "notes/common-desk-booking-etiquette",
+      "title": "Common Desk Booking Etiquette",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Book a desk before arriving and release it if plans change. Leave the desk clear at the end of the day so cleaning staff can wipe every surface.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-desk-booking-etiquette" }
+    },
+    {
+      "expected_id": "notes/common-coffee-machine-care",
+      "title": "Common Coffee Machine Care",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Descale the machine monthly and refill beans from the pantry stock. Report a blinking service light to facilities instead of pressing the reset button repeatedly.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-coffee-machine-care" }
+    },
+    {
+      "expected_id": "notes/common-parking-allocation",
+      "title": "Common Parking Allocation",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Parking spaces change hands quarterly among teams and bicycles use the basement racks. Visitors park in the two marked bays next to the entrance.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-parking-allocation" }
+    },
+    {
+      "expected_id": "notes/common-mailroom-hours",
+      "title": "Common Mailroom Hours",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "The mailroom is open from nine to five and packages are held for 72 hours. Outgoing parcels need the cost centre written on the label.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-mailroom-hours" }
+    },
+    {
+      "expected_id": "notes/common-lost-and-found",
+      "title": "Common Lost and Found",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Lost items are kept at reception for one month and then donated. Valuables are locked in the cabinet and released only with a matching description.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-lost-and-found" }
+    },
+    {
+      "expected_id": "notes/common-wellness-program",
+      "title": "Common Wellness Program",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "The wellness program offers gym discounts and quarterly health checks. Enrolment opens in January and again in July for new joiners.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-wellness-program" }
+    },
+    {
+      "expected_id": "notes/common-library-loans",
+      "title": "Common Library Loans",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Library books can be borrowed for four weeks and extended once. Reference volumes stay in the reading corner and are not lent out.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-library-loans" }
+    },
+    {
+      "expected_id": "notes/common-kitchen-cleaning-rota",
+      "title": "Common Kitchen Cleaning Rota",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Kitchen cleaning follows the weekly rota posted on the fridge. The last person leaving on Friday empties the dishwasher and takes out the recycling.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-kitchen-cleaning-rota" }
+    },
+    {
+      "expected_id": "notes/common-supply-cabinet",
+      "title": "Common Supply Cabinet",
+      "description": "Shared office note used as low-signal link filler",
+      "body": "Stationery is in the supply cabinet; write what you take on the clipboard. Bulk orders go through the office manager once a month.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/common-supply-cabinet" }
+    },
+
+    {
+      "expected_id": "notes/lumen-restore-drill",
+      "title": "Lumen Restore Drill",
+      "description": "Routine companion record",
+      "body": "Restore drill result for the lumen media set: restore time 42 minutes, verification passed, media ID L-0418.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/lumen-restore-drill" }
+    },
+    {
+      "expected_id": "notes/lumen-backup-rotation",
+      "title": "Lumen Backup Rotation",
+      "description": "Routine procedure under test",
+      "body": "Lumen backup rotation runs every Monday. Rotate the weekly media set, run the restore drill, and note the media ID in the drill record: [lumen restore drill](/notes/lumen-restore-drill.md).",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/lumen-backup-rotation" }
+    },
+    {
+      "expected_id": "notes/sable-certificate-inventory",
+      "title": "Sable Certificate Inventory",
+      "description": "Routine companion record",
+      "body": "Inventory of sable certificates with expiry dates, issuing chain, and the node each one is installed on.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/sable-certificate-inventory" }
+    },
+    {
+      "expected_id": "notes/sable-certificate-renewal",
+      "title": "Sable Certificate Renewal",
+      "description": "Routine procedure under test",
+      "body": "Sable certificate renewal happens thirty days before expiry. Request the new chain, install it on both edge nodes, and update the inventory: [sable certificate inventory](/notes/sable-certificate-inventory.md).",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/sable-certificate-renewal" }
+    },
+    {
+      "expected_id": "notes/corvid-quota-table",
+      "title": "Corvid Quota Table",
+      "description": "Routine companion record",
+      "body": "Quota table for corvid tenants with the current limit, last quarter consumption, and the owner of each tenant.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/corvid-quota-table" }
+    },
+    {
+      "expected_id": "notes/corvid-quota-review",
+      "title": "Corvid Quota Review",
+      "description": "Routine procedure under test",
+      "body": "Corvid quota review runs on the first business day of the quarter. Compare consumption with the quota table, raise limits that are above 80 percent, and file the summary: [corvid quota table](/notes/corvid-quota-table.md).",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/corvid-quota-review" }
+    },
+    {
+      "expected_id": "notes/定例確認テンプレート",
+      "title": "定例確認テンプレート",
+      "description": "定例確認の書式",
+      "body": "定例確認の報告形式。確認した項目、該当なしの項目、未完了の項目、次回への持ち越しを所定の順で要約する。差分がある場合は変更点を先頭に置く。",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/routine-report-template" }
+    },
+    {
+      "expected_id": "notes/週次報告の書き方",
+      "title": "週次報告の書き方",
+      "description": "週次報告の書式",
+      "body": "週次報告は確認結果の要約、未完了項目、次回の予定を含める。所定の形式で報告し、参照したノートへのリンクを添える。担当者は末尾に書く。",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/weekly-report-style" }
+    },
+
+    {
+      "expected_id": "notes/quartz-ledger-policy",
+      "title": "Quartz Ledger Policy",
+      "description": "Policy the procedure derives from",
+      "body": "Quartz ledger policy: every adjustment above 1,000 needs a second approver and a reference to the source document.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "px/quartz-ledger-policy" }
+    },
+    {
+      "expected_id": "notes/quartz-month-close-record",
+      "title": "Quartz Month Close Record",
+      "description": "Record the procedure cites",
+      "body": "Month close record for the quartz ledger: 14 adjustments posted, two above 1,000 with second approval, period frozen on the third business day.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/quartz-month-close-record" }
+    },
+    {
+      "expected_id": "notes/quartz-ledger-glossary",
+      "title": "Quartz Ledger Glossary",
+      "description": "OR-only decoy sharing two query terms",
+      "body": "Definitions used around the quartz ledger: subledger, period, adjustment, approver.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/quartz-ledger-glossary" }
+    },
+    {
+      "expected_id": "notes/quartz-ledger-reconciliation",
+      "title": "Quartz Ledger Reconciliation",
+      "description": "Procedure under test",
+      "body": "Quartz ledger reconciliation closes the month: compare the subledger with the bank export, post adjustments, and freeze the period. Background reading: [common meeting room booking](/notes/common-meeting-room-booking.md) [common travel request form](/notes/common-travel-request-form.md) [common laptop setup guide](/notes/common-laptop-setup-guide.md) [common visitor badge rules](/notes/common-visitor-badge-rules.md) [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/quartz-ledger-reconciliation" },
+      "relations": [
+        { "type": "derived_from", "target_id": "notes/quartz-ledger-policy" },
+        { "type": "supports", "target_id": "notes/quartz-month-close-record" }
+      ]
+    },
+    {
+      "expected_id": "notes/quartz-vendor-policy",
+      "title": "Quartz Vendor Policy",
+      "description": "Policy the procedure derives from",
+      "body": "Quartz vendor policy: no purchase order is issued before the data agreement is countersigned.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "px/quartz-vendor-policy" }
+    },
+    {
+      "expected_id": "notes/quartz-vendor-intake-record",
+      "title": "Quartz Vendor Intake Record",
+      "description": "Record the procedure cites",
+      "body": "Intake record for quartz vendors onboarded this quarter: six vendors, one rejected for a missing tax form.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/quartz-vendor-intake-record" }
+    },
+    {
+      "expected_id": "notes/quartz-vendor-directory",
+      "title": "Quartz Vendor Directory",
+      "description": "OR-only decoy sharing two query terms",
+      "body": "Directory of quartz vendors with contact person and payment terms.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/quartz-vendor-directory" }
+    },
+    {
+      "expected_id": "notes/quartz-vendor-onboarding",
+      "title": "Quartz Vendor Onboarding",
+      "description": "Procedure under test",
+      "body": "Quartz vendor onboarding collects the tax form, bank details, and a signed data agreement before the first purchase order. Background reading: [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/quartz-vendor-onboarding" },
+      "relations": [
+        { "type": "derived_from", "target_id": "notes/quartz-vendor-policy" },
+        { "type": "supports", "target_id": "notes/quartz-vendor-intake-record" }
+      ]
+    },
+    {
+      "expected_id": "notes/quartz-payroll-policy",
+      "title": "Quartz Payroll Policy",
+      "description": "Policy the procedure derives from",
+      "body": "Quartz payroll policy: the bank file is released only after two people compare the totals.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "px/quartz-payroll-policy" }
+    },
+    {
+      "expected_id": "notes/quartz-payroll-run-record",
+      "title": "Quartz Payroll Run Record",
+      "description": "Record the procedure cites",
+      "body": "Run record for the quartz payroll export: totals matched on the second pass after a rounding fix.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/quartz-payroll-run-record" }
+    },
+    {
+      "expected_id": "notes/quartz-payroll-calendar",
+      "title": "Quartz Payroll Calendar",
+      "description": "OR-only decoy sharing two query terms",
+      "body": "Calendar of quartz payroll cutoffs and bank file release dates.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/quartz-payroll-calendar" }
+    },
+    {
+      "expected_id": "notes/quartz-payroll-export",
+      "title": "Quartz Payroll Export",
+      "description": "Procedure under test",
+      "body": "Quartz payroll export runs after the cutoff: generate the bank file, compare totals with the ledger, and store the signed file. Background reading: [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md) [common library loans](/notes/common-library-loans.md) [common kitchen cleaning rota](/notes/common-kitchen-cleaning-rota.md) [common supply cabinet](/notes/common-supply-cabinet.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/quartz-payroll-export" },
+      "relations": [
+        { "type": "derived_from", "target_id": "notes/quartz-payroll-policy" },
+        { "type": "supports", "target_id": "notes/quartz-payroll-run-record" }
+      ]
+    },
+
+    {
+      "expected_id": "notes/freeze-window-calendar",
+      "title": "Freeze Window Calendar",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Freeze window dates for every release train, published a quarter ahead.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/freeze-window-calendar" }
+    },
+    {
+      "expected_id": "notes/freeze-window-checklist",
+      "title": "Freeze Window Checklist",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Freeze window checklist: announce the dates, verify the pipeline is idle, close the window with a note.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/freeze-window-checklist" }
+    },
+    {
+      "expected_id": "notes/nightly-exception-register",
+      "title": "Nightly Exception Register",
+      "description": "Exceptions granted inside the helios freeze",
+      "body": "Register of exceptions during a freeze period: each entry lists the approved change owner, the reason for urgency, and the rollback plan.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/helios-freeze-exceptions" }
+    },
+    {
+      "expected_id": "notes/rollout-index-alpha",
+      "title": "Rollout Index Alpha",
+      "description": "Hub note one hop from the seed",
+      "body": "Index of rollout material: [common meeting room booking](/notes/common-meeting-room-booking.md) [common travel request form](/notes/common-travel-request-form.md) [common laptop setup guide](/notes/common-laptop-setup-guide.md) [common visitor badge rules](/notes/common-visitor-badge-rules.md) [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md) [common library loans](/notes/common-library-loans.md) [common kitchen cleaning rota](/notes/common-kitchen-cleaning-rota.md) [common supply cabinet](/notes/common-supply-cabinet.md) [nightly exception register](/notes/nightly-exception-register.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/rollout-index-alpha" }
+    },
+    {
+      "expected_id": "notes/helios-freeze-window",
+      "title": "Helios Freeze Window",
+      "description": "Seed procedure",
+      "body": "Helios Freeze Window opens the Friday before each release. Coordinate through the [rollout index alpha](/notes/rollout-index-alpha.md).",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/helios-freeze-window" }
+    },
+    {
+      "expected_id": "notes/overnight-change-register",
+      "title": "Overnight Change Register",
+      "description": "Exceptions granted inside the pallas freeze",
+      "body": "Register of exceptions during a freeze period: each entry lists the approved change owner, the reason for urgency, and the rollback plan.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/pallas-freeze-exceptions" }
+    },
+    {
+      "expected_id": "notes/rollout-index-beta",
+      "title": "Rollout Index Beta",
+      "description": "Hub note one hop from the seed",
+      "body": "Index of rollout material: [common meeting room booking](/notes/common-meeting-room-booking.md) [common travel request form](/notes/common-travel-request-form.md) [common laptop setup guide](/notes/common-laptop-setup-guide.md) [common visitor badge rules](/notes/common-visitor-badge-rules.md) [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md) [common library loans](/notes/common-library-loans.md) [common kitchen cleaning rota](/notes/common-kitchen-cleaning-rota.md) [common supply cabinet](/notes/common-supply-cabinet.md) [overnight change register](/notes/overnight-change-register.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/rollout-index-beta" }
+    },
+    {
+      "expected_id": "notes/pallas-freeze-window",
+      "title": "Pallas Freeze Window",
+      "description": "Seed procedure",
+      "body": "Pallas Freeze Window opens the Friday before each release. Coordinate through the [rollout index beta](/notes/rollout-index-beta.md).",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/pallas-freeze-window" }
+    },
+    {
+      "expected_id": "notes/standby-exception-register",
+      "title": "Standby Exception Register",
+      "description": "Exceptions granted inside the vesta freeze",
+      "body": "Register of exceptions during a freeze period: each entry lists the approved change owner, the reason for urgency, and the rollback plan.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/vesta-freeze-exceptions" }
+    },
+    {
+      "expected_id": "notes/rollout-index-gamma",
+      "title": "Rollout Index Gamma",
+      "description": "Hub note one hop from the seed",
+      "body": "Index of rollout material: [common meeting room booking](/notes/common-meeting-room-booking.md) [common travel request form](/notes/common-travel-request-form.md) [common laptop setup guide](/notes/common-laptop-setup-guide.md) [common visitor badge rules](/notes/common-visitor-badge-rules.md) [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md) [common library loans](/notes/common-library-loans.md) [common kitchen cleaning rota](/notes/common-kitchen-cleaning-rota.md) [common supply cabinet](/notes/common-supply-cabinet.md) [standby exception register](/notes/standby-exception-register.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/rollout-index-gamma" }
+    },
+    {
+      "expected_id": "notes/vesta-freeze-window",
+      "title": "Vesta Freeze Window",
+      "description": "Seed procedure",
+      "body": "Vesta Freeze Window opens the Friday before each release. Coordinate through the [rollout index gamma](/notes/rollout-index-gamma.md).",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/vesta-freeze-window" }
+    },
+
+    {
+      "expected_id": "notes/rollback-drill-calendar",
+      "title": "Rollback Drill Calendar",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Rollback drill dates for each service, one per quarter.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/rollback-drill-calendar" }
+    },
+    {
+      "expected_id": "notes/rollback-drill-checklist",
+      "title": "Rollback Drill Checklist",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Rollback drill checklist: pick the build, announce the window, time the switch, file the result.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/rollback-drill-checklist" }
+    },
+    {
+      "expected_id": "notes/rollback-drill-report-template",
+      "title": "Rollback Drill Report Template",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Template for the rollback drill report: participants, duration, findings, follow-ups.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/rollback-drill-report-template" }
+    },
+    {
+      "expected_id": "notes/staging-verification-sheet",
+      "title": "Staging Verification Sheet",
+      "description": "Sheet reached only through links",
+      "body": "Sheet used before a release goes out: confirm the previous build is archived, confirm traffic can be shifted back, and sign off.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/staging-verification-sheet" }
+    },
+    {
+      "expected_id": "notes/squad-handbook-one",
+      "title": "Squad Handbook One",
+      "description": "Non-seed note whose link anchor names the alias",
+      "body": "Handbook for the squad. Before a release, walk through the [ember rollback](/notes/staging-verification-sheet.md) sheet and the on-call roster.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/squad-handbook-one" }
+    },
+    {
+      "expected_id": "notes/ember-rollback-drill",
+      "title": "Ember Rollback Drill",
+      "description": "Seed procedure",
+      "body": "Ember Rollback Drill rehearses switching a release back. Related material: [common meeting room booking](/notes/common-meeting-room-booking.md) [common travel request form](/notes/common-travel-request-form.md) [common laptop setup guide](/notes/common-laptop-setup-guide.md) [common visitor badge rules](/notes/common-visitor-badge-rules.md) [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md) [staging verification sheet](/notes/staging-verification-sheet.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/ember-rollback-drill" }
+    },
+    {
+      "expected_id": "notes/staging-handover-sheet",
+      "title": "Staging Handover Sheet",
+      "description": "Sheet reached only through links",
+      "body": "Sheet used when handing a release to operations: list the build, the owner on duty, and the switch-back contact.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/staging-handover-sheet" }
+    },
+    {
+      "expected_id": "notes/squad-handbook-two",
+      "title": "Squad Handbook Two",
+      "description": "Non-seed note whose link anchor names the alias",
+      "body": "Handbook for the squad. Before a release, walk through the [frost rollback](/notes/staging-handover-sheet.md) sheet and the on-call roster.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/squad-handbook-two" }
+    },
+    {
+      "expected_id": "notes/frost-rollback-drill",
+      "title": "Frost Rollback Drill",
+      "description": "Seed procedure",
+      "body": "Frost Rollback Drill rehearses switching a release back. Related material: [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md) [common library loans](/notes/common-library-loans.md) [common kitchen cleaning rota](/notes/common-kitchen-cleaning-rota.md) [common supply cabinet](/notes/common-supply-cabinet.md) [staging handover sheet](/notes/staging-handover-sheet.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/frost-rollback-drill" }
+    },
+
+    {
+      "expected_id": "notes/restore-checksum-quick-reference",
+      "title": "Restore Checksum Quick Reference",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Quick reference for restore checksum commands and exit codes.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/restore-checksum-quick-reference" }
+    },
+    {
+      "expected_id": "notes/restore-checksum-training-notes",
+      "title": "Restore Checksum Training Notes",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Training notes from the restore checksum workshop: common mistakes and how to read the report.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/restore-checksum-training-notes" }
+    },
+    {
+      "expected_id": "notes/restore-checksum-cheat-sheet",
+      "title": "Restore Checksum Cheat Sheet",
+      "description": "Shared decoy matching the generic query terms",
+      "body": "Cheat sheet listing the restore checksum flags used by each team.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/restore-checksum-cheat-sheet" }
+    },
+    {
+      "expected_id": "notes/operations-compendium-volume-two",
+      "title": "Operations Compendium Volume Two",
+      "description": "Long-form operations reference",
+      "body": "## Tundra restore checksum verification\nAfter a checksum mismatch, rotate the tundra vault secret and re-run the restore verification before reopening writes.\n## Weekly operations digest\nThe weekly digest gathers capacity numbers, ticket counts, and vendor updates from every team lead, then publishes a one-page summary on the intranet before the Monday stand-up so that nobody has to read the raw dashboards.\n## Vendor contact handover\nVendor contacts rotate every six months; the outgoing contact introduces the incoming one by email, shares the escalation matrix, and hands over the open purchase orders together with the price list.\n",
+      "body_repetitions": 70,
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/operations-compendium-volume-two" }
+    },
+    {
+      "expected_id": "notes/tundra-restore-checksum",
+      "title": "Tundra Restore Checksum",
+      "description": "Seed summary",
+      "body": "Tundra Restore Checksum summary: the full procedure lives in the [operations compendium volume two](/notes/operations-compendium-volume-two.md). Related material: [common meeting room booking](/notes/common-meeting-room-booking.md) [common travel request form](/notes/common-travel-request-form.md) [common laptop setup guide](/notes/common-laptop-setup-guide.md) [common visitor badge rules](/notes/common-visitor-badge-rules.md) [common printer maintenance](/notes/common-printer-maintenance.md) [common holiday calendar](/notes/common-holiday-calendar.md) [common desk booking etiquette](/notes/common-desk-booking-etiquette.md) [common coffee machine care](/notes/common-coffee-machine-care.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/tundra-restore-checksum" }
+    },
+    {
+      "expected_id": "notes/operations-compendium-volume-three",
+      "title": "Operations Compendium Volume Three",
+      "description": "Long-form operations reference",
+      "body": "## Delta restore checksum verification\nAfter a checksum mismatch, replay the delta journal from the last good marker and re-run the restore verification.\n## Weekly operations digest\nThe weekly digest gathers capacity numbers, ticket counts, and vendor updates from every team lead, then publishes a one-page summary on the intranet before the Monday stand-up so that nobody has to read the raw dashboards.\n## Vendor contact handover\nVendor contacts rotate every six months; the outgoing contact introduces the incoming one by email, shares the escalation matrix, and hands over the open purchase orders together with the price list.\n",
+      "body_repetitions": 70,
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/operations-compendium-volume-three" }
+    },
+    {
+      "expected_id": "notes/delta-restore-checksum",
+      "title": "Delta Restore Checksum",
+      "description": "Seed summary",
+      "body": "Delta Restore Checksum summary: the full procedure lives in the [operations compendium volume three](/notes/operations-compendium-volume-three.md). Related material: [common coffee machine care](/notes/common-coffee-machine-care.md) [common parking allocation](/notes/common-parking-allocation.md) [common mailroom hours](/notes/common-mailroom-hours.md) [common lost and found](/notes/common-lost-and-found.md) [common wellness program](/notes/common-wellness-program.md) [common library loans](/notes/common-library-loans.md) [common kitchen cleaning rota](/notes/common-kitchen-cleaning-rota.md) [common supply cabinet](/notes/common-supply-cabinet.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/delta-restore-checksum" }
+    },
+
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2022-03",
+      "title": "Meridian Gateway Cutover 2022-03",
+      "description": "meridian gateway cutover record 2022-03",
+      "body": "Historical record of the meridian gateway cutover in 2022-03: first cutover moved the billing clients behind the gateway; two clients needed manual certificate installs.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2022-03" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2022-07",
+      "title": "Meridian Gateway Cutover 2022-07",
+      "description": "meridian gateway cutover record 2022-07",
+      "body": "Historical record of the meridian gateway cutover in 2022-07: second cutover moved the partner API; the rate limit was raised twice during the week.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2022-07" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2022-11",
+      "title": "Meridian Gateway Cutover 2022-11",
+      "description": "meridian gateway cutover record 2022-11",
+      "body": "Historical record of the meridian gateway cutover in 2022-11: the legacy proxy was switched off; three clients fell back to direct calls for a day.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2022-11" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2023-02",
+      "title": "Meridian Gateway Cutover 2023-02",
+      "description": "meridian gateway cutover record 2023-02",
+      "body": "Historical record of the meridian gateway cutover in 2023-02: mutual TLS was made mandatory; expired certificates blocked one warehouse integration.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2023-02" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2023-06",
+      "title": "Meridian Gateway Cutover 2023-06",
+      "description": "meridian gateway cutover record 2023-06",
+      "body": "Historical record of the meridian gateway cutover in 2023-06: the per-client rate limit replaced the global limit after a noisy-neighbour incident.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2023-06" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2023-10",
+      "title": "Meridian Gateway Cutover 2023-10",
+      "description": "meridian gateway cutover record 2023-10",
+      "body": "Historical record of the meridian gateway cutover in 2023-10: the gateway was moved to the new region; DNS propagation took longer than planned.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2023-10" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2024-01",
+      "title": "Meridian Gateway Cutover 2024-01",
+      "description": "meridian gateway cutover record 2024-01",
+      "body": "Historical record of the meridian gateway cutover in 2024-01: an audit found two clients still using shared certificates; both were re-issued.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2024-01" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-cutover-2024-05",
+      "title": "Meridian Gateway Cutover 2024-05",
+      "description": "meridian gateway cutover record 2024-05",
+      "body": "Historical record of the meridian gateway cutover in 2024-05: the emergency bypass switch was removed after the last legacy client migrated.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/meridian-gateway-history-2024-05" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-runbook",
+      "title": "Meridian Gateway Runbook",
+      "description": "Active companion procedure",
+      "body": "Runbook for the meridian gateway: rotate the client certificates quarterly and watch the rate-limit dashboard.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/meridian-gateway-runbook" }
+    },
+    {
+      "expected_id": "notes/meridian-gateway-policy",
+      "title": "Meridian Gateway Policy",
+      "description": "Active canonical under test",
+      "body": "Current meridian gateway policy: every external call passes through the gateway with mutual TLS and a per-client rate limit. History: [2022-03 cutover](/notes/meridian-gateway-cutover-2022-03.md) [2022-07 cutover](/notes/meridian-gateway-cutover-2022-07.md) [2022-11 cutover](/notes/meridian-gateway-cutover-2022-11.md) [2023-02 cutover](/notes/meridian-gateway-cutover-2023-02.md) [2023-06 cutover](/notes/meridian-gateway-cutover-2023-06.md) [2023-10 cutover](/notes/meridian-gateway-cutover-2023-10.md) [2024-01 cutover](/notes/meridian-gateway-cutover-2024-01.md) [2024-05 cutover](/notes/meridian-gateway-cutover-2024-05.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/meridian-gateway-policy" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2022-02",
+      "title": "Harbor Sync Cutover 2022-02",
+      "description": "harbor sync cutover record 2022-02",
+      "body": "Historical record of the harbor sync cutover in 2022-02: the hourly full upload was replaced by a two-hour cadence to reduce load.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2022-02" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2022-06",
+      "title": "Harbor Sync Cutover 2022-06",
+      "description": "harbor sync cutover record 2022-06",
+      "body": "Historical record of the harbor sync cutover in 2022-06: delta upload was piloted for one warehouse; the reconcile found forty mismatches.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2022-06" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2022-09",
+      "title": "Harbor Sync Cutover 2022-09",
+      "description": "harbor sync cutover record 2022-09",
+      "body": "Historical record of the harbor sync cutover in 2022-09: the pilot was paused after duplicated catalog rows appeared.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2022-09" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2023-01",
+      "title": "Harbor Sync Cutover 2023-01",
+      "description": "harbor sync cutover record 2023-01",
+      "body": "Historical record of the harbor sync cutover in 2023-01: delta upload restarted with idempotent keys; no duplicates in the first month.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2023-01" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2023-04",
+      "title": "Harbor Sync Cutover 2023-04",
+      "description": "harbor sync cutover record 2023-04",
+      "body": "Historical record of the harbor sync cutover in 2023-04: the cadence moved from thirty to fifteen minutes after the queue proved stable.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2023-04" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2023-08",
+      "title": "Harbor Sync Cutover 2023-08",
+      "description": "harbor sync cutover record 2023-08",
+      "body": "Historical record of the harbor sync cutover in 2023-08: the nightly reconcile was added to catch silent failures.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2023-08" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2023-12",
+      "title": "Harbor Sync Cutover 2023-12",
+      "description": "harbor sync cutover record 2023-12",
+      "body": "Historical record of the harbor sync cutover in 2023-12: the uploader was rewritten; throughput doubled and memory halved.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2023-12" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-cutover-2024-04",
+      "title": "Harbor Sync Cutover 2024-04",
+      "description": "harbor sync cutover record 2024-04",
+      "body": "Historical record of the harbor sync cutover in 2024-04: the last warehouse switched to delta upload and the full upload path was retired.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "historical", "scope": "px/harbor-sync-history-2024-04" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-runbook",
+      "title": "Harbor Sync Runbook",
+      "description": "Active companion procedure",
+      "body": "Runbook for harbor sync: check the delta queue depth and restart the uploader if it stalls.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/harbor-sync-runbook" }
+    },
+    {
+      "expected_id": "notes/harbor-sync-policy",
+      "title": "Harbor Sync Policy",
+      "description": "Active canonical under test",
+      "body": "Current harbor sync policy: catalog changes are synced by delta upload every fifteen minutes and a full reconcile runs nightly. History: [2022-02 cutover](/notes/harbor-sync-cutover-2022-02.md) [2022-06 cutover](/notes/harbor-sync-cutover-2022-06.md) [2022-09 cutover](/notes/harbor-sync-cutover-2022-09.md) [2023-01 cutover](/notes/harbor-sync-cutover-2023-01.md) [2023-04 cutover](/notes/harbor-sync-cutover-2023-04.md) [2023-08 cutover](/notes/harbor-sync-cutover-2023-08.md) [2023-12 cutover](/notes/harbor-sync-cutover-2023-12.md) [2024-04 cutover](/notes/harbor-sync-cutover-2024-04.md)",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/harbor-sync-policy" }
+    },
+
+    {
+      "expected_id": "notes/kestrel-retention-decision",
+      "title": "Kestrel Retention Decision",
+      "description": "Decision with its rationale",
+      "body": "Kestrel retention is 90 days because the reuse sample showed no access after day 90 and storage cost doubles beyond that point.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "px/kestrel-retention-decision" }
+    },
+    {
+      "expected_id": "notes/reuse-sample-spring",
+      "title": "Reuse Sample Spring",
+      "description": "Evidence record",
+      "body": "Sample of forty kestrel objects: thirty-one were reused within 92 days and none after day 90.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/reuse-sample-spring" },
+      "relations": [
+        { "type": "supports", "target_id": "notes/kestrel-retention-decision" }
+      ]
+    },
+    {
+      "expected_id": "notes/nightly-purge-job",
+      "title": "Nightly Purge Job",
+      "description": "Procedure derived from the decision",
+      "body": "The nightly purge job deletes kestrel objects older than 90 days and writes the count to the job log.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/nightly-purge-job" },
+      "relations": [
+        { "type": "derived_from", "target_id": "notes/kestrel-retention-decision" }
+      ]
+    },
+    {
+      "expected_id": "notes/lattice-archive-tier-decision",
+      "title": "Lattice Archive Tier Decision",
+      "description": "Decision with its rationale",
+      "body": "Lattice archive tier is cold storage because restore requests are rare, about three per quarter, and the warm tier costs four times more.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "decisions", "role": "canonical", "status": "active", "scope": "px/lattice-archive-tier-decision" }
+    },
+    {
+      "expected_id": "notes/restore-request-tally-q2",
+      "title": "Restore Request Tally Q2",
+      "description": "Evidence record",
+      "body": "Tally of lattice restore requests in Q2: three requests, all served within a day.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/restore-request-tally-q2" },
+      "relations": [
+        { "type": "supports", "target_id": "notes/lattice-archive-tier-decision" }
+      ]
+    },
+    {
+      "expected_id": "notes/lattice-tiering-job",
+      "title": "Lattice Tiering Job",
+      "description": "Procedure derived from the decision",
+      "body": "The lattice tiering job moves objects to cold storage after sixty days without access.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "procedures", "role": "canonical", "status": "active", "scope": "px/lattice-tiering-job" },
+      "relations": [
+        { "type": "derived_from", "target_id": "notes/lattice-archive-tier-decision" }
+      ]
+    },
+
+    {
+      "expected_id": "notes/nimbus-east-failover-policy",
+      "title": "Nimbus East Failover Policy",
+      "description": "Canonical for the first scope",
+      "body": "East region failover: promote the standby within five minutes, keep the DNS TTL at sixty seconds, and require manual approval before traffic moves.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/nimbus-east" }
+    },
+    {
+      "expected_id": "notes/nimbus-west-failover-policy",
+      "title": "Nimbus West Failover Policy",
+      "description": "Canonical for the second scope",
+      "body": "West region failover: promotion is automatic within two minutes, the DNS TTL is thirty seconds, and no manual approval is needed.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/nimbus-west" }
+    },
+    {
+      "expected_id": "notes/cobalt-batch-retry-policy",
+      "title": "Cobalt Batch Retry Policy",
+      "description": "Canonical for the first scope",
+      "body": "Retry policy for cobalt jobs: retry three times with exponential backoff, alert after the third failure, and write the incident. Batch jobs additionally pause the queue.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/cobalt-batch" }
+    },
+    {
+      "expected_id": "notes/cobalt-stream-retry-policy",
+      "title": "Cobalt Stream Retry Policy",
+      "description": "Canonical for the second scope",
+      "body": "Retry policy for cobalt jobs: retry three times with exponential backoff, alert after the third failure, and write the incident. Stream jobs additionally drop the offending message.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/cobalt-stream" }
+    },
+
+    {
+      "expected_id": "notes/zephyr-signing-key-memo",
+      "title": "Zephyr Signing Key Memo",
+      "description": "Isolated note without links, relations, or scope peers",
+      "body": "Zephyr signing key rotates monthly and the old key stays valid for 24 hours so in-flight builds can finish.",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "knowledge", "role": "canonical", "status": "active", "scope": "px/zephyr" }
+    },
+
+    {
+      "expected_id": "notes/expense-cutoff-tokyo",
+      "title": "Expense Cutoff Tokyo",
+      "description": "経費締めの地域別切替記録",
+      "body": "経費締め 地域別切替記録。移行担当、承認経路、照合項目、再実行条件、通知先、保存期間を共通テンプレートに沿って記す。処理前後の件数を照合し、差分がある場合は確定を止める。地域固有事項は東京例外として、祝日前日の締切を15時へ繰り上げる。",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/expense-cutoff-tokyo" }
+    },
+    {
+      "expected_id": "notes/expense-cutoff-osaka",
+      "title": "Expense Cutoff Osaka",
+      "description": "経費締めの地域別切替記録",
+      "body": "経費締め 地域別切替記録。移行担当、承認経路、照合項目、再実行条件、通知先、保存期間を共通テンプレートに沿って記す。処理前後の件数を照合し、差分がある場合は確定を止める。地域固有事項は大阪例外として、月末営業日の締切を18時まで延長する。",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/expense-cutoff-osaka" }
+    },
+    {
+      "expected_id": "notes/inventory-count-tokyo",
+      "title": "Inventory Count Tokyo",
+      "description": "棚卸の地域別確認記録",
+      "body": "棚卸 地域別確認記録。担当、対象倉庫、照合方法、差異の扱い、報告先を共通テンプレートに沿って記す。件数が合わない棚は再集計してから確定する。地域固有事項は東京例外として、冷蔵倉庫の集計を前日に実施する。",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/inventory-count-tokyo" }
+    },
+    {
+      "expected_id": "notes/inventory-count-osaka",
+      "title": "Inventory Count Osaka",
+      "description": "棚卸の地域別確認記録",
+      "body": "棚卸 地域別確認記録。担当、対象倉庫、照合方法、差異の扱い、報告先を共通テンプレートに沿って記す。件数が合わない棚は再集計してから確定する。地域固有事項は大阪例外として、港湾倉庫の集計を午前中に実施する。",
+      "tags": ["retrieval-profile"],
+      "authority": { "namespace": "records", "role": "record", "status": "active", "scope": "px/inventory-count-osaka" }
+    }
+  ],
+  "controls": {
+    "schema_version": "2.1.0",
+    "stability_runs": 3,
+    "cases": [
+      {
+        "id": "isolated-fallback-01",
+        "family": "isolated-fallback",
+        "queries": {
+          "codex": "zephyr signing key",
+          "claude_code": "zephyr signing key",
+          "chatgpt": "zephyr signing key"
+        },
+        "required": ["notes/zephyr-signing-key-memo"],
+        "body_requirements": [
+          { "id": "grace-period", "all_terms": ["24 hours"] }
+        ]
+      },
+      {
+        "id": "interference-01",
+        "family": "interference",
+        "queries": {
+          "codex": "経費締め 地域別切替記録",
+          "claude_code": "経費締め 地域別切替記録",
+          "chatgpt": "経費締め 地域別切替記録"
+        },
+        "required": ["notes/expense-cutoff-tokyo", "notes/expense-cutoff-osaka"],
+        "body_requirements": [
+          { "id": "tokyo-exception", "all_terms": ["東京例外"] },
+          { "id": "osaka-exception", "all_terms": ["大阪例外"] }
+        ]
+      },
+      {
+        "id": "interference-02",
+        "family": "interference",
+        "queries": {
+          "codex": "棚卸 地域別確認記録",
+          "claude_code": "棚卸 地域別確認記録",
+          "chatgpt": "棚卸 地域別確認記録"
+        },
+        "required": ["notes/inventory-count-tokyo", "notes/inventory-count-osaka"],
+        "body_requirements": [
+          { "id": "tokyo-exception", "all_terms": ["東京例外"] },
+          { "id": "osaka-exception", "all_terms": ["大阪例外"] }
+        ]
+      }
+    ]
+  },
+  "challenges": {
+    "schema_version": "2.1.0",
+    "stability_runs": 3,
+    "cases": [
+      {
+        "id": "routine-template-01",
+        "family": "routine-template",
+        "queries": {
+          "codex": "lumen backup rotation の定例確認",
+          "claude_code": "lumen backup rotation を確認して報告",
+          "chatgpt": "lumen backup rotation",
+          "routine": "定例チェックを開始します。以下の手順を順番に確認し、結果を所定の形式で報告してください。対象外の項目は省略せず「該当なし」と記載します。確認が完了したら要約を作成し、未完了の項目があれば次回へ持ち越します。前回からの変更点があれば差分として明示し、担当者と実施した曜日を末尾に添えてください。報告は箇条書きで簡潔にまとめ、参照したノートへのリンクを付けます。判断に迷う項目は保留とし、一行で状況を書き残してください。対象システムの担当者へ結果を共有し、必要な対応があれば次の定例までに着手できる形で整理してください。今回の確認対象は lumen backup rotation です。"
+        },
+        "required": ["notes/lumen-backup-rotation"],
+        "relevant": ["notes/lumen-restore-drill"],
+        "body_requirements": [
+          { "id": "procedure-detail", "all_terms": ["every Monday"] }
+        ],
+        "gate_mode": "candidates"
+      },
+      {
+        "id": "routine-template-02",
+        "family": "routine-template",
+        "queries": {
+          "codex": "sable certificate renewal の定例確認",
+          "claude_code": "sable certificate renewal を確認して報告",
+          "chatgpt": "sable certificate renewal",
+          "routine": "定例チェックを開始します。以下の手順を順番に確認し、結果を所定の形式で報告してください。対象外の項目は省略せず「該当なし」と記載します。確認が完了したら要約を作成し、未完了の項目があれば次回へ持ち越します。前回からの変更点があれば差分として明示し、担当者と実施した曜日を末尾に添えてください。報告は箇条書きで簡潔にまとめ、参照したノートへのリンクを付けます。判断に迷う項目は保留とし、一行で状況を書き残してください。対象システムの担当者へ結果を共有し、必要な対応があれば次の定例までに着手できる形で整理してください。今回の確認対象は sable certificate renewal です。"
+        },
+        "required": ["notes/sable-certificate-renewal"],
+        "relevant": ["notes/sable-certificate-inventory"],
+        "body_requirements": [
+          { "id": "procedure-detail", "all_terms": ["thirty days before expiry"] }
+        ],
+        "gate_mode": "candidates"
+      },
+      {
+        "id": "routine-template-03",
+        "family": "routine-template",
+        "queries": {
+          "codex": "corvid quota review の定例確認",
+          "claude_code": "corvid quota review を確認して報告",
+          "chatgpt": "corvid quota review",
+          "routine": "定例チェックを開始します。以下の手順を順番に確認し、結果を所定の形式で報告してください。対象外の項目は省略せず「該当なし」と記載します。確認が完了したら要約を作成し、未完了の項目があれば次回へ持ち越します。前回からの変更点があれば差分として明示し、担当者と実施した曜日を末尾に添えてください。報告は箇条書きで簡潔にまとめ、参照したノートへのリンクを付けます。判断に迷う項目は保留とし、一行で状況を書き残してください。対象システムの担当者へ結果を共有し、必要な対応があれば次の定例までに着手できる形で整理してください。今回の確認対象は corvid quota review です。"
+        },
+        "required": ["notes/corvid-quota-review"],
+        "relevant": ["notes/corvid-quota-table"],
+        "body_requirements": [
+          { "id": "procedure-detail", "all_terms": ["above 80 percent"] }
+        ],
+        "gate_mode": "candidates"
+      },
+      {
+        "id": "explicit-precision-01",
+        "family": "explicit-precision",
+        "queries": {
+          "codex": "quartz ledger reconciliation",
+          "claude_code": "quartz ledger reconciliation",
+          "chatgpt": "quartz ledger reconciliation"
+        },
+        "required": ["notes/quartz-ledger-reconciliation"],
+        "relevant": ["notes/quartz-ledger-policy", "notes/quartz-month-close-record"],
+        "body_requirements": [
+          { "id": "procedure-detail", "all_terms": ["second approver"] }
+        ]
+      },
+      {
+        "id": "explicit-precision-02",
+        "family": "explicit-precision",
+        "queries": {
+          "codex": "quartz vendor onboarding",
+          "claude_code": "quartz vendor onboarding",
+          "chatgpt": "quartz vendor onboarding"
+        },
+        "required": ["notes/quartz-vendor-onboarding"],
+        "relevant": ["notes/quartz-vendor-policy", "notes/quartz-vendor-intake-record"],
+        "body_requirements": [
+          { "id": "procedure-detail", "all_terms": ["signed data agreement"] }
+        ]
+      },
+      {
+        "id": "explicit-precision-03",
+        "family": "explicit-precision",
+        "queries": {
+          "codex": "quartz payroll export",
+          "claude_code": "quartz payroll export",
+          "chatgpt": "quartz payroll export"
+        },
+        "required": ["notes/quartz-payroll-export"],
+        "relevant": ["notes/quartz-payroll-policy", "notes/quartz-payroll-run-record"],
+        "body_requirements": [
+          { "id": "procedure-detail", "all_terms": ["store the signed file"] }
+        ]
+      },
+      {
+        "id": "deep-signal-01",
+        "family": "deep-signal",
+        "queries": {
+          "codex": "helios freeze window",
+          "claude_code": "helios freeze window",
+          "chatgpt": "helios freeze window"
+        },
+        "required": ["notes/nightly-exception-register"],
+        "relevant": ["notes/helios-freeze-window", "notes/rollout-index-alpha"],
+        "body_requirements": [
+          { "id": "exception-detail", "all_terms": ["approved change owner"] }
+        ]
+      },
+      {
+        "id": "deep-signal-02",
+        "family": "deep-signal",
+        "queries": {
+          "codex": "pallas freeze window",
+          "claude_code": "pallas freeze window",
+          "chatgpt": "pallas freeze window"
+        },
+        "required": ["notes/overnight-change-register"],
+        "relevant": ["notes/pallas-freeze-window", "notes/rollout-index-beta"],
+        "body_requirements": [
+          { "id": "exception-detail", "all_terms": ["approved change owner"] }
+        ]
+      },
+      {
+        "id": "deep-signal-03",
+        "family": "deep-signal",
+        "queries": {
+          "codex": "vesta freeze window",
+          "claude_code": "vesta freeze window",
+          "chatgpt": "vesta freeze window"
+        },
+        "required": ["notes/standby-exception-register"],
+        "relevant": ["notes/vesta-freeze-window", "notes/rollout-index-gamma"],
+        "body_requirements": [
+          { "id": "exception-detail", "all_terms": ["approved change owner"] }
+        ]
+      },
+      {
+        "id": "inbound-alias-01",
+        "family": "inbound-alias",
+        "queries": {
+          "codex": "ember rollback drill",
+          "claude_code": "ember rollback drill",
+          "chatgpt": "ember rollback drill"
+        },
+        "required": ["notes/staging-verification-sheet"],
+        "relevant": ["notes/ember-rollback-drill"],
+        "body_requirements": [
+          { "id": "sheet-detail", "all_terms": ["traffic can be shifted back"] }
+        ]
+      },
+      {
+        "id": "inbound-alias-02",
+        "family": "inbound-alias",
+        "queries": {
+          "codex": "frost rollback drill",
+          "claude_code": "frost rollback drill",
+          "chatgpt": "frost rollback drill"
+        },
+        "required": ["notes/staging-handover-sheet"],
+        "relevant": ["notes/frost-rollback-drill"],
+        "body_requirements": [
+          { "id": "sheet-detail", "all_terms": ["switch-back contact"] }
+        ]
+      },
+      {
+        "id": "long-heading-01",
+        "family": "long-heading",
+        "queries": {
+          "codex": "tundra restore checksum",
+          "claude_code": "tundra restore checksum",
+          "chatgpt": "tundra restore checksum"
+        },
+        "required": ["notes/operations-compendium-volume-two"],
+        "relevant": ["notes/tundra-restore-checksum"],
+        "body_requirements": [
+          { "id": "heading-section", "all_terms": ["rotate the tundra vault secret"] }
+        ]
+      },
+      {
+        "id": "long-heading-02",
+        "family": "long-heading",
+        "queries": {
+          "codex": "delta restore checksum",
+          "claude_code": "delta restore checksum",
+          "chatgpt": "delta restore checksum"
+        },
+        "required": ["notes/operations-compendium-volume-three"],
+        "relevant": ["notes/delta-restore-checksum"],
+        "body_requirements": [
+          { "id": "heading-section", "all_terms": ["replay the delta journal"] }
+        ]
+      },
+      {
+        "id": "current-vs-history-01",
+        "family": "current-vs-history",
+        "queries": {
+          "codex": "meridian gateway policy 現行",
+          "claude_code": "現行の meridian gateway policy",
+          "chatgpt": "current meridian gateway policy"
+        },
+        "required": ["notes/meridian-gateway-policy"],
+        "relevant": ["notes/meridian-gateway-runbook"],
+        "excluded": ["notes/meridian-gateway-cutover-2022-03", "notes/meridian-gateway-cutover-2022-07", "notes/meridian-gateway-cutover-2022-11", "notes/meridian-gateway-cutover-2023-02", "notes/meridian-gateway-cutover-2023-06", "notes/meridian-gateway-cutover-2023-10", "notes/meridian-gateway-cutover-2024-01", "notes/meridian-gateway-cutover-2024-05"],
+        "body_requirements": [
+          { "id": "current-rule", "all_terms": ["mutual TLS"] }
+        ]
+      },
+      {
+        "id": "current-vs-history-02",
+        "family": "current-vs-history",
+        "queries": {
+          "codex": "harbor sync policy 現行",
+          "claude_code": "現行の harbor sync policy",
+          "chatgpt": "current harbor sync policy"
+        },
+        "required": ["notes/harbor-sync-policy"],
+        "relevant": ["notes/harbor-sync-runbook"],
+        "excluded": ["notes/harbor-sync-cutover-2022-02", "notes/harbor-sync-cutover-2022-06", "notes/harbor-sync-cutover-2022-09", "notes/harbor-sync-cutover-2023-01", "notes/harbor-sync-cutover-2023-04", "notes/harbor-sync-cutover-2023-08", "notes/harbor-sync-cutover-2023-12", "notes/harbor-sync-cutover-2024-04"],
+        "body_requirements": [
+          { "id": "current-rule", "all_terms": ["delta upload"] }
+        ]
+      },
+      {
+        "id": "rationale-bundle-01",
+        "family": "rationale-bundle",
+        "queries": {
+          "codex": "kestrel retention 90 days なぜ",
+          "claude_code": "why is kestrel retention 90 days",
+          "chatgpt": "kestrel retention 90 days reason"
+        },
+        "required": ["notes/kestrel-retention-decision", "notes/reuse-sample-spring", "notes/nightly-purge-job"],
+        "body_requirements": [
+          { "id": "bundle-1", "all_terms": ["storage cost doubles"] },
+          { "id": "bundle-2", "all_terms": ["none after day 90"] },
+          { "id": "bundle-3", "all_terms": ["older than 90 days"] }
+        ]
+      },
+      {
+        "id": "rationale-bundle-02",
+        "family": "rationale-bundle",
+        "queries": {
+          "codex": "lattice archive tier なぜ cold",
+          "claude_code": "why is the lattice archive tier cold storage",
+          "chatgpt": "lattice archive tier reason"
+        },
+        "required": ["notes/lattice-archive-tier-decision", "notes/restore-request-tally-q2", "notes/lattice-tiering-job"],
+        "body_requirements": [
+          { "id": "bundle-1", "all_terms": ["four times more"] },
+          { "id": "bundle-2", "all_terms": ["three requests"] },
+          { "id": "bundle-3", "all_terms": ["after sixty days"] }
+        ]
+      },
+      {
+        "id": "multi-scope-compare-01",
+        "family": "multi-scope-compare",
+        "queries": {
+          "codex": "nimbus east west failover 違い",
+          "claude_code": "compare nimbus east and west failover",
+          "chatgpt": "nimbus failover east vs west"
+        },
+        "required": ["notes/nimbus-east-failover-policy", "notes/nimbus-west-failover-policy"],
+        "body_requirements": [
+          { "id": "scope-1", "all_terms": ["manual approval before"] },
+          { "id": "scope-2", "all_terms": ["no manual approval"] }
+        ]
+      },
+      {
+        "id": "multi-scope-compare-02",
+        "family": "multi-scope-compare",
+        "queries": {
+          "codex": "cobalt batch stream retry 違い",
+          "claude_code": "compare cobalt batch and stream retry",
+          "chatgpt": "cobalt retry batch vs stream"
+        },
+        "required": ["notes/cobalt-batch-retry-policy", "notes/cobalt-stream-retry-policy"],
+        "body_requirements": [
+          { "id": "scope-1", "all_terms": ["pause the queue"] },
+          { "id": "scope-2", "all_terms": ["drop the offending message"] }
+        ]
+      }
+    ]
+  }
+}

@@ -18,10 +18,47 @@ use ort::{
 use rusqlite::Connection;
 use tokenizers::Tokenizer;
 
-/// 埋め込みの複合バージョンスタンプ(書式|provider:model:dim|チャンク規則)。
+/// 埋め込みのproducerスタンプ(書式|provider:model:dim|チャンク規則)。
 /// モデル・規則を変えたら必ず上げる — 旧 KB の「旧ベクトル混在を検知できない」教訓。
-pub const EMBED_STAMP: &str = "v1|ort:bge-m3-int8:1024|whole1500";
+/// 保存行の `note_vecs.stamp` はこれ単体ではなく、入力hashを加えた複合形
+/// (`embedding_stamp`)を使う — title/description変更のstale検知(R1 A-5)。
+pub const EMBED_PRODUCER_STAMP: &str = "v1|ort:bge-m3-int8:1024|whole1500";
+/// 現行複合形stampのprefix(`{EMBED_PRODUCER_STAMP}|sha256:`)。stamp生成
+/// (`embedding_stamp`)・現行判定(`is_current_stamp`)・SQL側prefilter
+/// (`embed_pending` / note_vecs health)が同じ1定数を共有する。ASCIIのみ
+/// (SQLite substrの文字数=byte数前提。テストで固定)。
+pub const CURRENT_STAMP_PREFIX: &str = "v1|ort:bge-m3-int8:1024|whole1500|sha256:";
 const MAX_EMBED_CHARS: usize = 1500;
+
+/// 埋め込み入力の唯一の組み立て。hash・埋め込み生成・invalidationの全てが
+/// この文字列を共用する(別実装の分岐が境界衝突バグの温床 — spec S-4)。
+/// 単純連結の境界衝突(`"a b"+""` と `"a"+"b"`)は入力文字列自体の同一性なので、
+/// 同一入力 → 同一埋め込み → 同一stampとなり意味的に無害。
+pub fn embedding_input(title: Option<&str>, description: Option<&str>, body: &str) -> String {
+    format!(
+        "{} {} {}",
+        title.unwrap_or(""),
+        description.unwrap_or(""),
+        body
+    )
+}
+
+/// 保存stamp = `{producer}|sha256:{埋め込み入力のhash}` の複合形。
+/// 入力が1文字でも変われば別stampになり、既存行は自動的にpending扱いへ落ちる。
+pub fn embedding_stamp(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{CURRENT_STAMP_PREFIX}{:x}", hasher.finalize())
+}
+
+/// 現行producerの複合形stampか(prefix一致)。旧単体形式・他producerの行は
+/// 検索(knn等)の対象外 = 全てpending。旧バイナリとの併存は二段階rollout制約:
+/// 旧バイナリはtitle/description変更で複合stamp行を無効化しないため、
+/// 新旧バイナリが同じDBへ交互に書く期間はstale埋め込みが残り得る。
+pub fn is_current_stamp(stamp: &str) -> bool {
+    stamp.starts_with(CURRENT_STAMP_PREFIX)
+}
 /// 前出し・意味ヒットの関連閾値(コサイン距離)。旧較正 0.95 をパリティ実測で移植。
 pub const RELATED_DISTANCE: f32 = 0.95;
 
@@ -257,37 +294,74 @@ pub fn from_blob(b: &[u8]) -> Vec<f32> {
 }
 
 /// 未埋め込み・旧スタンプのノートを埋め込む(最大 `cap` 件)。残件数を返す。
-/// cap を超えた分は次回に回る — 残があることは呼び側が劣化情報として見せる。
+/// cap を超えた分は次回に回る — 残は呼び側が劣化情報として見せる。
+///
+/// SQL側prefilter(レビューF2): 候補 = 現行prefix(`CURRENT_STAMP_PREFIX`)の
+/// stamp行を持たないnote。行なし(write時のstale削除・未埋め込み)/ stamp NULL /
+/// prefix不一致(旧形式・他producer)を一括で拾う。現行prefix一致行は
+/// write経路(`note_vecs_apply`)の同transaction無効化を信頼し、定常状態で
+/// 全corpusの本文materialize+再hashを行わない。期待stamp(`embedding_input` →
+/// `embedding_stamp` の単一実装)の再計算は候補行に限る。
 pub fn embed_pending(conn: &Connection, cap: usize) -> Result<usize> {
-    let ids: Vec<(String, String)> = {
+    let pending: Vec<(String, String, String)> = {
+        // LEFT JOIN + PK probe(origin/mainのfilterと同形)。NOT IN subquery形は
+        // 呼び出し毎にephemeral indexを作り直し10k定常で約3倍遅かった(gate実測)。
         let mut stmt = conn.prepare_cached(
-            "SELECT n.id, coalesce(n.title,'') || ' ' || coalesce(n.description,'') || ' ' || n.body
-             FROM notes n LEFT JOIN note_vecs v ON v.id = n.id AND v.stamp = ?1
+            "SELECT n.id, n.title, n.description, n.body
+             FROM notes n LEFT JOIN note_vecs v
+               ON v.id = n.id AND substr(v.stamp, 1, ?1) = ?2
              WHERE v.id IS NULL",
         )?;
-        let rows = stmt.query_map([EMBED_STAMP], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()?
+        let rows = stmt.query_map(
+            rusqlite::params![CURRENT_STAMP_PREFIX.len() as i64, CURRENT_STAMP_PREFIX],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            },
+        )?;
+        let mut pending = Vec::new();
+        for row in rows {
+            let (id, title, description, body) = row?;
+            let input = embedding_input(title.as_deref(), description.as_deref(), &body);
+            let expected = embedding_stamp(&input);
+            pending.push((id, input, expected));
+        }
+        pending
     };
-    let total = ids.len();
-    for (id, text) in ids.iter().take(cap) {
-        let v = embed_text(text)?;
+    let total = pending.len();
+    for (id, input, stamp) in pending.iter().take(cap) {
+        let v = embed_text(input)?;
         conn.execute(
             "INSERT OR REPLACE INTO note_vecs(id, stamp, embedding) VALUES(?1, ?2, ?3)",
-            rusqlite::params![id, EMBED_STAMP, to_blob(&v)],
+            rusqlite::params![id, stamp, to_blob(&v)],
         )?;
     }
     Ok(total.saturating_sub(cap.min(total)))
 }
 
 /// クエリベクトルとの総当たり KNN。(id, コサイン距離) を近い順に返す。
+/// 現行producerの複合形stamp(`is_current_stamp`)の行だけを対象にする —
+/// 旧形式stampの行は再埋め込みが追い付くまで意味検索に混ぜない。
 pub fn knn(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
-    let mut stmt = conn.prepare_cached("SELECT id, embedding FROM note_vecs WHERE stamp = ?1")?;
-    let rows = stmt.query_map([EMBED_STAMP], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+    let mut stmt =
+        conn.prepare_cached("SELECT id, stamp, embedding FROM note_vecs WHERE stamp IS NOT NULL")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Vec<u8>>(2)?,
+        ))
     })?;
     let mut scored: Vec<(String, f32)> = Vec::new();
     for row in rows {
-        let (id, blob) = row?;
+        let (id, stamp, blob) = row?;
+        if !is_current_stamp(&stamp) {
+            continue;
+        }
         let v = from_blob(&blob);
         if v.len() != query.len() {
             continue;
@@ -308,5 +382,78 @@ mod tests {
     fn blob_roundtrip() {
         let v = vec![0.25f32, -1.5, 3.0];
         assert_eq!(from_blob(&to_blob(&v)), v);
+    }
+
+    /// stampは「producer|sha256:入力hash」の複合形。producer単体(旧形式)は
+    /// 現行と判定されず、入力のどんな変化も別stampになる。
+    #[test]
+    fn composite_stamp_is_producer_prefixed_and_input_sensitive() {
+        let base = embedding_stamp(&embedding_input(Some("題"), Some("説明"), "本文"));
+        assert!(is_current_stamp(&base), "{base}");
+        assert!(base.starts_with(EMBED_PRODUCER_STAMP));
+        assert!(
+            !is_current_stamp(EMBED_PRODUCER_STAMP),
+            "旧形式を現行扱いしない"
+        );
+        assert!(!is_current_stamp("v0|other|sha256:abc"));
+
+        for changed in [
+            embedding_stamp(&embedding_input(Some("別題"), Some("説明"), "本文")),
+            embedding_stamp(&embedding_input(Some("題"), Some("別説明"), "本文")),
+            embedding_stamp(&embedding_input(Some("題"), Some("説明"), "別本文")),
+        ] {
+            assert_ne!(base, changed);
+            assert!(is_current_stamp(&changed));
+        }
+        // 決定的(同一入力 → 同一stamp)
+        assert_eq!(
+            base,
+            embedding_stamp(&embedding_input(Some("題"), Some("説明"), "本文"))
+        );
+    }
+
+    /// prefix定数はproducer stampと"|sha256:"の連結で、ASCIIのみ
+    /// (SQL substrの文字数=byte数前提を固定する)。
+    #[test]
+    fn current_stamp_prefix_is_the_ascii_producer_prefix() {
+        assert_eq!(
+            CURRENT_STAMP_PREFIX,
+            format!("{EMBED_PRODUCER_STAMP}|sha256:")
+        );
+        assert!(CURRENT_STAMP_PREFIX.is_ascii());
+    }
+
+    /// 定常状態(現行prefixのstamp行が存在)ではwrite時無効化を信頼し、
+    /// 本文の再hash照合を行わない(レビューF2: 全corpus走査の恒久コスト排除)。
+    /// prefix一致だがhash不一致の行を意図的に置き、pending扱いされないことで
+    /// 「判定はSQL prefilterのみ・本文をmaterializeしない」ことを固定する。
+    #[test]
+    fn steady_state_trusts_write_time_invalidation_without_rehash() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = crate::vault::Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test("定常状態", "本文", None, &["test".into()], "test/client")
+            .unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO note_vecs(id, stamp, embedding) VALUES(?1, ?2, ?3)",
+            rusqlite::params![
+                id,
+                format!("{CURRENT_STAMP_PREFIX}{}", "0".repeat(64)), // 内容とは無関係のhash
+                to_blob(&[1.0, 0.0])
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            embed_pending(&conn, 0).unwrap(),
+            0,
+            "現行prefix行の再hash照合が復活している(全corpus走査)"
+        );
+
+        // write経路の無効化(行削除)後は行なしとして候補へ戻る
+        conn.execute("DELETE FROM note_vecs WHERE id=?1", [&id])
+            .unwrap();
+        assert_eq!(embed_pending(&conn, 0).unwrap(), 1);
     }
 }

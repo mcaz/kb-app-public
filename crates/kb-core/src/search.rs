@@ -6,9 +6,9 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::degradation::Degradation;
+use crate::retrieval_profile::SearchPolicy;
 use crate::tokenize::match_expr;
 
-const FIELD_RANKING_CANDIDATE_MULTIPLIER: usize = 8;
 const DIVERSITY_MAX_NORMALIZED_CHARS: usize = 2_048;
 const DIVERSITY_MIN_SHINGLES: usize = 8;
 const DIVERSITY_SIMILARITY_PERCENT: usize = 85;
@@ -82,18 +82,32 @@ pub struct SearchOutcome {
 }
 
 pub fn search(conn: &Connection, query: &str, limit: usize) -> SearchOutcome {
-    search_mode(conn, query, limit, false)
+    search_with(conn, query, &SearchPolicy::exact(limit))
 }
 
 /// `any = true` で語を OR 結合(フックの前出しなど、文まるごとを投げる用途。
 /// bm25 が多く当たった文書を上位に出す)。false は従来どおり AND。
 pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> SearchOutcome {
+    search_with(
+        conn,
+        query,
+        &SearchPolicy {
+            any_terms: any,
+            ..SearchPolicy::exact(limit)
+        },
+    )
+}
+
+/// 配信 profile(retrieval_profile.rs)の `SearchPolicy` で経路と予算を決める本体。
+/// policy で経路を切るのは劣化ではないので degraded には載せない。
+pub fn search_with(conn: &Connection, query: &str, policy: &SearchPolicy) -> SearchOutcome {
+    let limit = policy.limit;
     let mut hits: Vec<Hit> = Vec::new();
     let mut degraded = Vec::new();
     let intent = QueryIntent::from_query(query);
 
     // 主経路: lindera 分かち書き + bm25
-    match main_search(conn, query, limit, any) {
+    match main_search(conn, query, policy) {
         Ok(main_hits) => hits.extend(main_hits),
         Err(error) => degraded.push(Degradation::MainSearch {
             detail: error.to_string(),
@@ -112,39 +126,45 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
 
     // 意味検索(段1)。モデル未導入なら黙って全文のみ(段0 の正常形)。
     // 導入済みで失敗した場合は必ず劣化として見せる(沈黙停止の教訓)。
-    match vec_search(conn, query, limit) {
-        Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
-        Ok(None) => {}
-        Err(error) => degraded.push(Degradation::SemanticSearch {
-            detail: error.to_string(),
-        }),
+    if policy.semantic {
+        match vec_search(conn, query, limit) {
+            Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
+            Ok(None) => {}
+            Err(error) => degraded.push(Degradation::SemanticSearch {
+                detail: error.to_string(),
+            }),
+        }
     }
 
-    // レスキュー経路: 主経路で拾えない部分語・未知語形(常に実行し、差分だけ足す)
-    match rescue_search(conn, query, limit) {
-        Ok(rescue_hits) => {
-            for h in rescue_hits {
-                if hits.len() >= limit {
-                    break;
-                }
-                if !hits.iter().any(|x| x.id == h.id) {
-                    hits.push(h);
+    // レスキュー経路: 主経路で拾えない部分語・未知語形(差分だけ足す)
+    if policy.rescue {
+        match rescue_search(conn, query, limit) {
+            Ok(rescue_hits) => {
+                for h in rescue_hits {
+                    if hits.len() >= limit {
+                        break;
+                    }
+                    if !hits.iter().any(|x| x.id == h.id) {
+                        hits.push(h);
+                    }
                 }
             }
+            Err(error) => degraded.push(Degradation::RescueSearch {
+                detail: error.to_string(),
+            }),
         }
-        Err(error) => degraded.push(Degradation::RescueSearch {
-            detail: error.to_string(),
-        }),
     }
 
     // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
     // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
     rank_hits(&mut hits, query, intent);
-    match diversify_hits(conn, &hits, limit) {
-        Ok(diverse_hits) => hits = diverse_hits,
-        Err(error) => degraded.push(Degradation::DiversityRanking {
-            detail: error.to_string(),
-        }),
+    if policy.diversify {
+        match diversify_hits(conn, &hits, limit) {
+            Ok(diverse_hits) => hits = diverse_hits,
+            Err(error) => degraded.push(Degradation::DiversityRanking {
+                detail: error.to_string(),
+            }),
+        }
     }
     hits.truncate(limit);
 
@@ -189,8 +209,9 @@ fn merge_anchor_hits(hits: &mut Vec<Hit>, anchor_hits: Vec<Hit>) {
     }
 }
 
-fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Result<Vec<Hit>> {
-    let expr = if any {
+fn main_search(conn: &Connection, query: &str, policy: &SearchPolicy) -> Result<Vec<Hit>> {
+    let limit = policy.limit;
+    let expr = if policy.any_terms {
         crate::tokenize::match_expr_any(query)
     } else {
         match_expr(query)
@@ -200,9 +221,8 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     }
     let field_terms = field_terms(query);
     let intent = QueryIntent::from_query(query);
-    // 再順位付け対象を最終件数より広く取る。8倍は10k fixtureでも最大40行に留まり、
-    // 本文反復だけが強い候補の外からtitle一致を回収できる実測上の最小余裕。
-    let candidate_limit = limit.saturating_mul(FIELD_RANKING_CANDIDATE_MULTIPLIER);
+    // 再順位付け対象を最終件数より広く取る(倍率の根拠は SearchPolicy 側に置く)。
+    let candidate_limit = policy.candidate_limit();
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
                 snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags, n.created, n.generated_at,
@@ -849,16 +869,17 @@ pub fn similar_notes(
     limit: usize,
 ) -> Result<Vec<(String, Option<String>, f32)>> {
     use crate::embed;
-    let blob: Option<Vec<u8>> = conn
+    let row: Option<(String, Vec<u8>)> = conn
         .query_row(
-            "SELECT embedding FROM note_vecs WHERE id = ?1 AND stamp = ?2",
-            rusqlite::params![id, embed::EMBED_STAMP],
-            |r| r.get(0),
+            "SELECT stamp, embedding FROM note_vecs WHERE id = ?1 AND stamp IS NOT NULL",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
-    let Some(blob) = blob else {
+    let Some(blob) = row.and_then(|(stamp, blob)| embed::is_current_stamp(&stamp).then_some(blob))
+    else {
         return Ok(Vec::new());
-    }; // 未埋め込み・段0 は空
+    }; // 未埋め込み・旧stamp・段0 は空
     let me = embed::from_blob(&blob);
     let linked: std::collections::HashSet<String> = {
         let mut stmt = conn.prepare_cached(
@@ -1099,16 +1120,21 @@ fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Resu
     use crate::embed;
     let vectors: std::collections::HashMap<String, Vec<f32>> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT v.id, v.embedding
+            "SELECT v.id, v.stamp, v.embedding
              FROM note_vecs v JOIN notes n ON n.id = v.id
-             WHERE v.stamp = ?1 AND n.status != 'deprecated'",
+             WHERE v.stamp IS NOT NULL AND n.status != 'deprecated'",
         )?;
-        let rows = stmt.query_map([embed::EMBED_STAMP], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
-            .map(|(id, blob)| (id, embed::from_blob(&blob)))
+            .filter(|(_, stamp, _)| embed::is_current_stamp(stamp))
+            .map(|(id, _, blob)| (id, embed::from_blob(&blob)))
             .collect()
     };
     if vectors.is_empty() {
@@ -1175,12 +1201,18 @@ pub fn stats(conn: &Connection) -> Result<Stats> {
         Ok(conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as usize)
     };
     let embedded = conn
-        .query_row(
-            "SELECT count(*) FROM note_vecs WHERE stamp = ?1",
-            [crate::embed::EMBED_STAMP],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0) as usize;
+        .prepare("SELECT stamp FROM note_vecs WHERE stamp IS NOT NULL")
+        .and_then(|mut stmt| {
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut count = 0usize;
+            for stamp in rows {
+                if crate::embed::is_current_stamp(&stamp?) {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        })
+        .unwrap_or(0);
     Ok(Stats {
         total: count("SELECT count(*) FROM notes")?,
         deprecated: count("SELECT count(*) FROM notes WHERE status='deprecated'")?,
@@ -1910,7 +1942,7 @@ mod tests {
                 "INSERT INTO note_vecs(id,stamp,embedding) VALUES (?1,?2,?3)",
                 rusqlite::params![
                     id,
-                    crate::embed::EMBED_STAMP,
+                    crate::embed::embedding_stamp("fixture"),
                     crate::embed::to_blob(&vector)
                 ],
             )
@@ -1975,7 +2007,8 @@ mod tests {
         let ((main, rescue), keyword_search) = timed(|| {
             repeat_last(100, || {
                 (
-                    super::main_search(&conn, "検索番兵オーロラ", 20, false).unwrap(),
+                    super::main_search(&conn, "検索番兵オーロラ", &super::SearchPolicy::exact(20))
+                        .unwrap(),
                     super::rescue_search(&conn, "番兵オーロラ", 20).unwrap(),
                 )
             })
@@ -2001,7 +2034,12 @@ mod tests {
             })
         });
 
-        let retrieval_hits = super::main_search(&conn, "検索番兵オーロラ", 5, true).unwrap();
+        let retrieval_hits = super::main_search(
+            &conn,
+            "検索番兵オーロラ",
+            &super::SearchPolicy::any_terms(5),
+        )
+        .unwrap();
         let retrieval_seed_ids = retrieval_hits
             .iter()
             .map(|hit| hit.id.clone())
@@ -2019,6 +2057,72 @@ mod tests {
         });
         assert!(retrieval.documents.iter().any(|note| note.id == target_id));
         assert!(retrieval.stats.candidate_count >= 3);
+
+        // ---------------------------------------- 派生索引registry追加計測(2026-08-28)
+        // warm open: 構築済みDBの再open。open毎のhealth check(object存在・型 /
+        // fts_main・fts_triのnote IDカバレッジ / governance validate)込みで5回測る。
+        // healthyなDBでは修復・書込が一切走らないこと自体も検査する。
+        drop(conn);
+        let (warm_outcome, warm_open) = timed(|| {
+            repeat_last(5, || {
+                let outcome = crate::index::open_db_with_outcome(&vault).unwrap();
+                assert!(
+                    outcome.recovered.is_empty(),
+                    "healthyなDBのwarm openで修復が走った"
+                );
+                assert!(outcome.write_blockers.is_empty());
+                outcome
+            })
+        });
+        let conn = warm_outcome.conn;
+
+        // embed_pendingスキャン(レビューF2): 定常状態(全noteが現行prefixの
+        // stamp行を持つ)ではSQL prefilterだけで候補0件を判定し、本文の
+        // materialize・再hashを行わない。モデル未導入でもSQL+判定部は測れる。
+        // 検索(MCP search)ごとに走る経路なので、全corpus走査の復活をここで止める。
+        let (steady_pending, embed_pending_scan) =
+            timed(|| repeat_last(100, || crate::embed::embed_pending(&conn, 0).unwrap()));
+        assert_eq!(steady_pending, 0, "定常状態でpendingが残っている");
+
+        // 単一note更新100回: 本番write経路(governance fail-closedゲート →
+        // registry走査での派生索引維持 → 埋め込み無効化 → outbox積み → commit)を
+        // 1件ずつ測り、median / p95 で判定する。Markdown export(git commit)は
+        // registry変更の対象外かつファイルI/O支配のため計測に含めない。
+        // 絶対値予算の根拠は docs/derived-registry.md(baseline実測+15%/+20%規則
+        // にCIゆらぎの余裕を乗せた値)。
+        let update_id = performance_note_id(PERFORMANCE_TARGET + 7);
+        let mut update_note = crate::note_store::read(&conn, &update_id).unwrap();
+        let mut update_samples = Vec::with_capacity(100);
+        for round in 0..100usize {
+            update_note.body =
+                format!("単一更新回帰 {round:03}。派生索引の増分維持と埋め込み無効化を通す本文。");
+            let ((), elapsed) = timed(|| {
+                crate::note_store::put(&vault, &conn, &update_id, &update_note, "perf", "perf")
+                    .unwrap()
+            });
+            update_samples.push(elapsed);
+        }
+        update_samples.sort();
+        let update_median = update_samples[49];
+        let update_p95 = update_samples[94];
+        eprintln!(
+            "performance_gate note_update_x100 us: median {} p95 {} max {}",
+            update_median.as_micros(),
+            update_p95.as_micros(),
+            update_samples[99].as_micros()
+        );
+
+        // artifact rebuild: 自己修復と同じ force_rebuild(DROP→CREATE→再導出、
+        // governanceはvalidate込み)を全artifactへ順に適用した合計時間。
+        // NoteVecsはモデル未導入なのでCapabilityUnavailableで即返る。
+        let (_, artifact_rebuild) = timed(|| {
+            for artifact in crate::derived_index::DerivedArtifact::ALL {
+                crate::derived_index::force_rebuild(&vault, &conn, artifact).unwrap();
+            }
+        });
+        let post_rebuild =
+            super::main_search(&conn, "検索番兵オーロラ", &super::SearchPolicy::exact(20)).unwrap();
+        assert!(post_rebuild.iter().any(|hit| hit.id == target_id));
 
         let measurements = [
             ("index_rebuild", rebuild, Duration::from_secs(30)),
@@ -2041,6 +2145,23 @@ mod tests {
             ),
             ("note_detail_x5", note_detail, Duration::from_secs(2)),
             ("linked_context_x20", linked_context, Duration::from_secs(2)),
+            ("warm_open_x5", warm_open, Duration::from_secs(2)),
+            (
+                "embed_pending_scan_x100",
+                embed_pending_scan,
+                Duration::from_millis(1500),
+            ),
+            (
+                "note_update_median",
+                update_median,
+                Duration::from_millis(25),
+            ),
+            ("note_update_p95", update_p95, Duration::from_millis(50)),
+            (
+                "artifact_rebuild",
+                artifact_rebuild,
+                Duration::from_secs(10),
+            ),
         ];
         for (name, elapsed, budget) in measurements {
             eprintln!(
@@ -2118,6 +2239,7 @@ mod tests {
                 crate::embed::to_blob(&vector)
             })
             .collect();
+        let stamp = crate::embed::embedding_stamp("performance-fixture");
         let transaction = conn.unchecked_transaction().unwrap();
         {
             let mut insert = transaction
@@ -2127,7 +2249,7 @@ mod tests {
                 insert
                     .execute(rusqlite::params![
                         performance_note_id(index),
-                        crate::embed::EMBED_STAMP,
+                        stamp,
                         &blobs[index % PERFORMANCE_VECTOR_DIM]
                     ])
                     .unwrap();

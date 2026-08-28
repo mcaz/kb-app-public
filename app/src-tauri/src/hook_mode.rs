@@ -19,7 +19,7 @@ const MAX_DOCUMENTS: usize = 10;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const KB_DISABLED_CODE: &str = "kb_disabled";
 
-fn child_mcp_args(client: &str) -> [&str; 6] {
+fn child_mcp_args(client: &str) -> [&str; 8] {
     [
         "--mcp",
         "--no-remote-sync",
@@ -27,6 +27,11 @@ fn child_mcp_args(client: &str) -> [&str; 6] {
         "read",
         "--client",
         client,
+        // host の read 面と同じ surface なので、hook 用の配信 profile(契約 8 の数値)は
+        // 引数で明示する。host 既定(session-auto)と同値だが、既定の変更が hook 経路へ
+        // 波及しないよう明示のまま維持する。
+        "--retrieval-profile",
+        "session-auto",
     ]
 }
 
@@ -458,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_retrieval_child_never_runs_remote_sync() {
+    fn auto_retrieval_child_never_runs_remote_sync_and_pins_the_hook_profile() {
         assert_eq!(
             child_mcp_args("codex-cli/gpt-5-codex"),
             [
@@ -467,7 +472,9 @@ mod tests {
                 "--mcp-surface",
                 "read",
                 "--client",
-                "codex-cli/gpt-5-codex"
+                "codex-cli/gpt-5-codex",
+                "--retrieval-profile",
+                "session-auto"
             ]
         );
     }

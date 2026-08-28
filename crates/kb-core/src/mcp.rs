@@ -25,8 +25,9 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::client_surface::ClientSurface;
-use crate::index::{open_db, open_db_read_only, open_db_recovery, sync_with_degradations};
-use crate::search::{recent, search};
+use crate::index::{open_db_read_only, open_db_recovery, sync_with_degradations};
+use crate::retrieval_profile::RetrievalProfile;
+use crate::search::recent;
 use crate::vault::{NoteProposal, NoteUpdate, Vault};
 
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
@@ -114,6 +115,18 @@ pub struct ServeOptions {
     /// 公開するツール群。ホストが遅延ロードを誤判定しても、read面を小さく常時公開し、
     /// 書込・保守ツールは別MCP登録へ分離できるようにする。
     pub tool_surface: ToolSurface,
+    /// process 固定の配信 profile(`--retrieval-profile`)。`None` は host 既定
+    /// (`session_auto` = 現行の候補展開予算 — R4 I-2。`session_explicit` は明示選択のみ)。
+    /// hook 子 process は同じ read 面を使うので `session_auto` を起動引数で明示する
+    /// (app の hook_mode)。tool 引数では変えられない。
+    pub retrieval_profile: Option<RetrievalProfile>,
+}
+
+impl ServeOptions {
+    pub fn resolved_retrieval_profile(self) -> RetrievalProfile {
+        self.retrieval_profile
+            .unwrap_or(RetrievalProfile::host_default())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -183,6 +196,20 @@ struct ToolCallOptions {
     remote_sync: bool,
     update_embeddings: bool,
     tool_surface: ToolSurface,
+    retrieval_profile: RetrievalProfile,
+}
+
+#[cfg(test)]
+impl ToolCallOptions {
+    /// 後方互換面(all)と host 既定 profile で tool を直接呼ぶ test 用の形。
+    fn test(remote_sync: bool, update_embeddings: bool) -> Self {
+        Self {
+            remote_sync,
+            update_embeddings,
+            tool_surface: ToolSurface::All,
+            retrieval_profile: RetrievalProfile::host_default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +225,7 @@ impl Default for ServeOptions {
         Self {
             remote_sync: true,
             tool_surface: ToolSurface::All,
+            retrieval_profile: None,
         }
     }
 }
@@ -292,6 +320,7 @@ pub fn serve_evaluation(
         ServeOptions {
             remote_sync: false,
             tool_surface: ToolSurface::All,
+            retrieval_profile: None,
         },
         Some(evaluation),
         open_vault,
@@ -368,6 +397,7 @@ fn serve_loop(
                 remote_sync: options.remote_sync,
                 update_embeddings: evaluation.is_none(),
                 tool_surface: options.tool_surface,
+                retrieval_profile: options.resolved_retrieval_profile(),
             },
             &mut removal_plans,
             method,
@@ -485,6 +515,31 @@ fn handle(
             remote_sync,
             update_embeddings: true,
             tool_surface: ToolSurface::All,
+            retrieval_profile: RetrievalProfile::host_default(),
+        },
+        &mut RemovalPlans::default(),
+        method,
+        params,
+    )
+}
+
+/// 管理 hook の子 process と同じ起動形(read 面・remote sync なし・`session_auto`)。
+#[cfg(test)]
+fn handle_as_hook(
+    vault: Option<&Vault>,
+    client: &str,
+    method: &str,
+    params: Option<&Value>,
+) -> Result<Option<Value>> {
+    handle_with_search_options(
+        vault,
+        client,
+        true,
+        ToolCallOptions {
+            remote_sync: false,
+            update_embeddings: true,
+            tool_surface: ToolSurface::Read,
+            retrieval_profile: RetrievalProfile::SessionAuto,
         },
         &mut RemovalPlans::default(),
         method,
@@ -510,6 +565,7 @@ fn handle_on_surface(
             remote_sync,
             update_embeddings: true,
             tool_surface,
+            retrieval_profile: RetrievalProfile::host_default(),
         },
         &mut RemovalPlans::default(),
         method,
@@ -533,19 +589,21 @@ fn handle_with_search_options(
                 .and_then(|v| v.as_str())
                 .unwrap_or(PROTOCOL_FALLBACK);
             let surface = ClientSurface::from_hint(client);
-            let capabilities = surface.capabilities();
+            let mut kb_app = serde_json::to_value(surface.capabilities())?;
+            // 配信 profile は process 固定で tool 引数からは見えないので、initialize で見せる。
+            kb_app["retrieval_profile"] = json!(tool_options.retrieval_profile.label());
             let mut initialized = json!({
                 "protocolVersion": requested,
                 "capabilities": if enabled {
                     json!({
                         "tools": {},
                         "prompts": {},
-                        "experimental": {"kbApp": capabilities},
+                        "experimental": {"kbApp": kb_app},
                     })
                 } else {
                     json!({
                         "tools": {},
-                        "experimental": {"kbApp": capabilities},
+                        "experimental": {"kbApp": kb_app},
                     })
                 },
                 "serverInfo": {"name": tool_options.tool_surface.server_name(), "version": env!("CARGO_PKG_VERSION")},
@@ -616,8 +674,7 @@ fn handle_with_search_options(
                 client,
                 name,
                 &args,
-                tool_options.remote_sync,
-                tool_options.update_embeddings,
+                tool_options,
                 removal_plans,
             );
             match output {
@@ -1389,13 +1446,9 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
 
 fn remote_degradations(
     enabled: bool,
-    pull: impl FnOnce() -> Option<crate::degradation::Degradation>,
+    pull: impl FnOnce() -> Vec<crate::degradation::Degradation>,
 ) -> Vec<crate::degradation::Degradation> {
-    if enabled {
-        pull().into_iter().collect()
-    } else {
-        Vec::new()
-    }
+    if enabled { pull() } else { Vec::new() }
 }
 
 #[cfg(test)]
@@ -1411,8 +1464,7 @@ fn call_tool(
         client,
         name,
         args,
-        remote_sync,
-        true,
+        ToolCallOptions::test(remote_sync, true),
         &mut RemovalPlans::default(),
     )
 }
@@ -1422,10 +1474,15 @@ fn call_tool_with_search_options(
     client: &str,
     name: &str,
     args: &Value,
-    remote_sync: bool,
-    update_embeddings: bool,
+    options: ToolCallOptions,
     removal_plans: &mut RemovalPlans,
 ) -> Result<ToolOutput> {
+    let ToolCallOptions {
+        remote_sync,
+        update_embeddings,
+        retrieval_profile,
+        ..
+    } = options;
     reject_unavailable_mcp_capabilities(client, name, args)?;
     let distillation_closed_world = matches!(
         name,
@@ -1453,7 +1510,11 @@ fn call_tool_with_search_options(
     } else if distillation_closed_world {
         open_db_read_only(vault)?
     } else {
-        open_db(vault)?
+        // open時の自己修復・修復失敗・write停止(S-3)を通常のdegradationへ合流し、
+        // 応答のdegradedとしてAI/ユーザーへ見せる。
+        let outcome = crate::index::open_db_with_outcome(vault)?;
+        degraded.extend(outcome.degraded);
+        outcome.conn
     };
     // DBが実行時正本なので、全文取得は検索時のsnapshotをそのまま読む。索引の追い付きと
     // 埋め込み生成は検索時に一度だけ行い、上位候補ごとのgetでは繰り返さない。
@@ -1890,9 +1951,18 @@ fn call_tool_with_search_options(
             })
         }
         "search" => {
+            // 配信 profile は process 固定。tool 引数の limit / any は profile の既定を
+            // 上書きできる(hook は契約 8 の 5 件・OR を明示して送る)。
+            let plan = retrieval_profile.plan();
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
-            let any = args.get("any").and_then(|v| v.as_bool()).unwrap_or(false);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map_or(plan.search.limit, |limit| limit as usize);
+            let any = args
+                .get("any")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(plan.search.any_terms);
             let include_documents = args
                 .get("include_documents")
                 .and_then(|v| v.as_bool())
@@ -1900,11 +1970,15 @@ fn call_tool_with_search_options(
             // Ranking・リンク展開・本文選択の間で別processの更新を挟まない。
             // include_documentsはこのread transactionの同じSQLite snapshotから組み立てる。
             let snapshot = conn.unchecked_transaction()?;
-            let mut out = if any {
-                crate::search::search_mode(&snapshot, query, limit, true)
-            } else {
-                search(&snapshot, query, limit)
-            };
+            let mut out = crate::search::search_with(
+                &snapshot,
+                query,
+                &crate::retrieval_profile::SearchPolicy {
+                    any_terms: any,
+                    limit,
+                    ..plan.search
+                },
+            );
             out.degraded.extend(degraded);
             let retrieval = if include_documents {
                 let hit_ids = out
@@ -1912,7 +1986,7 @@ fn call_tool_with_search_options(
                     .iter()
                     .map(|hit| hit.id.clone())
                     .collect::<Vec<_>>();
-                let options = crate::retrieval::RetrievalOptions::default();
+                let options = plan.retrieval;
                 match crate::retrieval::context_documents_for_query(
                     &snapshot, &hit_ids, query, options,
                 ) {
@@ -1963,6 +2037,7 @@ fn call_tool_with_search_options(
             }
             text.push_str(&degradation_text(&out.degraded));
             let mut structured = serde_json::to_value(&out)?;
+            structured["retrieval_profile"] = json!(retrieval_profile.label());
             if let Some(retrieval) = retrieval {
                 structured["documents"] = serde_json::to_value(&retrieval.documents)?;
                 structured["retrieval_candidates"] = serde_json::to_value(&retrieval.candidates)?;
@@ -2447,6 +2522,7 @@ fn with_degradations(mut text: String, degraded: &[crate::degradation::Degradati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::open_db;
 
     #[test]
     fn disabled_initialize_keeps_tools_visible_with_only_the_no_bypass_rule() {
@@ -2668,13 +2744,49 @@ mod tests {
             "rule-delivery-eval/test",
             "search",
             &serde_json::json!({"query": "固定fixture"}),
-            false,
-            false,
+            ToolCallOptions::test(false, false),
             &mut RemovalPlans::default(),
         )
         .unwrap();
         let structured = output.structured.unwrap();
         assert_eq!(structured["degraded"], serde_json::json!([]));
+    }
+
+    /// open時の自己修復(S-3)の通知は、tool応答のdegraded(構造化出力)へ合流する。
+    #[test]
+    fn open_time_recovery_notice_reaches_tool_degradations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "修復通知の確認",
+                "本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        rusqlite::Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch("DROP TABLE fts_anchor;")
+            .unwrap();
+
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "search",
+            &serde_json::json!({"query": "修復通知"}),
+            false,
+        )
+        .unwrap();
+        let degraded = output.structured.unwrap()["degraded"].clone();
+        let codes: Vec<&str> = degraded
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["code"].as_str())
+            .collect();
+        assert!(codes.contains(&"index_recovered"), "{degraded}");
     }
 
     #[test]
@@ -2691,15 +2803,29 @@ mod tests {
         let called = std::cell::Cell::new(false);
         let degraded = remote_degradations(false, || {
             called.set(true);
-            Some(crate::degradation::Degradation::RemoteSync {
+            vec![crate::degradation::Degradation::RemoteSync {
                 detail: "should not run".into(),
-            })
+            }]
         });
 
         assert!(!called.get());
         assert!(degraded.is_empty());
         assert!(ServeOptions::default().remote_sync);
         assert_eq!(ServeOptions::default().tool_surface, ToolSurface::All);
+        assert_eq!(ServeOptions::default().retrieval_profile, None);
+        // 統合coreのhost既定はsession_auto(R4 I-2)。session_explicitは明示選択のみ。
+        assert_eq!(
+            ServeOptions::default().resolved_retrieval_profile(),
+            RetrievalProfile::SessionAuto
+        );
+        assert_eq!(
+            ServeOptions {
+                retrieval_profile: Some(RetrievalProfile::SessionExplicit),
+                ..ServeOptions::default()
+            }
+            .resolved_retrieval_profile(),
+            RetrievalProfile::SessionExplicit
+        );
     }
 
     #[test]
@@ -3137,10 +3263,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn search_documents_follow_outgoing_links_for_two_hops_in_one_snapshot() {
-        let dir = tempfile::tempdir().unwrap();
-        let vault = Vault::create(dir.path().join("v")).unwrap();
+    /// root → direct → deep の 3 段リンク。検索語を持つのは root だけ。
+    fn chain_of_three(vault: &Vault) -> [String; 3] {
         let deep = vault
             .propose_for_test(
                 "三段目",
@@ -3168,12 +3292,19 @@ mod tests {
                 "test/client",
             )
             .unwrap();
+        [root, direct, deep]
+    }
 
-        let result = handle(
+    /// 管理 hook の経路(`session_auto`)は契約 8 の 2 ホップ展開を保つ。
+    #[test]
+    fn search_documents_follow_outgoing_links_for_two_hops_in_one_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let [root, direct, deep] = chain_of_three(&vault);
+
+        let result = handle_as_hook(
             Some(&vault),
             "test/client",
-            true,
-            true,
             "tools/call",
             Some(&serde_json::json!({
                 "name": "search",
@@ -3188,6 +3319,10 @@ mod tests {
         .unwrap()
         .unwrap();
 
+        assert_eq!(
+            result["structuredContent"]["retrieval_profile"],
+            "session_auto"
+        );
         let documents = result["structuredContent"]["documents"].as_array().unwrap();
         assert_eq!(
             documents
@@ -3207,6 +3342,240 @@ mod tests {
         assert_eq!(
             result["structuredContent"]["retrieval"]["selected_count"],
             3
+        );
+    }
+
+    /// host 側(read / all 面)の既定は `session_auto`(R4 I-2): hook 経路と同じ現行予算で
+    /// 3 段リンクを 2 ホップまで展開し、必要候補を落とさない。予算を絞る
+    /// `session_explicit` は明示選択(`--retrieval-profile`)のときだけ depth 1 で止まる。
+    #[test]
+    fn host_search_defaults_to_session_auto_and_explicit_opt_in_stops_at_one_hop() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let [root, direct, deep] = chain_of_three(&vault);
+        let arguments = serde_json::json!({
+            "name": "search",
+            "arguments": {
+                "query": "固有番兵ネビュラ",
+                "any": true,
+                "include_documents": true
+            }
+        });
+
+        // 既定(profile 引数なし)= session_auto: 3 段目まで候補・本文に入る。
+        let result = handle(
+            Some(&vault),
+            "test/client",
+            true,
+            true,
+            "tools/call",
+            Some(&arguments),
+        )
+        .unwrap()
+        .unwrap();
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["retrieval_profile"], "session_auto");
+        assert_eq!(
+            structured["documents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|document| document["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [root.as_str(), direct.as_str(), deep.as_str()]
+        );
+        assert_eq!(structured["retrieval"]["candidate_limit"], 50);
+        assert_eq!(structured["retrieval"]["document_limit"], 10);
+        assert_eq!(structured["retrieval"]["estimated_token_budget"], 10_000);
+
+        // 明示選択した session_explicit だけが depth 1 で止まり、予算を絞る。
+        let result = handle_with_search_options(
+            Some(&vault),
+            "test/client",
+            true,
+            ToolCallOptions {
+                retrieval_profile: RetrievalProfile::SessionExplicit,
+                ..ToolCallOptions::test(true, true)
+            },
+            &mut RemovalPlans::default(),
+            "tools/call",
+            Some(&arguments),
+        )
+        .unwrap()
+        .unwrap();
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["retrieval_profile"], "session_explicit");
+        assert_eq!(
+            structured["documents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|document| document["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [root.as_str(), direct.as_str()]
+        );
+        assert_eq!(structured["retrieval"]["candidate_count"], 2);
+        assert_eq!(structured["retrieval"]["candidate_limit"], 20);
+        assert_eq!(structured["retrieval"]["document_limit"], 5);
+        assert_eq!(structured["retrieval"]["estimated_token_budget"], 6_000);
+    }
+
+    /// 実験契約 §6-2 / G1: hook 経路(`session_auto`)の search 応答は、profile 分離前の
+    /// 経路(`search_mode(any, 5)` + `RetrievalOptions::default()`)と hits・候補・本文が
+    /// 一致する。
+    #[test]
+    fn hook_profile_search_matches_the_pre_profile_default_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let [root, _direct, deep] = chain_of_three(&vault);
+        let incoming = vault
+            .propose_for_test(
+                "被リンク",
+                &format!("起点を参照する補足。[起点](/{root}.md)"),
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let query = "固有番兵ネビュラ 起点";
+
+        let result = handle_as_hook(
+            Some(&vault),
+            "claude-code/claude",
+            "tools/call",
+            Some(&serde_json::json!({
+                "name": "search",
+                "arguments": {
+                    "query": query,
+                    "limit": 5,
+                    "any": true,
+                    "include_documents": true
+                }
+            })),
+        )
+        .unwrap()
+        .unwrap();
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["retrieval_profile"], "session_auto");
+
+        let conn = open_db(&vault).unwrap();
+        let expected_hits = crate::search::search_mode(&conn, query, 5, true);
+        let hit_ids = expected_hits
+            .hits
+            .iter()
+            .map(|hit| hit.id.clone())
+            .collect::<Vec<_>>();
+        let expected = crate::retrieval::context_documents_for_query(
+            &conn,
+            &hit_ids,
+            query,
+            crate::retrieval::RetrievalOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            expected
+                .candidates
+                .iter()
+                .any(|candidate| candidate.id == incoming)
+        );
+        assert!(
+            expected
+                .candidates
+                .iter()
+                .any(|candidate| candidate.id == deep && candidate.depth == 2)
+        );
+
+        assert_eq!(
+            structured["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|hit| hit["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>(),
+            hit_ids
+        );
+        assert_eq!(
+            structured["retrieval_candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|candidate| {
+                    (
+                        candidate["id"].as_str().unwrap().to_string(),
+                        candidate["selected"].as_bool().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            expected
+                .candidates
+                .iter()
+                .map(|candidate| (candidate.id.clone(), candidate.selected))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            structured["documents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|document| document["text"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>(),
+            expected
+                .documents
+                .iter()
+                .map(|document| document.text.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn initialize_reports_the_process_fixed_retrieval_profile() {
+        // host 既定は session_auto(R4 I-2)。session_explicit は明示選択でだけ現れる。
+        let host = handle(None, "test/client", true, false, "initialize", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            host["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
+            "session_auto"
+        );
+        assert_eq!(
+            host["capabilities"]["experimental"]["kbApp"]["client_surface"],
+            "unknown"
+        );
+
+        let hook = handle_as_hook(None, "claude-code/claude", "initialize", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            hook["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
+            "session_auto"
+        );
+        assert_eq!(hook["serverInfo"]["name"], "kb-app-read");
+
+        let explicit = handle_with_search_options(
+            None,
+            "test/client",
+            true,
+            ToolCallOptions {
+                retrieval_profile: RetrievalProfile::SessionExplicit,
+                ..ToolCallOptions::test(false, false)
+            },
+            &mut RemovalPlans::default(),
+            "initialize",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            explicit["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
+            "session_explicit"
+        );
+
+        let disabled = handle(None, "test/client", false, false, "initialize", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            disabled["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
+            "session_auto"
         );
     }
 
@@ -3902,8 +4271,7 @@ mod tests {
             "test/client",
             "prepare_remove",
             &serde_json::json!({"note": note_id, "reason": "重複した中間ノート"}),
-            false,
-            true,
+            ToolCallOptions::test(false, true),
             &mut plans,
         )
         .unwrap()
@@ -3932,8 +4300,7 @@ mod tests {
                 "note": note_id,
                 "removal_token": token,
             }),
-            false,
-            true,
+            ToolCallOptions::test(false, true),
             &mut plans,
         )
         .unwrap()
@@ -3954,8 +4321,7 @@ mod tests {
                 "note": note_id,
                 "removal_token": token,
             }),
-            false,
-            true,
+            ToolCallOptions::test(false, true),
             &mut plans,
         )
         .unwrap_err();
@@ -3980,8 +4346,7 @@ mod tests {
                 "test/client",
                 "prepare_remove",
                 &serde_json::json!({"note": note, "reason": "重複整理"}),
-                false,
-                true,
+                ToolCallOptions::test(false, true),
                 plans,
             )
             .unwrap()
@@ -3998,8 +4363,7 @@ mod tests {
             "test/client",
             "commit_remove",
             &serde_json::json!({"note": second, "removal_token": swap_token}),
-            false,
-            true,
+            ToolCallOptions::test(false, true),
             &mut plans,
         )
         .unwrap_err();
@@ -4032,8 +4396,7 @@ mod tests {
             "test/client",
             "commit_remove",
             &serde_json::json!({"note": first, "removal_token": changed_token}),
-            false,
-            true,
+            ToolCallOptions::test(false, true),
             &mut plans,
         )
         .unwrap_err();
@@ -4047,8 +4410,7 @@ mod tests {
             "test/client",
             "commit_remove",
             &serde_json::json!({"note": second, "removal_token": expired_token}),
-            false,
-            true,
+            ToolCallOptions::test(false, true),
             &mut plans,
         )
         .unwrap_err();

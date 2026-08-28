@@ -1,0 +1,5189 @@
+{
+  "schema_version": "1.1.0",
+  "suite_schema_version": "1.0.0",
+  "core_version": "0.0.1",
+  "fixture_digest": "6dd8b38422b0101b0b66bc3052beec1d9355a38a948125e22a1dfb3fb89925c3",
+  "fixture_note_count": 44,
+  "profiles": [],
+  "controls": {
+    "schema_version": "2.1.0",
+    "suite_schema_version": "2.0.0",
+    "core_version": "0.0.1",
+    "case_count": 15,
+    "search_configuration": {
+      "ranked_hit_limit": 5,
+      "any_terms": true
+    },
+    "strategy_configurations": [
+      {
+        "strategy": "top3",
+        "seed_limit": 3,
+        "max_depth": 0,
+        "candidate_limit": 3,
+        "document_limit": 3,
+        "estimated_token_budget": null,
+        "include_incoming": false
+      },
+      {
+        "strategy": "linked_v1",
+        "seed_limit": 5,
+        "max_depth": 2,
+        "candidate_limit": 50,
+        "document_limit": 10,
+        "estimated_token_budget": 10000,
+        "include_incoming": true,
+        "passage": {
+          "trigger_tokens": 4000,
+          "document_limit": 3,
+          "document_token_budget": 3600
+        }
+      }
+    ],
+    "summaries": [
+      {
+        "strategy": "top3",
+        "cases": 15,
+        "gate_passed": false,
+        "gate_failed_cases": [
+          "control-linked-one-hop@codex",
+          "control-linked-one-hop@claude_code",
+          "control-linked-one-hop@chatgpt"
+        ],
+        "macro_candidate_recall": 0.8,
+        "macro_selected_recall": 0.8,
+        "macro_selected_precision": 0.7333333333333336,
+        "excluded_violations": 0,
+        "average_selected_documents": 1.8,
+        "average_estimated_tokens": 465.8,
+        "average_tokens_per_required": 385.25,
+        "tokens_per_required_cases": 12,
+        "median_required_rank": 1,
+        "required_rank_missing_cases": 3,
+        "spill_cases": 0,
+        "candidate_cap_cases": 6,
+        "document_cap_cases": 0,
+        "budget_exhausted_cases": 0,
+        "selected_depth_0": 27,
+        "selected_depth_1": 0,
+        "selected_depth_2": 0,
+        "selected_incoming": 0,
+        "p50_elapsed_us": 236,
+        "p95_elapsed_us": 775
+      },
+      {
+        "strategy": "linked_v1",
+        "cases": 15,
+        "gate_passed": true,
+        "gate_failed_cases": [],
+        "macro_candidate_recall": 1.0,
+        "macro_selected_recall": 1.0,
+        "macro_selected_precision": 0.7333333333333336,
+        "excluded_violations": 0,
+        "average_selected_documents": 3.0,
+        "average_estimated_tokens": 772.0,
+        "average_tokens_per_required": 772.0,
+        "tokens_per_required_cases": 15,
+        "median_required_rank": 1,
+        "required_rank_missing_cases": 0,
+        "spill_cases": 0,
+        "candidate_cap_cases": 0,
+        "document_cap_cases": 0,
+        "budget_exhausted_cases": 0,
+        "selected_depth_0": 39,
+        "selected_depth_1": 3,
+        "selected_depth_2": 0,
+        "selected_incoming": 3,
+        "p50_elapsed_us": 238,
+        "p95_elapsed_us": 849
+      }
+    ],
+    "families": [],
+    "linked_minus_top3": {
+      "macro_candidate_recall": 0.19999999999999996,
+      "macro_selected_recall": 0.19999999999999996,
+      "macro_selected_precision": 0.0,
+      "excluded_violations": 0,
+      "average_selected_documents": 1.2,
+      "average_estimated_tokens": 306.2,
+      "spill_cases": 0,
+      "p95_elapsed_us": 74
+    },
+    "gate": {
+      "strategy": "linked_v1",
+      "passed": true,
+      "failed_cases": []
+    },
+    "cases": [
+      {
+        "id": "control-exact-title",
+        "surface": "codex",
+        "query": "sirius deployment guide",
+        "gate_mode": "selected",
+        "required": [
+          "notes/sirius-deployment-guide"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [
+              "notes/sirius-deployment-guide"
+            ],
+            "required_in_selected": [
+              "notes/sirius-deployment-guide"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "release-sequence",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/sirius-deployment-guide"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 263.0,
+            "runtime": {
+              "search_elapsed_us": 767,
+              "retrieval_elapsed_us": 8,
+              "total_elapsed_us": 775,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 263,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [
+              "notes/sirius-deployment-guide"
+            ],
+            "required_in_selected": [
+              "notes/sirius-deployment-guide"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "release-sequence",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/sirius-deployment-guide"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 263.0,
+            "runtime": {
+              "search_elapsed_us": 767,
+              "retrieval_elapsed_us": 82,
+              "total_elapsed_us": 849,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 263,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-exact-title",
+        "surface": "claude_code",
+        "query": "sirius deployment guide",
+        "gate_mode": "selected",
+        "required": [
+          "notes/sirius-deployment-guide"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [
+              "notes/sirius-deployment-guide"
+            ],
+            "required_in_selected": [
+              "notes/sirius-deployment-guide"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "release-sequence",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/sirius-deployment-guide"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 263.0,
+            "runtime": {
+              "search_elapsed_us": 175,
+              "retrieval_elapsed_us": 3,
+              "total_elapsed_us": 178,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 263,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [
+              "notes/sirius-deployment-guide"
+            ],
+            "required_in_selected": [
+              "notes/sirius-deployment-guide"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "release-sequence",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/sirius-deployment-guide"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 263.0,
+            "runtime": {
+              "search_elapsed_us": 175,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 180,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 263,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-exact-title",
+        "surface": "chatgpt",
+        "query": "sirius deployment guide",
+        "gate_mode": "selected",
+        "required": [
+          "notes/sirius-deployment-guide"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [
+              "notes/sirius-deployment-guide"
+            ],
+            "required_in_selected": [
+              "notes/sirius-deployment-guide"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "release-sequence",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/sirius-deployment-guide"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 263.0,
+            "runtime": {
+              "search_elapsed_us": 165,
+              "retrieval_elapsed_us": 3,
+              "total_elapsed_us": 168,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 263,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [
+              "notes/sirius-deployment-guide"
+            ],
+            "required_in_selected": [
+              "notes/sirius-deployment-guide"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "release-sequence",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/sirius-deployment-guide"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 263.0,
+            "runtime": {
+              "search_elapsed_us": 165,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 170,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 263,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-two-character-japanese",
+        "surface": "codex",
+        "query": "認証",
+        "gate_mode": "selected",
+        "required": [
+          "notes/認証運用"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/認証運用"
+            ],
+            "selected": [
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              }
+            ],
+            "required_in_candidates": [
+              "notes/認証運用"
+            ],
+            "required_in_selected": [
+              "notes/認証運用"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "authentication",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/認証運用"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 248.0,
+            "runtime": {
+              "search_elapsed_us": 232,
+              "retrieval_elapsed_us": 4,
+              "total_elapsed_us": 236,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 248,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/認証運用"
+            ],
+            "selected": [
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              }
+            ],
+            "required_in_candidates": [
+              "notes/認証運用"
+            ],
+            "required_in_selected": [
+              "notes/認証運用"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "authentication",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/認証運用"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 248.0,
+            "runtime": {
+              "search_elapsed_us": 232,
+              "retrieval_elapsed_us": 6,
+              "total_elapsed_us": 238,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 248,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-two-character-japanese",
+        "surface": "claude_code",
+        "query": "認証",
+        "gate_mode": "selected",
+        "required": [
+          "notes/認証運用"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/認証運用"
+            ],
+            "selected": [
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              }
+            ],
+            "required_in_candidates": [
+              "notes/認証運用"
+            ],
+            "required_in_selected": [
+              "notes/認証運用"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "authentication",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/認証運用"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 248.0,
+            "runtime": {
+              "search_elapsed_us": 183,
+              "retrieval_elapsed_us": 3,
+              "total_elapsed_us": 186,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 248,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/認証運用"
+            ],
+            "selected": [
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              }
+            ],
+            "required_in_candidates": [
+              "notes/認証運用"
+            ],
+            "required_in_selected": [
+              "notes/認証運用"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "authentication",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/認証運用"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 248.0,
+            "runtime": {
+              "search_elapsed_us": 183,
+              "retrieval_elapsed_us": 6,
+              "total_elapsed_us": 189,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 248,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-two-character-japanese",
+        "surface": "chatgpt",
+        "query": "認証",
+        "gate_mode": "selected",
+        "required": [
+          "notes/認証運用"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/認証運用"
+            ],
+            "selected": [
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              }
+            ],
+            "required_in_candidates": [
+              "notes/認証運用"
+            ],
+            "required_in_selected": [
+              "notes/認証運用"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "authentication",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/認証運用"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 248.0,
+            "runtime": {
+              "search_elapsed_us": 168,
+              "retrieval_elapsed_us": 3,
+              "total_elapsed_us": 171,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 248,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/認証運用"
+            ],
+            "selected": [
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              }
+            ],
+            "required_in_candidates": [
+              "notes/認証運用"
+            ],
+            "required_in_selected": [
+              "notes/認証運用"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "authentication",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/認証運用"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 248.0,
+            "runtime": {
+              "search_elapsed_us": 168,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 173,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 248,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-partial-japanese",
+        "surface": "codex",
+        "query": "サイクル",
+        "gate_mode": "selected",
+        "required": [
+          "notes/製品ライフサイクル"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/製品ライフサイクル"
+            ],
+            "selected": [
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/製品ライフサイクル"
+            ],
+            "required_in_selected": [
+              "notes/製品ライフサイクル"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "lifecycle",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/製品ライフサイクル"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 260.0,
+            "runtime": {
+              "search_elapsed_us": 139,
+              "retrieval_elapsed_us": 4,
+              "total_elapsed_us": 143,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 260,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/製品ライフサイクル"
+            ],
+            "selected": [
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/製品ライフサイクル"
+            ],
+            "required_in_selected": [
+              "notes/製品ライフサイクル"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "lifecycle",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/製品ライフサイクル"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 260.0,
+            "runtime": {
+              "search_elapsed_us": 139,
+              "retrieval_elapsed_us": 6,
+              "total_elapsed_us": 145,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 260,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-partial-japanese",
+        "surface": "claude_code",
+        "query": "サイクル",
+        "gate_mode": "selected",
+        "required": [
+          "notes/製品ライフサイクル"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/製品ライフサイクル"
+            ],
+            "selected": [
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/製品ライフサイクル"
+            ],
+            "required_in_selected": [
+              "notes/製品ライフサイクル"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "lifecycle",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/製品ライフサイクル"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 260.0,
+            "runtime": {
+              "search_elapsed_us": 88,
+              "retrieval_elapsed_us": 3,
+              "total_elapsed_us": 91,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 260,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/製品ライフサイクル"
+            ],
+            "selected": [
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/製品ライフサイクル"
+            ],
+            "required_in_selected": [
+              "notes/製品ライフサイクル"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "lifecycle",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/製品ライフサイクル"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 260.0,
+            "runtime": {
+              "search_elapsed_us": 88,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 93,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 260,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-partial-japanese",
+        "surface": "chatgpt",
+        "query": "サイクル",
+        "gate_mode": "selected",
+        "required": [
+          "notes/製品ライフサイクル"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/製品ライフサイクル"
+            ],
+            "selected": [
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/製品ライフサイクル"
+            ],
+            "required_in_selected": [
+              "notes/製品ライフサイクル"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "lifecycle",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/製品ライフサイクル"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 260.0,
+            "runtime": {
+              "search_elapsed_us": 87,
+              "retrieval_elapsed_us": 3,
+              "total_elapsed_us": 90,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 260,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/製品ライフサイクル"
+            ],
+            "selected": [
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/製品ライフサイクル"
+            ],
+            "required_in_selected": [
+              "notes/製品ライフサイクル"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "lifecycle",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/製品ライフサイクル"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 1.0,
+            "required_rank": 1,
+            "tokens_per_required": 260.0,
+            "runtime": {
+              "search_elapsed_us": 87,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 92,
+              "seed_count": 1,
+              "candidate_count": 1,
+              "selected_count": 1,
+              "estimated_tokens": 260,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 1,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-linked-one-hop",
+        "surface": "codex",
+        "query": "retrieval beacon",
+        "gate_mode": "selected",
+        "required": [
+          "notes/hidden-context-policy"
+        ],
+        "relevant": [
+          "notes/retrieval-beacon"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/retrieval-beacon",
+              "notes/製品ライフサイクル",
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [],
+            "required_in_selected": [],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "linked-context",
+                "passed": false,
+                "matching_document_ids": []
+              }
+            ],
+            "gate_passed": false,
+            "candidate_recall": 0.0,
+            "selected_recall": 0.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": null,
+            "tokens_per_required": null,
+            "runtime": {
+              "search_elapsed_us": 684,
+              "retrieval_elapsed_us": 11,
+              "total_elapsed_us": 695,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 788,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/retrieval-beacon",
+              "notes/製品ライフサイクル",
+              "notes/sirius-deployment-guide",
+              "notes/認証運用",
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy"
+            ],
+            "selected": [
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              },
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/hidden-context-policy"
+            ],
+            "required_in_selected": [
+              "notes/hidden-context-policy"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "linked-context",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/hidden-context-policy"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 6,
+            "tokens_per_required": 1549.0,
+            "runtime": {
+              "search_elapsed_us": 684,
+              "retrieval_elapsed_us": 35,
+              "total_elapsed_us": 719,
+              "seed_count": 5,
+              "candidate_count": 6,
+              "selected_count": 6,
+              "estimated_tokens": 1549,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 1,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-linked-one-hop",
+        "surface": "claude_code",
+        "query": "retrieval beacon",
+        "gate_mode": "selected",
+        "required": [
+          "notes/hidden-context-policy"
+        ],
+        "relevant": [
+          "notes/retrieval-beacon"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/retrieval-beacon",
+              "notes/製品ライフサイクル",
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [],
+            "required_in_selected": [],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "linked-context",
+                "passed": false,
+                "matching_document_ids": []
+              }
+            ],
+            "gate_passed": false,
+            "candidate_recall": 0.0,
+            "selected_recall": 0.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": null,
+            "tokens_per_required": null,
+            "runtime": {
+              "search_elapsed_us": 502,
+              "retrieval_elapsed_us": 8,
+              "total_elapsed_us": 510,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 788,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/retrieval-beacon",
+              "notes/製品ライフサイクル",
+              "notes/sirius-deployment-guide",
+              "notes/認証運用",
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy"
+            ],
+            "selected": [
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              },
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/hidden-context-policy"
+            ],
+            "required_in_selected": [
+              "notes/hidden-context-policy"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "linked-context",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/hidden-context-policy"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 6,
+            "tokens_per_required": 1549.0,
+            "runtime": {
+              "search_elapsed_us": 502,
+              "retrieval_elapsed_us": 31,
+              "total_elapsed_us": 533,
+              "seed_count": 5,
+              "candidate_count": 6,
+              "selected_count": 6,
+              "estimated_tokens": 1549,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 1,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-linked-one-hop",
+        "surface": "chatgpt",
+        "query": "retrieval beacon",
+        "gate_mode": "selected",
+        "required": [
+          "notes/hidden-context-policy"
+        ],
+        "relevant": [
+          "notes/retrieval-beacon"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/retrieval-beacon",
+              "notes/製品ライフサイクル",
+              "notes/sirius-deployment-guide"
+            ],
+            "selected": [
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              }
+            ],
+            "required_in_candidates": [],
+            "required_in_selected": [],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "linked-context",
+                "passed": false,
+                "matching_document_ids": []
+              }
+            ],
+            "gate_passed": false,
+            "candidate_recall": 0.0,
+            "selected_recall": 0.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": null,
+            "tokens_per_required": null,
+            "runtime": {
+              "search_elapsed_us": 494,
+              "retrieval_elapsed_us": 9,
+              "total_elapsed_us": 503,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 788,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/retrieval-beacon",
+              "notes/製品ライフサイクル",
+              "notes/sirius-deployment-guide",
+              "notes/認証運用",
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy"
+            ],
+            "selected": [
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/製品ライフサイクル",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/sirius-deployment-guide",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 263
+              },
+              {
+                "id": "notes/認証運用",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 248
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [
+              "notes/hidden-context-policy"
+            ],
+            "required_in_selected": [
+              "notes/hidden-context-policy"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "linked-context",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/hidden-context-policy"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 6,
+            "tokens_per_required": 1549.0,
+            "runtime": {
+              "search_elapsed_us": 494,
+              "retrieval_elapsed_us": 31,
+              "total_elapsed_us": 525,
+              "seed_count": 5,
+              "candidate_count": 6,
+              "selected_count": 6,
+              "estimated_tokens": 1549,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 1,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-current-canonical",
+        "surface": "codex",
+        "query": "vega access policy",
+        "gate_mode": "selected",
+        "required": [
+          "notes/vega-access-policy-canonical"
+        ],
+        "relevant": [
+          "notes/vega-access-policy-record"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "required_in_selected": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "current-policy",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/vega-access-policy-canonical"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 770.0,
+            "runtime": {
+              "search_elapsed_us": 321,
+              "retrieval_elapsed_us": 8,
+              "total_elapsed_us": 329,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 770,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-record",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-record",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 245
+              },
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "required_in_selected": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "current-policy",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/vega-access-policy-canonical"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 1540.0,
+            "runtime": {
+              "search_elapsed_us": 321,
+              "retrieval_elapsed_us": 34,
+              "total_elapsed_us": 355,
+              "seed_count": 5,
+              "candidate_count": 6,
+              "selected_count": 6,
+              "estimated_tokens": 1540,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 1
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-current-canonical",
+        "surface": "claude_code",
+        "query": "vega access policy",
+        "gate_mode": "selected",
+        "required": [
+          "notes/vega-access-policy-canonical"
+        ],
+        "relevant": [
+          "notes/vega-access-policy-record"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "required_in_selected": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "current-policy",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/vega-access-policy-canonical"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 770.0,
+            "runtime": {
+              "search_elapsed_us": 291,
+              "retrieval_elapsed_us": 8,
+              "total_elapsed_us": 299,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 770,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-record",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-record",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 245
+              },
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "required_in_selected": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "current-policy",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/vega-access-policy-canonical"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 1540.0,
+            "runtime": {
+              "search_elapsed_us": 291,
+              "retrieval_elapsed_us": 29,
+              "total_elapsed_us": 320,
+              "seed_count": 5,
+              "candidate_count": 6,
+              "selected_count": 6,
+              "estimated_tokens": 1540,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 1
+            }
+          }
+        ]
+      },
+      {
+        "id": "control-current-canonical",
+        "surface": "chatgpt",
+        "query": "vega access policy",
+        "gate_mode": "selected",
+        "required": [
+          "notes/vega-access-policy-canonical"
+        ],
+        "relevant": [
+          "notes/vega-access-policy-record"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "required_in_selected": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "current-policy",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/vega-access-policy-canonical"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 770.0,
+            "runtime": {
+              "search_elapsed_us": 285,
+              "retrieval_elapsed_us": 8,
+              "total_elapsed_us": 293,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 770,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-record",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-record",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 245
+              },
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "required_in_selected": [
+              "notes/vega-access-policy-canonical"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "current-policy",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/vega-access-policy-canonical"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 1540.0,
+            "runtime": {
+              "search_elapsed_us": 285,
+              "retrieval_elapsed_us": 29,
+              "total_elapsed_us": 314,
+              "seed_count": 5,
+              "candidate_count": 6,
+              "selected_count": 6,
+              "estimated_tokens": 1540,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 1
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "challenges": {
+    "schema_version": "2.1.0",
+    "suite_schema_version": "2.0.0",
+    "core_version": "0.0.1",
+    "case_count": 18,
+    "search_configuration": {
+      "ranked_hit_limit": 5,
+      "any_terms": true
+    },
+    "strategy_configurations": [
+      {
+        "strategy": "top3",
+        "seed_limit": 3,
+        "max_depth": 0,
+        "candidate_limit": 3,
+        "document_limit": 3,
+        "estimated_token_budget": null,
+        "include_incoming": false
+      },
+      {
+        "strategy": "linked_v1",
+        "seed_limit": 5,
+        "max_depth": 2,
+        "candidate_limit": 50,
+        "document_limit": 10,
+        "estimated_token_budget": 10000,
+        "include_incoming": true,
+        "passage": {
+          "trigger_tokens": 4000,
+          "document_limit": 3,
+          "document_token_budget": 3600
+        }
+      }
+    ],
+    "summaries": [
+      {
+        "strategy": "top3",
+        "cases": 18,
+        "gate_passed": false,
+        "gate_failed_cases": [
+          "typed-relation-ranking@codex",
+          "typed-relation-ranking@claude_code",
+          "typed-relation-ranking@chatgpt"
+        ],
+        "macro_candidate_recall": 0.8333333333333334,
+        "macro_selected_recall": 0.8333333333333334,
+        "macro_selected_precision": 0.4444444444444444,
+        "excluded_violations": 0,
+        "average_selected_documents": 2.3333333333333335,
+        "average_estimated_tokens": 4967.5,
+        "average_tokens_per_required": 5802.6,
+        "tokens_per_required_cases": 15,
+        "median_required_rank": 1,
+        "required_rank_missing_cases": 3,
+        "spill_cases": 3,
+        "candidate_cap_cases": 6,
+        "document_cap_cases": 0,
+        "budget_exhausted_cases": 0,
+        "selected_depth_0": 42,
+        "selected_depth_1": 0,
+        "selected_depth_2": 0,
+        "selected_incoming": 0,
+        "p50_elapsed_us": 344,
+        "p95_elapsed_us": 42471
+      },
+      {
+        "strategy": "linked_v1",
+        "cases": 18,
+        "gate_passed": true,
+        "gate_failed_cases": [],
+        "macro_candidate_recall": 1.0,
+        "macro_selected_recall": 1.0,
+        "macro_selected_precision": 0.3726190476190476,
+        "excluded_violations": 0,
+        "average_selected_documents": 4.5,
+        "average_estimated_tokens": 1558.3333333333333,
+        "average_tokens_per_required": 1558.3333333333333,
+        "tokens_per_required_cases": 18,
+        "median_required_rank": 1,
+        "required_rank_missing_cases": 0,
+        "spill_cases": 0,
+        "candidate_cap_cases": 0,
+        "document_cap_cases": 3,
+        "budget_exhausted_cases": 0,
+        "selected_depth_0": 51,
+        "selected_depth_1": 24,
+        "selected_depth_2": 0,
+        "selected_incoming": 6,
+        "p50_elapsed_us": 354,
+        "p95_elapsed_us": 42752
+      }
+    ],
+    "families": [],
+    "linked_minus_top3": {
+      "macro_candidate_recall": 0.16666666666666663,
+      "macro_selected_recall": 0.16666666666666663,
+      "macro_selected_precision": -0.07182539682539679,
+      "excluded_violations": 0,
+      "average_selected_documents": 2.1666666666666665,
+      "average_estimated_tokens": -3409.166666666667,
+      "spill_cases": -3,
+      "p95_elapsed_us": 281
+    },
+    "gate": {
+      "strategy": "linked_v1",
+      "passed": true,
+      "failed_cases": []
+    },
+    "cases": [
+      {
+        "id": "fielded-title-ranking",
+        "surface": "codex",
+        "query": "nebula launch checklist",
+        "gate_mode": "selected",
+        "required": [
+          "notes/nebula-launch-checklist"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/nebula-launch-checklist",
+              "notes/nebula-operations-canonical-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/nebula-operations-canonical-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 278
+              }
+            ],
+            "required_in_candidates": [
+              "notes/nebula-launch-checklist"
+            ],
+            "required_in_selected": [
+              "notes/nebula-launch-checklist"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "go-no-go",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/nebula-launch-checklist"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 530.0,
+            "runtime": {
+              "search_elapsed_us": 285,
+              "retrieval_elapsed_us": 6,
+              "total_elapsed_us": 291,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 530,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/nebula-launch-checklist",
+              "notes/nebula-operations-canonical-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/nebula-operations-canonical-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 278
+              }
+            ],
+            "required_in_candidates": [
+              "notes/nebula-launch-checklist"
+            ],
+            "required_in_selected": [
+              "notes/nebula-launch-checklist"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "go-no-go",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/nebula-launch-checklist"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 530.0,
+            "runtime": {
+              "search_elapsed_us": 285,
+              "retrieval_elapsed_us": 11,
+              "total_elapsed_us": 296,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 530,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "fielded-title-ranking",
+        "surface": "claude_code",
+        "query": "nebula launch checklist",
+        "gate_mode": "selected",
+        "required": [
+          "notes/nebula-launch-checklist"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/nebula-launch-checklist",
+              "notes/nebula-operations-canonical-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/nebula-operations-canonical-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 278
+              }
+            ],
+            "required_in_candidates": [
+              "notes/nebula-launch-checklist"
+            ],
+            "required_in_selected": [
+              "notes/nebula-launch-checklist"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "go-no-go",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/nebula-launch-checklist"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 530.0,
+            "runtime": {
+              "search_elapsed_us": 249,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 254,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 530,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/nebula-launch-checklist",
+              "notes/nebula-operations-canonical-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/nebula-operations-canonical-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 278
+              }
+            ],
+            "required_in_candidates": [
+              "notes/nebula-launch-checklist"
+            ],
+            "required_in_selected": [
+              "notes/nebula-launch-checklist"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "go-no-go",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/nebula-launch-checklist"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 530.0,
+            "runtime": {
+              "search_elapsed_us": 249,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 259,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 530,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "fielded-title-ranking",
+        "surface": "chatgpt",
+        "query": "nebula launch checklist",
+        "gate_mode": "selected",
+        "required": [
+          "notes/nebula-launch-checklist"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/nebula-launch-checklist",
+              "notes/nebula-operations-canonical-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/nebula-operations-canonical-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 278
+              }
+            ],
+            "required_in_candidates": [
+              "notes/nebula-launch-checklist"
+            ],
+            "required_in_selected": [
+              "notes/nebula-launch-checklist"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "go-no-go",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/nebula-launch-checklist"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 530.0,
+            "runtime": {
+              "search_elapsed_us": 246,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 251,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 530,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/nebula-launch-checklist",
+              "notes/nebula-operations-canonical-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/nebula-operations-canonical-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 278
+              }
+            ],
+            "required_in_candidates": [
+              "notes/nebula-launch-checklist"
+            ],
+            "required_in_selected": [
+              "notes/nebula-launch-checklist"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "go-no-go",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/nebula-launch-checklist"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 530.0,
+            "runtime": {
+              "search_elapsed_us": 246,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 256,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 530,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "query-intent-historical",
+        "surface": "codex",
+        "query": "orion 当時 理由",
+        "gate_mode": "selected",
+        "required": [
+          "notes/orion-audit-record-2025"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/orion-audit-record-2025",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/orion-audit-record-2025",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 270
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/orion-audit-record-2025"
+            ],
+            "required_in_selected": [
+              "notes/orion-audit-record-2025"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "historical-reason",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/orion-audit-record-2025"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 527.0,
+            "runtime": {
+              "search_elapsed_us": 435,
+              "retrieval_elapsed_us": 6,
+              "total_elapsed_us": 441,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 527,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/orion-audit-record-2025",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/orion-audit-record-2025",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 270
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/orion-audit-record-2025"
+            ],
+            "required_in_selected": [
+              "notes/orion-audit-record-2025"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "historical-reason",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/orion-audit-record-2025"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 527.0,
+            "runtime": {
+              "search_elapsed_us": 435,
+              "retrieval_elapsed_us": 11,
+              "total_elapsed_us": 446,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 527,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "query-intent-historical",
+        "surface": "claude_code",
+        "query": "orion 当時 理由",
+        "gate_mode": "selected",
+        "required": [
+          "notes/orion-audit-record-2025"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/orion-audit-record-2025",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/orion-audit-record-2025",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 270
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/orion-audit-record-2025"
+            ],
+            "required_in_selected": [
+              "notes/orion-audit-record-2025"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "historical-reason",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/orion-audit-record-2025"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 527.0,
+            "runtime": {
+              "search_elapsed_us": 346,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 351,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 527,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/orion-audit-record-2025",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/orion-audit-record-2025",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 270
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/orion-audit-record-2025"
+            ],
+            "required_in_selected": [
+              "notes/orion-audit-record-2025"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "historical-reason",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/orion-audit-record-2025"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 527.0,
+            "runtime": {
+              "search_elapsed_us": 346,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 356,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 527,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "query-intent-historical",
+        "surface": "chatgpt",
+        "query": "orion 当時 理由",
+        "gate_mode": "selected",
+        "required": [
+          "notes/orion-audit-record-2025"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/orion-audit-record-2025",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/orion-audit-record-2025",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 270
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/orion-audit-record-2025"
+            ],
+            "required_in_selected": [
+              "notes/orion-audit-record-2025"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "historical-reason",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/orion-audit-record-2025"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 527.0,
+            "runtime": {
+              "search_elapsed_us": 344,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 349,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 527,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/orion-audit-record-2025",
+              "notes/orion-current-policy-a"
+            ],
+            "selected": [
+              {
+                "id": "notes/orion-audit-record-2025",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 270
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              }
+            ],
+            "required_in_candidates": [
+              "notes/orion-audit-record-2025"
+            ],
+            "required_in_selected": [
+              "notes/orion-audit-record-2025"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "historical-reason",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/orion-audit-record-2025"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 1,
+            "tokens_per_required": 527.0,
+            "runtime": {
+              "search_elapsed_us": 344,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 354,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 527,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "anchor-text-alias",
+        "surface": "codex",
+        "query": "blue comet policy",
+        "gate_mode": "selected",
+        "required": [
+          "notes/kepler-retention-procedure"
+        ],
+        "relevant": [
+          "notes/storage-map"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/kepler-retention-procedure",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-canonical"
+            ],
+            "selected": [
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              }
+            ],
+            "required_in_candidates": [
+              "notes/kepler-retention-procedure"
+            ],
+            "required_in_selected": [
+              "notes/kepler-retention-procedure"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "retention",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/kepler-retention-procedure"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 779.0,
+            "runtime": {
+              "search_elapsed_us": 429,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 439,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 779,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/kepler-retention-procedure",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a",
+              "notes/storage-map",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              },
+              {
+                "id": "notes/storage-map",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/kepler-retention-procedure"
+            ],
+            "required_in_selected": [
+              "notes/kepler-retention-procedure"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "retention",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/kepler-retention-procedure"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.2857142857142857,
+            "required_rank": 1,
+            "tokens_per_required": 1826.0,
+            "runtime": {
+              "search_elapsed_us": 429,
+              "retrieval_elapsed_us": 37,
+              "total_elapsed_us": 466,
+              "seed_count": 5,
+              "candidate_count": 7,
+              "selected_count": 7,
+              "estimated_tokens": 1826,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 2
+            }
+          }
+        ]
+      },
+      {
+        "id": "anchor-text-alias",
+        "surface": "claude_code",
+        "query": "blue comet policy",
+        "gate_mode": "selected",
+        "required": [
+          "notes/kepler-retention-procedure"
+        ],
+        "relevant": [
+          "notes/storage-map"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/kepler-retention-procedure",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-canonical"
+            ],
+            "selected": [
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              }
+            ],
+            "required_in_candidates": [
+              "notes/kepler-retention-procedure"
+            ],
+            "required_in_selected": [
+              "notes/kepler-retention-procedure"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "retention",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/kepler-retention-procedure"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 779.0,
+            "runtime": {
+              "search_elapsed_us": 678,
+              "retrieval_elapsed_us": 14,
+              "total_elapsed_us": 692,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 779,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/kepler-retention-procedure",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a",
+              "notes/storage-map",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              },
+              {
+                "id": "notes/storage-map",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/kepler-retention-procedure"
+            ],
+            "required_in_selected": [
+              "notes/kepler-retention-procedure"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "retention",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/kepler-retention-procedure"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.2857142857142857,
+            "required_rank": 1,
+            "tokens_per_required": 1826.0,
+            "runtime": {
+              "search_elapsed_us": 678,
+              "retrieval_elapsed_us": 41,
+              "total_elapsed_us": 719,
+              "seed_count": 5,
+              "candidate_count": 7,
+              "selected_count": 7,
+              "estimated_tokens": 1826,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 2
+            }
+          }
+        ]
+      },
+      {
+        "id": "anchor-text-alias",
+        "surface": "chatgpt",
+        "query": "blue comet policy",
+        "gate_mode": "selected",
+        "required": [
+          "notes/kepler-retention-procedure"
+        ],
+        "relevant": [
+          "notes/storage-map"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/kepler-retention-procedure",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-canonical"
+            ],
+            "selected": [
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              }
+            ],
+            "required_in_candidates": [
+              "notes/kepler-retention-procedure"
+            ],
+            "required_in_selected": [
+              "notes/kepler-retention-procedure"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "retention",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/kepler-retention-procedure"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 779.0,
+            "runtime": {
+              "search_elapsed_us": 336,
+              "retrieval_elapsed_us": 8,
+              "total_elapsed_us": 344,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 779,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/kepler-retention-procedure",
+              "notes/blue-comet-index-a",
+              "notes/vega-access-policy-canonical",
+              "notes/hidden-context-policy",
+              "notes/orion-current-policy-a",
+              "notes/storage-map",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/blue-comet-index-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/vega-access-policy-canonical",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 253
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/orion-current-policy-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 257
+              },
+              {
+                "id": "notes/storage-map",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/retrieval-beacon",
+                "source": "incoming_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/kepler-retention-procedure"
+            ],
+            "required_in_selected": [
+              "notes/kepler-retention-procedure"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "retention",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/kepler-retention-procedure"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.2857142857142857,
+            "required_rank": 1,
+            "tokens_per_required": 1826.0,
+            "runtime": {
+              "search_elapsed_us": 336,
+              "retrieval_elapsed_us": 33,
+              "total_elapsed_us": 369,
+              "seed_count": 5,
+              "candidate_count": 7,
+              "selected_count": 7,
+              "estimated_tokens": 1826,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 5,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 2
+            }
+          }
+        ]
+      },
+      {
+        "id": "typed-relation-ranking",
+        "surface": "codex",
+        "query": "rhea incident cause evidence",
+        "gate_mode": "selected",
+        "required": [
+          "notes/zeta-telemetry-record"
+        ],
+        "relevant": [
+          "notes/rhea-incident-decision"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/rhea-incident-decision",
+              "notes/hidden-context-policy"
+            ],
+            "selected": [
+              {
+                "id": "notes/rhea-incident-decision",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 532
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [],
+            "required_in_selected": [],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "telemetry",
+                "passed": false,
+                "matching_document_ids": []
+              }
+            ],
+            "gate_passed": false,
+            "candidate_recall": 0.0,
+            "selected_recall": 0.0,
+            "selected_precision": 0.5,
+            "required_rank": null,
+            "tokens_per_required": null,
+            "runtime": {
+              "search_elapsed_us": 313,
+              "retrieval_elapsed_us": 11,
+              "total_elapsed_us": 324,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 792,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/rhea-incident-decision",
+              "notes/hidden-context-policy",
+              "notes/zeta-telemetry-record",
+              "notes/aster-mention-01",
+              "notes/aster-mention-02",
+              "notes/aster-mention-03",
+              "notes/aster-mention-04",
+              "notes/aster-mention-05",
+              "notes/aster-mention-06",
+              "notes/aster-mention-07",
+              "notes/aster-mention-08",
+              "notes/aster-mention-09",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/rhea-incident-decision",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 532
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/zeta-telemetry-record",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/aster-mention-01",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-02",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-03",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-04",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-05",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-06",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-07",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              }
+            ],
+            "required_in_candidates": [
+              "notes/zeta-telemetry-record"
+            ],
+            "required_in_selected": [
+              "notes/zeta-telemetry-record"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "telemetry",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/zeta-telemetry-record"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.2,
+            "required_rank": 3,
+            "tokens_per_required": 2671.0,
+            "runtime": {
+              "search_elapsed_us": 313,
+              "retrieval_elapsed_us": 66,
+              "total_elapsed_us": 379,
+              "seed_count": 2,
+              "candidate_count": 13,
+              "selected_count": 10,
+              "estimated_tokens": 2671,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": true,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 8,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "typed-relation-ranking",
+        "surface": "claude_code",
+        "query": "rhea incident cause evidence",
+        "gate_mode": "selected",
+        "required": [
+          "notes/zeta-telemetry-record"
+        ],
+        "relevant": [
+          "notes/rhea-incident-decision"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/rhea-incident-decision",
+              "notes/hidden-context-policy"
+            ],
+            "selected": [
+              {
+                "id": "notes/rhea-incident-decision",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 532
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [],
+            "required_in_selected": [],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "telemetry",
+                "passed": false,
+                "matching_document_ids": []
+              }
+            ],
+            "gate_passed": false,
+            "candidate_recall": 0.0,
+            "selected_recall": 0.0,
+            "selected_precision": 0.5,
+            "required_rank": null,
+            "tokens_per_required": null,
+            "runtime": {
+              "search_elapsed_us": 213,
+              "retrieval_elapsed_us": 6,
+              "total_elapsed_us": 219,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 792,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/rhea-incident-decision",
+              "notes/hidden-context-policy",
+              "notes/zeta-telemetry-record",
+              "notes/aster-mention-01",
+              "notes/aster-mention-02",
+              "notes/aster-mention-03",
+              "notes/aster-mention-04",
+              "notes/aster-mention-05",
+              "notes/aster-mention-06",
+              "notes/aster-mention-07",
+              "notes/aster-mention-08",
+              "notes/aster-mention-09",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/rhea-incident-decision",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 532
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/zeta-telemetry-record",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/aster-mention-01",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-02",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-03",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-04",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-05",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-06",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-07",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              }
+            ],
+            "required_in_candidates": [
+              "notes/zeta-telemetry-record"
+            ],
+            "required_in_selected": [
+              "notes/zeta-telemetry-record"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "telemetry",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/zeta-telemetry-record"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.2,
+            "required_rank": 3,
+            "tokens_per_required": 2671.0,
+            "runtime": {
+              "search_elapsed_us": 213,
+              "retrieval_elapsed_us": 56,
+              "total_elapsed_us": 269,
+              "seed_count": 2,
+              "candidate_count": 13,
+              "selected_count": 10,
+              "estimated_tokens": 2671,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": true,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 8,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "typed-relation-ranking",
+        "surface": "chatgpt",
+        "query": "rhea incident cause evidence",
+        "gate_mode": "selected",
+        "required": [
+          "notes/zeta-telemetry-record"
+        ],
+        "relevant": [
+          "notes/rhea-incident-decision"
+        ],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/rhea-incident-decision",
+              "notes/hidden-context-policy"
+            ],
+            "selected": [
+              {
+                "id": "notes/rhea-incident-decision",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 532
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              }
+            ],
+            "required_in_candidates": [],
+            "required_in_selected": [],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "telemetry",
+                "passed": false,
+                "matching_document_ids": []
+              }
+            ],
+            "gate_passed": false,
+            "candidate_recall": 0.0,
+            "selected_recall": 0.0,
+            "selected_precision": 0.5,
+            "required_rank": null,
+            "tokens_per_required": null,
+            "runtime": {
+              "search_elapsed_us": 209,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 214,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 792,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/rhea-incident-decision",
+              "notes/hidden-context-policy",
+              "notes/zeta-telemetry-record",
+              "notes/aster-mention-01",
+              "notes/aster-mention-02",
+              "notes/aster-mention-03",
+              "notes/aster-mention-04",
+              "notes/aster-mention-05",
+              "notes/aster-mention-06",
+              "notes/aster-mention-07",
+              "notes/aster-mention-08",
+              "notes/aster-mention-09",
+              "notes/retrieval-beacon"
+            ],
+            "selected": [
+              {
+                "id": "notes/rhea-incident-decision",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 532
+              },
+              {
+                "id": "notes/hidden-context-policy",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 260
+              },
+              {
+                "id": "notes/zeta-telemetry-record",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 265
+              },
+              {
+                "id": "notes/aster-mention-01",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-02",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-03",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-04",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-05",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              },
+              {
+                "id": "notes/aster-mention-06",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 230
+              },
+              {
+                "id": "notes/aster-mention-07",
+                "source": "outgoing_link",
+                "depth": 1,
+                "estimated_tokens": 231
+              }
+            ],
+            "required_in_candidates": [
+              "notes/zeta-telemetry-record"
+            ],
+            "required_in_selected": [
+              "notes/zeta-telemetry-record"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "telemetry",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/zeta-telemetry-record"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.2,
+            "required_rank": 3,
+            "tokens_per_required": 2671.0,
+            "runtime": {
+              "search_elapsed_us": 209,
+              "retrieval_elapsed_us": 55,
+              "total_elapsed_us": 264,
+              "seed_count": 2,
+              "candidate_count": 13,
+              "selected_count": 10,
+              "estimated_tokens": 2671,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": true,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 8,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "passage-ranking-cost",
+        "surface": "codex",
+        "query": "atlas recovery checksum procedure",
+        "gate_mode": "selected",
+        "required": [
+          "notes/atlas-recovery-handbook"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/atlas-recovery-handbook",
+              "notes/kepler-retention-procedure",
+              "notes/nebula-launch-checklist"
+            ],
+            "selected": [
+              {
+                "id": "notes/atlas-recovery-handbook",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 26128
+              },
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              }
+            ],
+            "required_in_candidates": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "required_in_selected": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "recovery-action",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/atlas-recovery-handbook"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 26646.0,
+            "runtime": {
+              "search_elapsed_us": 42441,
+              "retrieval_elapsed_us": 30,
+              "total_elapsed_us": 42471,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 26646,
+              "spill": true,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/atlas-recovery-handbook",
+              "notes/kepler-retention-procedure",
+              "notes/nebula-launch-checklist",
+              "notes/storage-map"
+            ],
+            "selected": [
+              {
+                "id": "notes/atlas-recovery-handbook",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 2482
+              },
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/storage-map",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "required_in_selected": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "recovery-action",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/atlas-recovery-handbook"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.25,
+            "required_rank": 1,
+            "tokens_per_required": 3265.0,
+            "runtime": {
+              "search_elapsed_us": 42441,
+              "retrieval_elapsed_us": 311,
+              "total_elapsed_us": 42752,
+              "seed_count": 4,
+              "candidate_count": 4,
+              "selected_count": 4,
+              "estimated_tokens": 3265,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 4,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "passage-ranking-cost",
+        "surface": "claude_code",
+        "query": "atlas recovery checksum procedure",
+        "gate_mode": "selected",
+        "required": [
+          "notes/atlas-recovery-handbook"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/atlas-recovery-handbook",
+              "notes/kepler-retention-procedure",
+              "notes/nebula-launch-checklist"
+            ],
+            "selected": [
+              {
+                "id": "notes/atlas-recovery-handbook",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 26128
+              },
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              }
+            ],
+            "required_in_candidates": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "required_in_selected": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "recovery-action",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/atlas-recovery-handbook"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 26646.0,
+            "runtime": {
+              "search_elapsed_us": 35341,
+              "retrieval_elapsed_us": 35,
+              "total_elapsed_us": 35376,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 26646,
+              "spill": true,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/atlas-recovery-handbook",
+              "notes/kepler-retention-procedure",
+              "notes/nebula-launch-checklist",
+              "notes/storage-map"
+            ],
+            "selected": [
+              {
+                "id": "notes/atlas-recovery-handbook",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 2482
+              },
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/storage-map",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "required_in_selected": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "recovery-action",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/atlas-recovery-handbook"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.25,
+            "required_rank": 1,
+            "tokens_per_required": 3265.0,
+            "runtime": {
+              "search_elapsed_us": 35341,
+              "retrieval_elapsed_us": 314,
+              "total_elapsed_us": 35655,
+              "seed_count": 4,
+              "candidate_count": 4,
+              "selected_count": 4,
+              "estimated_tokens": 3265,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 4,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "passage-ranking-cost",
+        "surface": "chatgpt",
+        "query": "atlas recovery checksum procedure",
+        "gate_mode": "selected",
+        "required": [
+          "notes/atlas-recovery-handbook"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/atlas-recovery-handbook",
+              "notes/kepler-retention-procedure",
+              "notes/nebula-launch-checklist"
+            ],
+            "selected": [
+              {
+                "id": "notes/atlas-recovery-handbook",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 26128
+              },
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              }
+            ],
+            "required_in_candidates": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "required_in_selected": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "recovery-action",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/atlas-recovery-handbook"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.3333333333333333,
+            "required_rank": 1,
+            "tokens_per_required": 26646.0,
+            "runtime": {
+              "search_elapsed_us": 36278,
+              "retrieval_elapsed_us": 33,
+              "total_elapsed_us": 36311,
+              "seed_count": 3,
+              "candidate_count": 3,
+              "selected_count": 3,
+              "estimated_tokens": 26646,
+              "spill": true,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": true,
+              "missing_documents": 0,
+              "selected_depth_0": 3,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/atlas-recovery-handbook",
+              "notes/kepler-retention-procedure",
+              "notes/nebula-launch-checklist",
+              "notes/storage-map"
+            ],
+            "selected": [
+              {
+                "id": "notes/atlas-recovery-handbook",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 2482
+              },
+              {
+                "id": "notes/kepler-retention-procedure",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 266
+              },
+              {
+                "id": "notes/nebula-launch-checklist",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 252
+              },
+              {
+                "id": "notes/storage-map",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 265
+              }
+            ],
+            "required_in_candidates": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "required_in_selected": [
+              "notes/atlas-recovery-handbook"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "recovery-action",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/atlas-recovery-handbook"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.25,
+            "required_rank": 1,
+            "tokens_per_required": 3265.0,
+            "runtime": {
+              "search_elapsed_us": 36278,
+              "retrieval_elapsed_us": 306,
+              "total_elapsed_us": 36584,
+              "seed_count": 4,
+              "candidate_count": 4,
+              "selected_count": 4,
+              "estimated_tokens": 3265,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 4,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "dedup-diversification",
+        "surface": "codex",
+        "query": "mercury budget review",
+        "gate_mode": "selected",
+        "required": [
+          "notes/mercury-program-risk-facet"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/mercury-program-digest-a",
+              "notes/mercury-program-risk-facet"
+            ],
+            "selected": [
+              {
+                "id": "notes/mercury-program-digest-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 273
+              },
+              {
+                "id": "notes/mercury-program-risk-facet",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 258
+              }
+            ],
+            "required_in_candidates": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "required_in_selected": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "unique-facet",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/mercury-program-risk-facet"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 2,
+            "tokens_per_required": 531.0,
+            "runtime": {
+              "search_elapsed_us": 341,
+              "retrieval_elapsed_us": 7,
+              "total_elapsed_us": 348,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 531,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/mercury-program-digest-a",
+              "notes/mercury-program-risk-facet"
+            ],
+            "selected": [
+              {
+                "id": "notes/mercury-program-digest-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 273
+              },
+              {
+                "id": "notes/mercury-program-risk-facet",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 258
+              }
+            ],
+            "required_in_candidates": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "required_in_selected": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "unique-facet",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/mercury-program-risk-facet"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 2,
+            "tokens_per_required": 531.0,
+            "runtime": {
+              "search_elapsed_us": 341,
+              "retrieval_elapsed_us": 11,
+              "total_elapsed_us": 352,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 531,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "dedup-diversification",
+        "surface": "claude_code",
+        "query": "mercury budget review",
+        "gate_mode": "selected",
+        "required": [
+          "notes/mercury-program-risk-facet"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/mercury-program-digest-a",
+              "notes/mercury-program-risk-facet"
+            ],
+            "selected": [
+              {
+                "id": "notes/mercury-program-digest-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 273
+              },
+              {
+                "id": "notes/mercury-program-risk-facet",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 258
+              }
+            ],
+            "required_in_candidates": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "required_in_selected": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "unique-facet",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/mercury-program-risk-facet"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 2,
+            "tokens_per_required": 531.0,
+            "runtime": {
+              "search_elapsed_us": 252,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 257,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 531,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/mercury-program-digest-a",
+              "notes/mercury-program-risk-facet"
+            ],
+            "selected": [
+              {
+                "id": "notes/mercury-program-digest-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 273
+              },
+              {
+                "id": "notes/mercury-program-risk-facet",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 258
+              }
+            ],
+            "required_in_candidates": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "required_in_selected": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "unique-facet",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/mercury-program-risk-facet"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 2,
+            "tokens_per_required": 531.0,
+            "runtime": {
+              "search_elapsed_us": 252,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 262,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 531,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      },
+      {
+        "id": "dedup-diversification",
+        "surface": "chatgpt",
+        "query": "mercury budget review",
+        "gate_mode": "selected",
+        "required": [
+          "notes/mercury-program-risk-facet"
+        ],
+        "relevant": [],
+        "excluded": [],
+        "search_degraded": [],
+        "stable": true,
+        "strategies": [
+          {
+            "strategy": "top3",
+            "candidate_ids": [
+              "notes/mercury-program-digest-a",
+              "notes/mercury-program-risk-facet"
+            ],
+            "selected": [
+              {
+                "id": "notes/mercury-program-digest-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 273
+              },
+              {
+                "id": "notes/mercury-program-risk-facet",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 258
+              }
+            ],
+            "required_in_candidates": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "required_in_selected": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "unique-facet",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/mercury-program-risk-facet"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 2,
+            "tokens_per_required": 531.0,
+            "runtime": {
+              "search_elapsed_us": 248,
+              "retrieval_elapsed_us": 5,
+              "total_elapsed_us": 253,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 531,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          },
+          {
+            "strategy": "linked_v1",
+            "candidate_ids": [
+              "notes/mercury-program-digest-a",
+              "notes/mercury-program-risk-facet"
+            ],
+            "selected": [
+              {
+                "id": "notes/mercury-program-digest-a",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 273
+              },
+              {
+                "id": "notes/mercury-program-risk-facet",
+                "source": "search",
+                "depth": 0,
+                "estimated_tokens": 258
+              }
+            ],
+            "required_in_candidates": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "required_in_selected": [
+              "notes/mercury-program-risk-facet"
+            ],
+            "excluded_in_selected": [],
+            "body_requirements": [
+              {
+                "id": "unique-facet",
+                "passed": true,
+                "matching_document_ids": [
+                  "notes/mercury-program-risk-facet"
+                ]
+              }
+            ],
+            "gate_passed": true,
+            "candidate_recall": 1.0,
+            "selected_recall": 1.0,
+            "selected_precision": 0.5,
+            "required_rank": 2,
+            "tokens_per_required": 531.0,
+            "runtime": {
+              "search_elapsed_us": 248,
+              "retrieval_elapsed_us": 10,
+              "total_elapsed_us": 258,
+              "seed_count": 2,
+              "candidate_count": 2,
+              "selected_count": 2,
+              "estimated_tokens": 531,
+              "spill": false,
+              "budget_exhausted": false,
+              "document_cap_reached": false,
+              "candidate_cap_reached": false,
+              "missing_documents": 0,
+              "selected_depth_0": 2,
+              "selected_depth_1": 0,
+              "selected_depth_2": 0,
+              "selected_incoming": 0
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

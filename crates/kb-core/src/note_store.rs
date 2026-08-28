@@ -92,6 +92,9 @@ pub(crate) fn queue_put(
     log_entry: &str,
     commit_message: &str,
 ) -> Result<()> {
+    // governance台帳(note_relations)が欠損・不整合の間はnote writeをfail-closed。
+    // open時の自己修復が成功していれば透過(spec S-3の修復契約)。
+    crate::derived_index::require_governance_ready(conn)?;
     let id = NoteId::parse(raw)?;
     let base_document = conn
         .query_row(
@@ -119,11 +122,14 @@ pub(crate) fn queue_put(
 }
 
 pub(crate) fn delete(
+    vault: &Vault,
     conn: &Connection,
     raw: &str,
     log_entry: &str,
     commit_message: &str,
 ) -> Result<()> {
+    // queue_putと同じfail-closedゲート。削除もgovernance台帳を書き換える。
+    crate::derived_index::require_governance_ready(conn)?;
     let id = NoteId::parse(raw)?;
     let transaction = conn.unchecked_transaction()?;
     let base_document = transaction
@@ -142,40 +148,29 @@ pub(crate) fn delete(
         )
         .optional()?
         .flatten();
-    if let Some(note_uid) = &note_uid {
-        let source: Option<String> = transaction
-            .query_row(
-                "SELECT source.id FROM note_relations relation
-                 JOIN notes source ON source.note_uid = relation.src_uid
-                 WHERE relation.target_uid = ?1 LIMIT 1",
-                [note_uid],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(source) = source {
-            bail!("typed relationの参照先は削除できない: {source} -> {id}");
-        }
-    }
+    // 派生行の削除(inbound relation存在時の拒否を含む)はregistry走査へ統一。
+    crate::derived_index::apply_note_change(
+        vault,
+        &transaction,
+        crate::derived_index::NoteChange::Remove {
+            note_id: id.as_str(),
+            note_uid: note_uid.as_deref(),
+        },
+    )?;
     transaction.execute("DELETE FROM notes WHERE id = ?1", [id.as_str()])?;
-    transaction.execute(
-        "DELETE FROM links WHERE src = ?1 OR dst = ?1",
-        [id.as_str()],
-    )?;
-    transaction.execute("DELETE FROM fts_main WHERE id = ?1", [id.as_str()])?;
-    transaction.execute("DELETE FROM fts_tri WHERE id = ?1", [id.as_str()])?;
-    transaction.execute(
-        "DELETE FROM fts_anchor WHERE src = ?1 OR dst = ?1",
-        [id.as_str()],
-    )?;
-    transaction.execute("DELETE FROM note_vecs WHERE id = ?1", [id.as_str()])?;
-    if let Some(note_uid) = note_uid {
-        transaction.execute("DELETE FROM note_relations WHERE src_uid = ?1", [&note_uid])?;
-    }
     transaction.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
          VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, NULL, ?4, ?5)",
         rusqlite::params![id.as_str(), DELETE, base_document, log_entry, commit_message],
     )?;
+    // inbound relation検査(apply_note_change)はsupersedes**元**の削除を素通り
+    // させる。元を消すとorphaned superseded canonicalがdurable(相手のdocument)
+    // に固定され、以後の全openでgovernance修復が必ず失敗してnote writeが恒久
+    // fail-closedになる(敵対的レビューF1)。削除後の台帳で大域条件を再検証し、
+    // 違反ならこのtransactionごと巻き戻す。sync_files(import)側は既に末尾で
+    // 同じ全体validateを実行している。
+    crate::index::validate_authority_index(&transaction)
+        .with_context(|| format!("この削除はsupersedes継承を壊すため実行できない: {id}"))?;
     transaction.commit()?;
     Ok(())
 }
@@ -401,7 +396,7 @@ mod tests {
         put(&vault, &conn, id, &note("本文"), "export", "export note").unwrap();
         vault.flush_note_exports(&conn).unwrap();
 
-        delete(&conn, id, "delete", "delete note").unwrap();
+        delete(&vault, &conn, id, "delete", "delete note").unwrap();
         assert!(read(&conn, id).is_err());
         assert!(vault.note_path(id).unwrap().exists());
 
@@ -430,6 +425,91 @@ mod tests {
         std::fs::remove_dir_all(vault.root.join(".kb")).unwrap();
         let restored = crate::index::open_db(&vault).unwrap();
         assert_eq!(read(&restored, id).unwrap().body, "復元する本文\n");
+    }
+
+    /// supersedes元(active canonical)の削除はorphaned superseded canonicalを
+    /// durableに固定し、以後の全openでgovernance修復が失敗してnote writeが
+    /// 恒久fail-closedになる実事故クラス(敵対的レビューF1)。削除transaction
+    /// 末尾の全体validateが拒否し、DB・outbox・Markdownとも無傷に保つ。
+    #[test]
+    fn deleting_a_supersedes_source_is_rejected_before_it_orphans_the_target() {
+        use crate::authority::{NoteRelation, RelationKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let old_uid = NoteUid::new();
+        let new_uid = NoteUid::new();
+        let authority_note =
+            |title: &str, uid: &NoteUid, status: AuthorityStatus, relations: Vec<NoteRelation>| {
+                let mut front = Frontmatter::new_note(title);
+                front.tags = vec!["test".into()];
+                front.origin = Some("agent".into());
+                front.created = Some(crate::frontmatter::now_iso());
+                front.note_uid = Some(uid.clone());
+                front.authority = Some(Authority {
+                    namespace: NoteNamespace::Procedures,
+                    role: AuthorityRole::Canonical,
+                    status,
+                    scope: "kb-app/release".into(),
+                });
+                front.relations = relations;
+                Note {
+                    front,
+                    body: "本文".into(),
+                }
+            };
+        let superseded = authority_note("旧版", &old_uid, AuthorityStatus::Superseded, Vec::new());
+        let active = authority_note(
+            "現行版",
+            &new_uid,
+            AuthorityStatus::Active,
+            vec![NoteRelation {
+                kind: RelationKind::Supersedes,
+                target: old_uid.clone(),
+            }],
+        );
+        std::fs::write(
+            vault.root.join("notes/old.md"),
+            superseded.to_file_string().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            vault.root.join("notes/current.md"),
+            active.to_file_string().unwrap(),
+        )
+        .unwrap();
+
+        // 正規のsnapshot import(全体validate)がこのpairを正常状態として受理する
+        let outcome = crate::index::open_db_with_outcome(&vault).unwrap();
+        assert!(outcome.write_blockers.is_empty());
+        let conn = outcome.conn;
+        assert!(contains(&conn, "notes/current").unwrap());
+
+        // 候補チェック(MCP prepare_remove相当)はinboundしか見ないため通る —
+        // 拒否は削除transaction末尾の全体validateが担う
+        vault
+            .agent_removal_candidate(&conn, "notes/current")
+            .unwrap();
+        let error = vault
+            .agent_delete_note(&conn, "notes/current", "統合済みのため削除", "test/client")
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("supersedes継承"), "{error:#}");
+
+        // DB・outbox・Markdownとも無傷(rollback済み・export flushも走らない)
+        assert!(contains(&conn, "notes/current").unwrap());
+        assert!(contains(&conn, "notes/old").unwrap());
+        assert_eq!(pending_count(&conn).unwrap(), 0);
+        assert!(vault.note_path("notes/current").unwrap().exists());
+        drop(conn);
+
+        // 再openしてもgovernance修復失敗・write停止に落ちない
+        let reopened = crate::index::open_db_with_outcome(&vault).unwrap();
+        assert!(
+            reopened.write_blockers.is_empty(),
+            "{:?}",
+            reopened.degraded
+        );
+        assert!(reopened.degraded.is_empty(), "{:?}", reopened.degraded);
     }
 
     #[test]
