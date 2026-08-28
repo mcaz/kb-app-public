@@ -42,6 +42,7 @@ pub mod resolve;
 pub mod retrieval;
 pub mod retrieval_benchmark;
 pub mod retrieval_eval;
+pub mod retrieval_profile;
 pub mod rule_delivery_eval;
 pub mod search;
 pub mod settings;

@@ -105,6 +105,33 @@ token／spill低下は効果として扱う。
 - [Passage ranking](retrieval-passage-ranking.md)
 - [重複排除・多様化](retrieval-dedup-diversification.md)
 - [実運用風holdoutでの全施策比較](retrieval-realistic-holdout.md)
+- [Retrieval profile／context index実験の共通base](retrieval-experiment-base.md)
+
+## 配信profile × rerankの比較軸(benchmark 1.1.0 / Golden Query 2.1.0)
+
+配信profile(`session_auto` / `session_explicit` / `routine_auto` / `evaluation`)とquery-aware rerankの
+実験を同じfixtureで比べるため、benchmark suiteとGolden Queryの形式を後方互換で広げた。google / holdoutの
+2 suiteは1.0.0のまま凍結し、`kb eval retrieval-benchmark`に`--profiles` / `--rerank`を付けても
+stderrへ注意を出して無視する(従来出力)。
+
+```bash
+kb eval retrieval-benchmark \
+  --suite schemas/examples/retrieval-profile-context.example.json \
+  --profiles session-auto,session-explicit,routine-auto --rerank off \
+  --format json --output /private/path/suite-off.json
+```
+
+- benchmark 1.1.0: `profiles`(既定`["session_auto"]`)と`rerank`(既定`off`)。CLI flagがsuiteの値より優先する。
+  1.1.0 suiteのreportには`top3` / `linked_v1`に加えて`profile:<name>:rerank_<off|on>`のstrategyが並ぶ
+- Golden Query 2.1.0: caseの`family`(family × strategyの集計軸)、`queries.routine`(定型routine promptを模した
+  4番目のsurface、任意)、`gate_mode`(`selected`は required全件の本文選択、`candidates`は required全件の候補化で
+  合格。`candidates`では本文要件を報告だけに留める)
+- 追加指標: `required_rank`(候補順で最初のrequiredが出る位置、1始まり。予算に依存しない順位指標)と
+  `tokens_per_required`(選択本文の推定token ÷ 選択されたrequired件数)。summaryではそれぞれ中央値と平均を出し、
+  strategyごとの`gate_passed` / `gate_failed_cases`も持つ
+- 実験baseでは全profileが現行の`RetrievalOptions::default()`へ解決し、`session_auto`は`linked_v1`と候補列・選択・
+  gateが一致する(`crates/kb-core/src/retrieval_profile.rs`)。profileごとの予算・AND検索・rerankは各実験branchが
+  実装し、[共通base](retrieval-experiment-base.md)の表との差分で判定する
 
 ## 範囲外
 

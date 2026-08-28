@@ -16,10 +16,10 @@ pub const AUTO_CANDIDATE_LIMIT: usize = 50;
 pub const AUTO_DOCUMENT_LIMIT: usize = 10;
 /// Codex hook側の約12,000 token spill閾値へ、見出し等の余白を残す。
 pub const AUTO_ESTIMATED_TOKEN_BUDGET: usize = 10_000;
-const PASSAGE_RANKING_TRIGGER_TOKENS: usize = 4_000;
+pub const PASSAGE_RANKING_TRIGGER_TOKENS: usize = 4_000;
 const PASSAGE_MAX_BYTES: usize = 2_400;
-const PASSAGE_DOCUMENT_LIMIT: usize = 3;
-const PASSAGE_DOCUMENT_TOKEN_BUDGET: usize = 3_600;
+pub const PASSAGE_DOCUMENT_LIMIT: usize = 3;
+pub const PASSAGE_DOCUMENT_TOKEN_BUDGET: usize = 3_600;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RetrievalOptions {

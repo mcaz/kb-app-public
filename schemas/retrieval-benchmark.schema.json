@@ -2,19 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mcaz/kb-app/schemas/retrieval-benchmark.schema.json",
   "title": "kb-app synthetic retrieval benchmark suite",
-  "description": "An isolated synthetic corpus with regression controls and diagnostic retrieval challenges.",
+  "description": "An isolated synthetic corpus with regression controls and diagnostic retrieval challenges. 1.1.0 adds the delivery-profile × rerank comparison axis; 1.0.0 suites stay frozen as the top3 / linked_v1 control form.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "notes", "controls", "challenges"],
   "properties": {
-    "schema_version": { "const": "1.0.0" },
+    "schema_version": { "enum": ["1.0.0", "1.1.0"] },
     "notes": {
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/note" }
     },
     "controls": { "$ref": "retrieval-eval.schema.json" },
-    "challenges": { "$ref": "retrieval-eval.schema.json" }
+    "challenges": { "$ref": "retrieval-eval.schema.json" },
+    "profiles": {
+      "description": "1.1.0 only. Delivery profiles evaluated in addition to top3 / linked_v1. Defaults to [\"session_auto\"]; `kb eval retrieval-benchmark --profiles` overrides it.",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "default": ["session_auto"],
+      "items": { "enum": ["session_auto", "session_explicit", "routine_auto", "evaluation"] }
+    },
+    "rerank": {
+      "description": "1.1.0 only. Query-aware rerank axis shared by every profile strategy. Defaults to off; `--rerank` overrides it.",
+      "enum": ["off", "on"],
+      "default": "off"
+    }
+  },
+  "if": { "properties": { "schema_version": { "const": "1.0.0" } } },
+  "then": {
+    "properties": {
+      "profiles": false,
+      "rerank": false,
+      "controls": { "properties": { "schema_version": { "const": "2.0.0" } } },
+      "challenges": { "properties": { "schema_version": { "const": "2.0.0" } } }
+    }
   },
   "$defs": {
     "trimmed_string": {

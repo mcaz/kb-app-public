@@ -287,6 +287,12 @@ enum EvalCommand {
         /// 省略時はstdoutへ出力
         #[arg(long)]
         output: Option<PathBuf>,
+        /// 比較する配信profile(comma区切り)。1.1.0 suiteだけが受け付け、1.0.0 suiteでは無視する
+        #[arg(long, value_enum, value_delimiter = ',')]
+        profiles: Option<Vec<RetrievalProfileArg>>,
+        /// query-aware rerankの有無。1.1.0 suiteだけが受け付け、1.0.0 suiteでは無視する
+        #[arg(long, value_enum)]
+        rerank: Option<RerankArg>,
     },
     /// 固定20ケースについて4方式のRule配信contextを生成する
     RuleDeliveryPlan {
@@ -408,6 +414,40 @@ impl From<AuthorityStatusArg> for AuthorityStatus {
             AuthorityStatusArg::Active => Self::Active,
             AuthorityStatusArg::Historical => Self::Historical,
             AuthorityStatusArg::Superseded => Self::Superseded,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RetrievalProfileArg {
+    SessionAuto,
+    SessionExplicit,
+    RoutineAuto,
+    Evaluation,
+}
+
+impl From<RetrievalProfileArg> for kb_core::retrieval_profile::RetrievalProfile {
+    fn from(value: RetrievalProfileArg) -> Self {
+        match value {
+            RetrievalProfileArg::SessionAuto => Self::SessionAuto,
+            RetrievalProfileArg::SessionExplicit => Self::SessionExplicit,
+            RetrievalProfileArg::RoutineAuto => Self::RoutineAuto,
+            RetrievalProfileArg::Evaluation => Self::Evaluation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RerankArg {
+    Off,
+    On,
+}
+
+impl From<RerankArg> for kb_core::retrieval_profile::RerankMode {
+    fn from(value: RerankArg) -> Self {
+        match value {
+            RerankArg::Off => Self::Off,
+            RerankArg::On => Self::On,
         }
     }
 }
@@ -915,15 +955,33 @@ fn main() -> Result<()> {
                 suite,
                 format,
                 output,
+                profiles,
+                rerank,
             } => {
                 let input = fs::read_to_string(&suite).with_context(|| {
                     format!("retrieval benchmark suiteを読めない: {}", suite.display())
                 })?;
-                let suite: kb_core::retrieval_benchmark::RetrievalBenchmarkSuite =
+                let parsed: kb_core::retrieval_benchmark::RetrievalBenchmarkSuite =
                     serde_json::from_str(&input).with_context(|| {
                         format!("retrieval benchmark suite JSONが不正: {}", suite.display())
                     })?;
-                let report = kb_core::retrieval_benchmark::evaluate(&suite)?;
+                if kb_core::retrieval_benchmark::is_legacy(&parsed)
+                    && (profiles.is_some() || rerank.is_some())
+                {
+                    eprintln!(
+                        "注意: {} は schema 1.0.0 のため --profiles / --rerank を無視して従来出力を返す",
+                        suite.display()
+                    );
+                }
+                let run = kb_core::retrieval_benchmark::BenchmarkRunOptions {
+                    profiles: profiles
+                        .map(|profiles| profiles.into_iter().map(Into::into).collect()),
+                    rerank: rerank.map(Into::into),
+                    fixture_digest: Some(kb_core::retrieval_benchmark::fixture_digest(
+                        input.as_bytes(),
+                    )),
+                };
+                let report = kb_core::retrieval_benchmark::evaluate_with(&parsed, &run)?;
                 let rendered = match format {
                     ReportFormat::Json => serde_json::to_string_pretty(&report)?,
                     ReportFormat::Markdown => {
@@ -1069,7 +1127,7 @@ mod tests {
 
     use super::{
         Cli, Command, DistillCommand, DistillationCadenceCommand, DistillationCadenceLaneArg,
-        EvalCommand, ReportFormat, RuleDeliveryModeArg,
+        EvalCommand, ReportFormat, RerankArg, RuleDeliveryModeArg,
     };
 
     fn command_paths(command: &clap::Command, prefix: Option<&str>, paths: &mut BTreeSet<String>) {
@@ -1203,6 +1261,8 @@ mod tests {
                     suite,
                     format,
                     output,
+                    profiles,
+                    rerank,
                 },
         } = cli.command
         else {
@@ -1211,6 +1271,59 @@ mod tests {
         assert_eq!(suite, PathBuf::from("/repo/synthetic.json"));
         assert!(matches!(format, ReportFormat::Markdown));
         assert!(output.is_none());
+        assert!(profiles.is_none());
+        assert!(rerank.is_none());
+    }
+
+    #[test]
+    fn retrieval_benchmark_accepts_a_profile_matrix_and_rerank_flag() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "eval",
+            "retrieval-benchmark",
+            "--suite",
+            "/repo/synthetic.json",
+            "--profiles",
+            "session-auto,session-explicit,routine-auto",
+            "--rerank",
+            "on",
+        ])
+        .unwrap();
+        let Command::Eval {
+            command:
+                EvalCommand::RetrievalBenchmark {
+                    profiles, rerank, ..
+                },
+        } = cli.command
+        else {
+            panic!("eval retrieval-benchmarkとして解釈されなかった");
+        };
+        let profiles = profiles
+            .unwrap()
+            .into_iter()
+            .map(kb_core::retrieval_profile::RetrievalProfile::from)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            profiles,
+            [
+                kb_core::retrieval_profile::RetrievalProfile::SessionAuto,
+                kb_core::retrieval_profile::RetrievalProfile::SessionExplicit,
+                kb_core::retrieval_profile::RetrievalProfile::RoutineAuto,
+            ]
+        );
+        assert!(matches!(rerank, Some(RerankArg::On)));
+        assert!(
+            Cli::try_parse_from([
+                "kb",
+                "eval",
+                "retrieval-benchmark",
+                "--suite",
+                "/repo/synthetic.json",
+                "--profiles",
+                "unknown",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

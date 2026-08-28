@@ -56,6 +56,12 @@ semantic経路は、モデル配布状態やrunner CPUの差が大きいquery em
 リンク連鎖取得の初期実装後は、同じ10k fixtureでDB初回復元15,503 ms、連鎖取得20回2 ms
 （ほかはカテゴリ104 ms、一覧466 ms、全文検索10 ms、KNN 264 ms、詳細131 ms）だった。
 
+2026-08-28のretrieval実験base([retrieval-experiment-base.md](retrieval-experiment-base.md)、
+索引・検索経路は不変)では、同じ端末でclean な`origin/main` 91b9bf2を無負荷時に3回測り、DB初回復元15,693 ms / 15,566 ms / 15,756 ms
+(中央値15,693 ms)を実験の正典baselineとした。同じ端末でも他sessionの並列buildが走るload average 27〜30の
+状態では20,641 ms / 59,450 ms / 34,004 msと予算超過を含む揺らぎが出たため、gateの判定と実験の比較は無負荷時の
+3回中央値だけで行い、負荷下の値は汚染として記録に留める。
+
 初回測定では索引再構築が20,348 msだった。1ノートごとのSQLite autocommitを単一transactionへ
 変更すると15,105 msになったため、このtransactionは速度だけでなく途中失敗時のatomicityも
 通常の回帰テストで固定する。
