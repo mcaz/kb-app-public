@@ -290,7 +290,8 @@ enum EvalCommand {
         /// 比較する配信profile(comma区切り)。1.1.0 suiteだけが受け付け、1.0.0 suiteでは無視する
         #[arg(long, value_enum, value_delimiter = ',')]
         profiles: Option<Vec<RetrievalProfileArg>>,
-        /// query-aware rerankの有無。1.1.0 suiteだけが受け付け、1.0.0 suiteでは無視する
+        /// query-aware rerankの有無。1.1.0 suiteだけが受け付け、1.0.0 suiteでは無視する。
+        /// 統合coreで実行できるのは`off`のみ(`on`は明確なエラー — ContextCard rerankは評価用ブランチ)
         #[arg(long, value_enum)]
         rerank: Option<RerankArg>,
     },

@@ -184,6 +184,24 @@ impl EvaluationPlan {
     pub fn strategies(&self) -> &[EvaluationStrategy] {
         &self.strategies
     }
+
+    /// 統合coreのrerank軸は`off`のみ実行できる。`off`以外(現在の`on`、評価用ブランチが足す
+    /// `indexed`/`auto`も同様)はContextCard実装を持つ評価用ブランチ専用の軸で、coreでは
+    /// 明確なエラーにする(R4 I-5)。`RerankMode`のenum自体は比較表の語彙として残す。
+    pub(crate) fn ensure_rerank_off_for_core(&self) -> Result<()> {
+        for strategy in &self.strategies {
+            if let EvaluationStrategy::Profile { rerank, .. } = strategy
+                && *rerank != RerankMode::Off
+            {
+                bail!(
+                    "rerank={}は統合coreでは実行できない(coreが受理するのはoffのみ)。\
+                     ContextCard rerankは評価用ブランチの内部modeでだけ有効化する",
+                    rerank.label()
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -394,6 +412,7 @@ pub fn evaluate_with(
     suite: &GoldenSuite,
     plan: &EvaluationPlan,
 ) -> Result<EvaluationReport> {
+    plan.ensure_rerank_off_for_core()?;
     let transaction = conn
         .unchecked_transaction()
         .context("retrieval評価用snapshotを開始できない")?;

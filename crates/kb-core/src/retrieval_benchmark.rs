@@ -102,6 +102,8 @@ pub fn evaluate_with(
         Some(rerank) => EvaluationPlan::with_profiles(&profiles, rerank),
         None => EvaluationPlan::classic(),
     };
+    // fixture vaultを作る前に落とす。coreのrerank軸はoff固定(R4 I-5)。
+    plan.ensure_rerank_off_for_core()?;
     let directory = tempfile::tempdir().context("retrieval benchmark用一時directoryを作れない")?;
     let vault = create_fixture(suite, &directory.path().join("vault"))?;
     let conn = crate::index::open_db(&vault)?;
@@ -491,6 +493,32 @@ mod tests {
         suite.rerank = None;
         suite.controls.schema_version = crate::retrieval_eval::EVALUATION_SCHEMA_VERSION.into();
         assert!(validate_suite(&suite).is_err());
+    }
+
+    /// R4 I-5: 統合coreのrerank軸は`off`のみ受理する。CLI flag(`--rerank on`)経由でも
+    /// suite宣言経由でも明確なエラーで拒否し、ContextCard rerankを評価用ブランチへ隔離する。
+    /// legacy 1.0.0 suiteが`on`指定を無視して従来出力を返す挙動は
+    /// `legacy_fixture_ignores_profile_flags_and_rejects_profile_fields`で別途固定済み。
+    #[test]
+    fn core_rejects_rerank_on_with_a_clear_error() {
+        let mut upgraded = suite(GOOGLE);
+        upgraded.schema_version = RETRIEVAL_BENCHMARK_SCHEMA_VERSION.into();
+
+        let error = evaluate_with(
+            &upgraded,
+            &BenchmarkRunOptions {
+                profiles: Some(vec![RetrievalProfile::SessionAuto]),
+                rerank: Some(RerankMode::On),
+                fixture_digest: None,
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("rerank=on"), "{error}");
+        assert!(error.to_string().contains("off"), "{error}");
+
+        upgraded.rerank = Some(RerankMode::On);
+        let error = evaluate_with(&upgraded, &BenchmarkRunOptions::default()).unwrap_err();
+        assert!(error.to_string().contains("rerank=on"), "{error}");
     }
 
     fn structural_view(
