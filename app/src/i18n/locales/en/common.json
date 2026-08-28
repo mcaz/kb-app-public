@@ -129,7 +129,11 @@
     "care_list": "Care suggestions could not be retrieved. An empty list may not mean zero: {{detail}}",
     "tag_counts": "Tags could not be retrieved. An empty list may not mean zero: {{detail}}",
     "graph_nodes": "Some notes could not be shown in the graph: {{detail}}",
-    "graph_edges": "Some links could not be shown in the graph: {{detail}}"
+    "graph_edges": "Some links could not be shown in the graph: {{detail}}",
+    "index_recovered": "A damaged index ({{artifact}}) was repaired automatically: {{detail}}",
+    "index_repair": "The index ({{artifact}}) could not be repaired. Continuing on a fallback path: {{detail}}",
+    "governance_write_blocked": "Note writes are paused because the governance ledger is inconsistent: {{detail}}",
+    "artifact_not_ready": "A derived index ({{artifact}}) is not ready; continuing on the standard path: {{detail}}"
   },
   "errors": {
     "noteNotFound": "That note doesn’t exist yet",
