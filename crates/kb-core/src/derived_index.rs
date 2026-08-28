@@ -1334,6 +1334,67 @@ mod tests {
         );
     }
 
+    /// C-4-3(R4 I-4 必須条件3): registryは未知objectを絶対にDROPしない。
+    /// 自己修復(check_and_repair)と強制rebuild(force_rebuild)のDROPは
+    /// spec登録objectだけを対象にし、登録外のtable・index・trigger(将来の
+    /// versioned artifactや他producerの持ち物)には行も含めて一切触れない。
+    #[test]
+    fn repair_and_rebuild_never_drop_unknown_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "未知object保全",
+                "violet osprey lantern の記録。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        drop(open_db(&vault).unwrap());
+        // 登録外のtable+行・index・trigger(新しいバイナリの実験artifact相当)
+        let raw = open_raw(&vault);
+        raw.execute_batch(
+            "CREATE TABLE fts_entry_v9(id TEXT PRIMARY KEY, entry TEXT);
+             INSERT INTO fts_entry_v9(id, entry) VALUES('e1', 'payload');
+             CREATE INDEX fts_entry_v9_idx ON fts_entry_v9(entry);
+             CREATE TRIGGER unknown_probe AFTER INSERT ON notes BEGIN SELECT 1; END;
+             DROP TABLE fts_main; DROP TABLE fts_anchor;",
+        )
+        .unwrap();
+        drop(raw);
+
+        // 自己修復は壊れた登録artifactだけを再構築する
+        let outcome = open_db_with_outcome(&vault).unwrap();
+        assert!(outcome.recovered.contains(&DerivedArtifact::FtsMain));
+        assert!(outcome.recovered.contains(&DerivedArtifact::FtsAnchor));
+
+        let unknown_intact = |conn: &Connection| {
+            let objects: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM sqlite_schema
+                     WHERE name IN ('fts_entry_v9', 'fts_entry_v9_idx', 'unknown_probe')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(objects, 3, "未知objectが消えた");
+            let row: String = conn
+                .query_row("SELECT entry FROM fts_entry_v9 WHERE id='e1'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(row, "payload", "未知objectの行が変わった");
+        };
+        unknown_intact(&outcome.conn);
+
+        // 全artifactの強制rebuild(recreate経路)でも未知objectには触れない
+        for artifact in DerivedArtifact::ALL {
+            force_rebuild(&vault, &outcome.conn, artifact).unwrap();
+        }
+        unknown_intact(&outcome.conn);
+    }
+
     /// 増分維持(upsert/update/delete)と一括rebuildが全artifactで同じ論理行に
     /// 到達する(spec S-5のrebuild同値性)。
     #[test]

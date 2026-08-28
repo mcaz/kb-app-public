@@ -237,7 +237,12 @@ export type Degradation = { code: "remote_sync"; detail: string } | { code: "mar
 /**  派生索引の修復に失敗した(検索はfallback継続、次回openで再試行)。 */
 { code: "index_repair"; artifact: string; detail: string } | 
 /**  governance台帳を修復できず、note書込をfail-closedで停止中。 */
-{ code: "governance_write_blocked"; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "diversity_ranking"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
+{ code: "governance_write_blocked"; detail: string } | 
+/**
+ *  versioned派生artifactが利用不可(dirty・format不一致・retired等)で、
+ *  baseline検索へfallbackした(derived_lifecycle::check_availability)。
+ */
+{ code: "artifact_not_ready"; artifact: string; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "diversity_ranking"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
 
 export type DeliveryStatus = 
 /**  `local_only` なので送信対象ではない。 */

@@ -31,6 +31,12 @@ pub enum Degradation {
     GovernanceWriteBlocked {
         detail: String,
     },
+    /// versioned派生artifactが利用不可(dirty・format不一致・retired等)で、
+    /// baseline検索へfallbackした(derived_lifecycle::check_availability)。
+    ArtifactNotReady {
+        artifact: String,
+        detail: String,
+    },
     IndexMetadata {
         note: String,
         detail: String,
@@ -103,6 +109,7 @@ impl Degradation {
             Self::IndexRecovered { .. } => "index_recovered",
             Self::IndexRepair { .. } => "index_repair",
             Self::GovernanceWriteBlocked { .. } => "governance_write_blocked",
+            Self::ArtifactNotReady { .. } => "artifact_not_ready",
             Self::IndexMetadata { .. } => "index_metadata",
             Self::IndexRead { .. } => "index_read",
             Self::IndexParse { .. } => "index_parse",
@@ -142,6 +149,12 @@ impl std::fmt::Display for Degradation {
             }
             Self::GovernanceWriteBlocked { detail } => {
                 write!(f, "ノートの書込を停止中: {detail}")
+            }
+            Self::ArtifactNotReady { artifact, detail } => {
+                write!(
+                    f,
+                    "派生artifact {artifact} が利用できず基本検索へ切替: {detail}"
+                )
             }
             Self::IndexMetadata { note, detail } => {
                 write!(f, "{note} の更新日時を取得できない: {detail}")
@@ -203,6 +216,10 @@ mod tests {
                 detail: "x".into(),
             },
             Degradation::GovernanceWriteBlocked { detail: "x".into() },
+            Degradation::ArtifactNotReady {
+                artifact: "fts_entry_v1".into(),
+                detail: "x".into(),
+            },
             Degradation::IndexMetadata {
                 note: "notes/a".into(),
                 detail: "x".into(),
