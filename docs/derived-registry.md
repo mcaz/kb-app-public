@@ -97,9 +97,12 @@ holdout challenge 100% / 29.8% / 1792tok。**Aは検索挙動へ中立**であ�
 
 ### 10k性能gate(release・serial実行)
 
-baselineは同一端末で同じ計測コードを一時パッチとして当てた serial 実行(clean 2回+
-負荷下2回)、変更後は本commitのgateの clean 3回連続pass(run2〜4)。負荷は時間へ
-一方向にしか乗らないため、各指標は **clean runの最小値** を代表値とし、幅は散文へ残す。
+baselineは同一端末で同じ計測コードを一時パッチとして当てた serial 実行。rawは**7本**
+(clean 3本 = diag1 / int2 / patched-run2、負荷下4本 = int1 / int3 / patched-run1 /
+patched-run3。初版の「clean 2回+負荷下2回」は誤記で、clean run int2 — median 5,069 us、
+全予算PASS — が集計から漏れていた)。変更後は本commitのgateの clean 3回連続pass
+(run2〜4)。負荷は時間へ一方向にしか乗らないため、各指標は **clean runの最小値** を
+代表値とし、幅は散文へ残す。下表はint2を含めた再集計(帳簿修正)後の値。
 
 | 指標 | baseline | 変更後 | 差分 | CI予算 |
 | --- | ---: | ---: | ---: | ---: |
@@ -107,14 +110,15 @@ baselineは同一端末で同じ計測コードを一時パッチとして当て
 | main+rescue全文検索 100回 | 12 ms | 12 ms | ±0 | 500 ms |
 | 1024次元KNN 10回 | 222 ms | 232 ms | +10 ms | 1,000 ms |
 | warm open 5回(health check込み) | 16 ms | 110 ms | +94 ms | 2,000 ms |
-| 単一note更新 median | 5,184 us | 5,444 us | **+5.0%** | 25 ms |
+| 単一note更新 median | 5,069 us | 5,444 us | **+7.4%** | 25 ms |
 | 単一note更新 p95 | 5,789 us | 6,150 us | **+6.2%** | 50 ms |
 | 全artifact一括rebuild(6件) | — | 614 ms | — | 10,000 ms |
 | embed_pendingスキャン 100回(定常状態) | — | 860 ms | — | 1,500 ms |
 
-単一note更新は clean runの幅でも baseline 5,184〜5,521 us(median)/ 5,789〜6,227 us
+単一note更新は clean runの幅でも baseline 5,069〜5,521 us(median)/ 5,789〜6,247 us
 (p95)に対し、変更後 5,444〜5,805 us / 6,150〜6,482 us で、**受入基準
-(median +15% / p95 +20% 以内)を満たす**。warm openの+94 msはopen毎のhealth check
+(median +15% / p95 +20% 以内)を満たす**(初版の+5.0%はint2漏れによる過小差分。
++7.4%へ訂正しても受入判定は変わらない)。warm openの+94 msはopen毎のhealth check
 (object存在・型 約15 object、fts_main・fts_tri×両方向のIDカバレッジ4 query、
 governanceのauthority整合検証)で、1 openあたり約19 ms。全文再parse監査を行わない
 「安価な検査のみ」の設計どおり、read系予算の枠内に収まる。DB初回復元の+1.4%は
@@ -126,6 +130,17 @@ registry走査への統一(関数ポインタ経由・NoteChange構築)の間接
 governance write gateを毎write full検証で実装した中間版は、単一note更新へ
 1 writeあたり約2.1 msを加算し(gov_x100実測208 ms)、median 7,829 us(+51%)と
 予算を超過した。上記「変更」2.のopen単位検証へ変更した結果が本表である。
+
+### 清浄環境再計測(レビュー修正後 b11f125、2026-08-28 15:08-15:10)
+
+敵対的レビュー後、他計測プロセスの並走しない清浄環境(load average 2.2〜3.1、
+release・serial)で2回再計測した(生ログ: 実験ディレクトリ `measurements/a2/`)。
+**両runとも全13項目PASS(exit 0)**: DB初回復元 15,264〜15,578 ms / warm open
+144〜147 ms / embed_pendingスキャン 832 ms / 単一note更新 median 4,704〜4,832 us・
+p95 5,882〜5,888 us / 一括rebuild 601〜605 ms。note更新のa2値がbaseline最小値
+(5,069 us)を下回るのは計測窓の負荷差(load 2〜3)による揺らぎ帯であり、改善の
+主張には使わない — 相対判定(+15% / +20%)の正はbaselineと同窓のside-by-side
+(上表 +7.4% / +6.2%)である。S-5の性能受入は全項目PASSで確定。
 
 ### gate絶対値予算の根拠
 
@@ -161,6 +176,30 @@ governance write gateを毎write full検証で実装した中間版は、単一n
 3. note_relations欠落 → document再構築+validate、失敗時はnote writeのみfail-closed
 4. durable table欠落 → open失敗(空表で隠さない)
 5. rebuild途中失敗 → 該当artifactのみrollback、durable論理行は1 bitも不変
+
+## 既知の制約(敵対的レビュー由来、未対応の参考指摘)
+
+確定所見(F1 / F2)と参考指摘3件は「変更」節のとおり修正済み。以下はレビューが挙げ、
+本stageでは仕様適合または残余リスクとして**対応せず既知の制約に置く**もの。
+
+- **marker検証済み接続のmid-session破損窓**: open単位governance検証のため、open後に
+  外因で note_relations の行だけが失われた場合、同一接続のupdate / proposeはfull検証を
+  通らない(削除はF1修正で同transaction検証が入り検出される)。次openで検出・修復される
+- **rebuild同値性のdangling行非対称**: links / fts_anchor は「リンクされたノートの削除」後、
+  増分維持(dst行も削除)と一括rebuild(残存本文から再抽出=dangling行復活)の論理行が
+  一致しない。検索面はJOIN notesで濾されるため実害なし。digest基準の同値監査を将来
+  拡張する際はこの分岐のケース追加が必要
+- **修復失敗がobject欠落形で残る場合のread一覧系**: governance修復失敗のrollbackで
+  note_relations objectごと欠落したままだと、検索本体は劣化継続するがノート一覧・
+  similar_notes等の一覧系readはSQLエラーを返す(失敗側テストはtable残存形のみ固定)
+- **restore_missing_documents のgovernanceゲートbypass**: document=''行の復元は
+  require_governance_ready を通らずnotesへ書く(発生はmigration直後のみ・次openで検証)
+- **migration境界の非対称**: v3宣言+links欠落の半壊DBはv3→v4 migrationが先に失敗して
+  open失敗(fail-closed方向)。v4+宣言なら同じ欠落はregistry修復でopen成功する
+- **構造検査の限界**: 構造一致テストはfts5の tokenize / UNINDEXED を比較せず、
+  verify_durable_tables は存在のみ検査(列構成の違う同名tableはruntimeエラーで露呈)
+- **intake経路の劣化非合流**: pull経路は修正済みだが、intakeは open_db 経由で
+  OpenDbOutcome を捨てたまま(write保護は接続非依存に働くため可視性のみの問題)
 
 ## 残課題
 
