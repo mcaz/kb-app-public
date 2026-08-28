@@ -7,7 +7,8 @@
 
 - `top3`: 検索上位3件だけを本文として選ぶ評価専用baseline。製品設定には公開しない
 - `linked_v1`: 上位5件をseedに、出リンク最大2ホップとseedへの被リンクを辿り、最大50候補、
-  推定10,000 token、最大10本文で選ぶ本番方式
+  推定10,000 token、最大10本文で選ぶ本番方式。値は配信profile `evaluation`（= 管理hookの
+  `session_auto`。[retrieval-profiles.md](retrieval-profiles.md)）から取り、両者の一致はtestで固定する
 
 検索は1ケースにつき1回だけ実行し、その順位を両戦略へ渡す。評価中は同じSQLite read
 transactionを使うため、途中の更新で比較対象がずれない。

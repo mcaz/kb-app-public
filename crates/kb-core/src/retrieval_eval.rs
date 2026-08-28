@@ -14,11 +14,10 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::degradation::Degradation;
 use crate::retrieval::{
-    AUTO_SEED_LIMIT, PASSAGE_DOCUMENT_LIMIT, PASSAGE_DOCUMENT_TOKEN_BUDGET,
-    PASSAGE_RANKING_TRIGGER_TOKENS, RetrievalBundle, RetrievalOptions, RetrievalSource,
-    context_documents, context_documents_for_query,
+    RetrievalBundle, RetrievalOptions, RetrievalSource, context_documents,
+    context_documents_for_query,
 };
-use crate::retrieval_profile::{RerankMode, RetrievalProfile};
+use crate::retrieval_profile::{PassagePolicy, RerankMode, RetrievalProfile};
 
 pub const EVALUATION_SCHEMA_VERSION: &str = "2.1.0";
 /// routine surface・gate_mode・familyを持たない従来形式。構造一致の基準として残す。
@@ -258,25 +257,14 @@ pub struct PassageConfiguration {
     pub document_token_budget: usize,
 }
 
-impl PassageConfiguration {
-    const fn current() -> Self {
+// reportへはpassage予算のうち構造へ影響する3値だけを出す(2.1.0の形を保つ)。
+// `max_bytes`は分割粒度の実装詳細としてprofile側(`PassagePolicy`)に留める。
+impl From<PassagePolicy> for PassageConfiguration {
+    fn from(policy: PassagePolicy) -> Self {
         Self {
-            trigger_tokens: PASSAGE_RANKING_TRIGGER_TOKENS,
-            document_limit: PASSAGE_DOCUMENT_LIMIT,
-            document_token_budget: PASSAGE_DOCUMENT_TOKEN_BUDGET,
-        }
-    }
-}
-
-impl StrategyConfiguration {
-    fn retrieval_options(self) -> RetrievalOptions {
-        RetrievalOptions {
-            seed_limit: self.seed_limit,
-            max_depth: self.max_depth,
-            candidate_limit: self.candidate_limit,
-            document_limit: self.document_limit,
-            estimated_token_budget: self.estimated_token_budget.unwrap_or(usize::MAX),
-            include_incoming: self.include_incoming,
+            trigger_tokens: policy.trigger_tokens,
+            document_limit: policy.document_limit,
+            document_token_budget: policy.document_token_budget,
         }
     }
 }
@@ -470,14 +458,17 @@ pub fn evaluate_with(
     };
     let families = summarize_families(&cases, plan);
 
+    // 評価は`evaluation` profile(= 本番hookの`session_auto`)の検索方針で引く。値は
+    // profile分離前の`AUTO_SEED_LIMIT` + OR結合と同一で、profile側のtestが一致を固定する。
+    let search_policy = RetrievalProfile::Evaluation.plan().search;
     Ok(EvaluationReport {
         schema_version: EVALUATION_SCHEMA_VERSION,
         suite_schema_version: suite.schema_version.clone(),
         core_version: crate::CORE_VERSION,
         case_count: cases.len(),
         search_configuration: SearchConfiguration {
-            ranked_hit_limit: AUTO_SEED_LIMIT,
-            any_terms: true,
+            ranked_hit_limit: search_policy.limit,
+            any_terms: search_policy.any_terms,
         },
         strategy_configurations: plan
             .strategies()
@@ -499,8 +490,11 @@ fn evaluate_case(
     query: &str,
     plan: &EvaluationPlan,
 ) -> Result<CaseReport> {
+    // 評価の検索は `evaluation` profile(= 本番 hook の `session_auto`)で引く。ここを変えると
+    // 評価値が本番の挙動を指さなくなるので、profile 側の test が一致を固定している。
+    let search_policy = RetrievalProfile::Evaluation.plan().search;
     let search_started = Instant::now();
-    let outcome = crate::search::search_mode(conn, query, AUTO_SEED_LIMIT, true);
+    let outcome = crate::search::search_with(conn, query, &search_policy);
     let search_elapsed_us = micros(search_started.elapsed());
     let ranked_hit_ids = outcome
         .hits
@@ -510,7 +504,7 @@ fn evaluate_case(
 
     let mut strategies = Vec::with_capacity(plan.strategies().len());
     for strategy in plan.strategies() {
-        let options = configuration_for(*strategy).retrieval_options();
+        let options = retrieval_options_for(*strategy);
         let bundle = match strategy {
             EvaluationStrategy::Top3 => context_documents(conn, &ranked_hit_ids, options)?,
             EvaluationStrategy::LinkedV1 | EvaluationStrategy::Profile { .. } => {
@@ -535,38 +529,31 @@ fn evaluate_case(
     })
 }
 
-fn configuration_for(strategy: EvaluationStrategy) -> StrategyConfiguration {
+fn retrieval_options_for(strategy: EvaluationStrategy) -> RetrievalOptions {
     match strategy {
-        EvaluationStrategy::Top3 => StrategyConfiguration {
-            strategy,
-            profile: None,
-            rerank: None,
+        // 評価専用 baseline。query を渡さないので passage 予算は使われない。
+        EvaluationStrategy::Top3 => RetrievalOptions {
             seed_limit: 3,
             max_depth: 0,
             candidate_limit: 3,
             document_limit: 3,
-            estimated_token_budget: None,
+            estimated_token_budget: usize::MAX,
             include_incoming: false,
-            passage: None,
+            passage: PassagePolicy::default(),
         },
-        EvaluationStrategy::LinkedV1 => {
-            production_configuration(strategy, RetrievalOptions::default(), None, None)
-        }
-        EvaluationStrategy::Profile { profile, rerank } => production_configuration(
-            strategy,
-            profile.retrieval_options(),
-            Some(profile),
-            Some(rerank),
-        ),
+        EvaluationStrategy::LinkedV1 => RetrievalProfile::Evaluation.plan().retrieval,
+        // 配信profileの実体(retrieval_profile.rs)をそのまま比較軸にする。rerank軸は
+        // coreではoff固定(`ensure_rerank_off_for_core`)で、optionsへは影響しない。
+        EvaluationStrategy::Profile { profile, .. } => profile.plan().retrieval,
     }
 }
 
-fn production_configuration(
-    strategy: EvaluationStrategy,
-    options: RetrievalOptions,
-    profile: Option<RetrievalProfile>,
-    rerank: Option<RerankMode>,
-) -> StrategyConfiguration {
+fn configuration_for(strategy: EvaluationStrategy) -> StrategyConfiguration {
+    let options = retrieval_options_for(strategy);
+    let (profile, rerank) = match strategy {
+        EvaluationStrategy::Profile { profile, rerank } => (Some(profile), Some(rerank)),
+        _ => (None, None),
+    };
     StrategyConfiguration {
         strategy,
         profile,
@@ -575,9 +562,13 @@ fn production_configuration(
         max_depth: options.max_depth,
         candidate_limit: options.candidate_limit,
         document_limit: options.document_limit,
-        estimated_token_budget: Some(options.estimated_token_budget),
+        estimated_token_budget: (options.estimated_token_budget != usize::MAX)
+            .then_some(options.estimated_token_budget),
         include_incoming: options.include_incoming,
-        passage: Some(PassageConfiguration::current()),
+        passage: match strategy {
+            EvaluationStrategy::Top3 => None,
+            _ => Some(PassageConfiguration::from(options.passage)),
+        },
     }
 }
 

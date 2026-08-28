@@ -231,7 +231,13 @@ export type ConnectState = {
 export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
 
 /**  データ本体を返し続けられる部分失敗。 */
-export type Degradation = { code: "remote_sync"; detail: string } | { code: "markdown_export"; detail: string } | { code: "index_sync"; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "diversity_ranking"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
+export type Degradation = { code: "remote_sync"; detail: string } | { code: "markdown_export"; detail: string } | { code: "index_sync"; detail: string } | 
+/**  open時の自己修復で派生索引を再構築した(今回だけのrecovery notice)。 */
+{ code: "index_recovered"; artifact: string; detail: string } | 
+/**  派生索引の修復に失敗した(検索はfallback継続、次回openで再試行)。 */
+{ code: "index_repair"; artifact: string; detail: string } | 
+/**  governance台帳を修復できず、note書込をfail-closedで停止中。 */
+{ code: "governance_write_blocked"; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "diversity_ranking"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
 
 export type DeliveryStatus = 
 /**  `local_only` なので送信対象ではない。 */

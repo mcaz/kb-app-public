@@ -10,18 +10,17 @@ use std::time::Instant;
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::retrieval_profile::PassagePolicy;
+
 pub const AUTO_SEED_LIMIT: usize = 5;
 pub const AUTO_MAX_DEPTH: u8 = 2;
 pub const AUTO_CANDIDATE_LIMIT: usize = 50;
 pub const AUTO_DOCUMENT_LIMIT: usize = 10;
 /// Codex hook側の約12,000 token spill閾値へ、見出し等の余白を残す。
 pub const AUTO_ESTIMATED_TOKEN_BUDGET: usize = 10_000;
-pub const PASSAGE_RANKING_TRIGGER_TOKENS: usize = 4_000;
-const PASSAGE_MAX_BYTES: usize = 2_400;
-pub const PASSAGE_DOCUMENT_LIMIT: usize = 3;
-pub const PASSAGE_DOCUMENT_TOKEN_BUDGET: usize = 3_600;
 
-#[derive(Clone, Copy, Debug)]
+/// 候補展開と本文選択の予算。既定は契約 8 の hook 数値(= `RetrievalProfile::SessionAuto`)。
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct RetrievalOptions {
     pub seed_limit: usize,
     pub max_depth: u8,
@@ -29,6 +28,8 @@ pub struct RetrievalOptions {
     pub document_limit: usize,
     pub estimated_token_budget: usize,
     pub include_incoming: bool,
+    /// 長文ノートの passage 縮約予算。query の無い `context_documents` では使わない。
+    pub passage: PassagePolicy,
 }
 
 impl Default for RetrievalOptions {
@@ -40,6 +41,7 @@ impl Default for RetrievalOptions {
             document_limit: AUTO_DOCUMENT_LIMIT,
             estimated_token_budget: AUTO_ESTIMATED_TOKEN_BUDGET,
             include_incoming: true,
+            passage: PassagePolicy::default(),
         }
     }
 }
@@ -72,6 +74,16 @@ pub struct RetrievalCandidate {
     pub selected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub omitted_reason: Option<&'static str>,
+    /// card-lite(`OutputShape::CardLite`)の素材。本文を読まずに候補の authority を
+    /// 見られるようにする。envelope の無い legacy note では出力しない。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_scope: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -109,6 +121,15 @@ struct Candidate {
     source: RetrievalSource,
     depth: u8,
     seed: String,
+}
+
+struct CandidateRow {
+    title: Option<String>,
+    document: String,
+    namespace: Option<String>,
+    authority_role: Option<String>,
+    authority_status: Option<String>,
+    authority_scope: Option<String>,
 }
 
 /// 検索上位seed → 出リンク最大2ホップ → seedへの被リンク、の順に候補化し、
@@ -229,76 +250,77 @@ fn context_documents_inner(
     for candidate in candidates {
         let row = conn
             .query_row(
-                "SELECT title, document FROM notes WHERE id = ?1 AND status != 'deprecated'",
+                "SELECT title, document, namespace, authority_role, authority_status,
+                        authority_scope
+                 FROM notes WHERE id = ?1 AND status != 'deprecated'",
                 [&candidate.id],
-                |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok(CandidateRow {
+                        title: row.get(0)?,
+                        document: row.get(1)?,
+                        namespace: row.get(2)?,
+                        authority_role: row.get(3)?,
+                        authority_status: row.get(4)?,
+                        authority_scope: row.get(5)?,
+                    })
+                },
             )
             .optional()?;
-        let Some((title, original_text)) = row.filter(|(_, text)| !text.is_empty()) else {
+        let mut summary = RetrievalCandidate {
+            id: candidate.id.clone(),
+            title: None,
+            source: candidate.source,
+            depth: candidate.depth,
+            seed: candidate.seed.clone(),
+            selected: false,
+            omitted_reason: None,
+            namespace: None,
+            authority_role: None,
+            authority_status: None,
+            authority_scope: None,
+        };
+        let Some(row) = row.filter(|row| !row.document.is_empty()) else {
             missing_documents += 1;
-            candidate_summaries.push(RetrievalCandidate {
-                id: candidate.id,
-                title: None,
-                source: candidate.source,
-                depth: candidate.depth,
-                seed: candidate.seed,
-                selected: false,
-                omitted_reason: Some("missing_document"),
-            });
+            summary.omitted_reason = Some("missing_document");
+            candidate_summaries.push(summary);
             continue;
         };
+        summary.title = row.title;
+        summary.namespace = row.namespace;
+        summary.authority_role = row.authority_role;
+        summary.authority_status = row.authority_status;
+        summary.authority_scope = row.authority_scope;
         if documents.len() >= options.document_limit {
             document_cap_reached = true;
-            candidate_summaries.push(RetrievalCandidate {
-                id: candidate.id,
-                title,
-                source: candidate.source,
-                depth: candidate.depth,
-                seed: candidate.seed,
-                selected: false,
-                omitted_reason: Some("document_limit"),
-            });
+            summary.omitted_reason = Some("document_limit");
+            candidate_summaries.push(summary);
             continue;
         }
         let text = query
             .filter(|query| !query.trim().is_empty())
-            .map(|query| rank_document_passages(&original_text, query))
-            .unwrap_or(original_text);
+            .map(|query| rank_document_passages(&row.document, query, options.passage))
+            .unwrap_or(row.document);
         let tokens = estimate_tokens(&text);
         // 最上位seedが巨大でも空応答にはしない。Codex hookのspillが最後の安全網になる。
         if !documents.is_empty()
             && total_tokens.saturating_add(tokens) > options.estimated_token_budget
         {
             skipped_for_budget += 1;
-            candidate_summaries.push(RetrievalCandidate {
-                id: candidate.id,
-                title,
-                source: candidate.source,
-                depth: candidate.depth,
-                seed: candidate.seed,
-                selected: false,
-                omitted_reason: Some("token_budget"),
-            });
+            summary.omitted_reason = Some("token_budget");
+            candidate_summaries.push(summary);
             continue;
         }
         total_tokens = total_tokens.saturating_add(tokens);
         documents.push(RetrievalDocument {
-            id: candidate.id.clone(),
+            id: candidate.id,
             text,
             source: candidate.source,
             depth: candidate.depth,
-            seed: candidate.seed.clone(),
+            seed: candidate.seed,
             estimated_tokens: tokens,
         });
-        candidate_summaries.push(RetrievalCandidate {
-            id: candidate.id,
-            title,
-            source: candidate.source,
-            depth: candidate.depth,
-            seed: candidate.seed,
-            selected: true,
-            omitted_reason: None,
-        });
+        summary.selected = true;
+        candidate_summaries.push(summary);
     }
 
     let selected_depth_0 = documents.iter().filter(|doc| doc.depth == 0).count();
@@ -347,8 +369,8 @@ struct RankedPassage {
     matched_terms: usize,
 }
 
-fn rank_document_passages(document: &str, query: &str) -> String {
-    if estimate_tokens(document) <= PASSAGE_RANKING_TRIGGER_TOKENS {
+fn rank_document_passages(document: &str, query: &str, policy: PassagePolicy) -> String {
+    if estimate_tokens(document) <= policy.trigger_tokens {
         return document.to_string();
     }
     let Ok(mut note) = crate::frontmatter::Note::parse(document) else {
@@ -357,7 +379,7 @@ fn rank_document_passages(document: &str, query: &str) -> String {
     let query_lower = query.to_lowercase();
     let terms = passage_query_terms(query);
     let mut seen = HashSet::new();
-    let mut passages = split_markdown_passages(&note.body)
+    let mut passages = split_markdown_passages(&note.body, policy.max_bytes)
         .into_iter()
         .enumerate()
         .filter_map(|(index, text)| {
@@ -389,12 +411,12 @@ fn rank_document_passages(document: &str, query: &str) -> String {
     let mut selected = Vec::new();
     let mut selected_tokens = 0usize;
     for passage in passages {
-        if selected.len() >= PASSAGE_DOCUMENT_LIMIT || (has_match && passage.matched_terms == 0) {
+        if selected.len() >= policy.document_limit || (has_match && passage.matched_terms == 0) {
             continue;
         }
         let tokens = estimate_tokens(&passage.text);
         if !selected.is_empty()
-            && selected_tokens.saturating_add(tokens) > PASSAGE_DOCUMENT_TOKEN_BUDGET
+            && selected_tokens.saturating_add(tokens) > policy.document_token_budget
         {
             continue;
         }
@@ -427,7 +449,7 @@ fn passage_query_terms(query: &str) -> Vec<String> {
         .collect()
 }
 
-fn split_markdown_passages(body: &str) -> Vec<String> {
+fn split_markdown_passages(body: &str, max_bytes: usize) -> Vec<String> {
     let mut sections = Vec::new();
     let mut current = String::new();
     for line in body.split_inclusive('\n') {
@@ -442,7 +464,7 @@ fn split_markdown_passages(body: &str) -> Vec<String> {
 
     sections
         .into_iter()
-        .flat_map(|section| split_oversized_passage(&section))
+        .flat_map(|section| split_oversized_passage(&section, max_bytes))
         .collect()
 }
 
@@ -455,14 +477,14 @@ fn is_markdown_heading(line: &str) -> bool {
     (1..=6).contains(&marks) && trimmed.chars().nth(marks).is_some_and(char::is_whitespace)
 }
 
-fn split_oversized_passage(section: &str) -> Vec<String> {
+fn split_oversized_passage(section: &str, max_bytes: usize) -> Vec<String> {
     let (heading, mut remaining) = section
         .split_once('\n')
         .filter(|(first, _)| is_markdown_heading(first))
         .map(|(first, rest)| (Some(first.trim_end()), rest))
         .unwrap_or((None, section));
     let prefix_bytes = heading.map_or(0, |value| value.len() + 2);
-    let content_limit = PASSAGE_MAX_BYTES.saturating_sub(prefix_bytes).max(64);
+    let content_limit = max_bytes.saturating_sub(prefix_bytes).max(64);
     let mut chunks = Vec::new();
     while !remaining.trim().is_empty() {
         let end = passage_boundary(remaining, content_limit);
@@ -584,7 +606,11 @@ mod tests {
                  note_uid TEXT,
                  title TEXT,
                  status TEXT NOT NULL,
-                 document TEXT NOT NULL
+                 document TEXT NOT NULL,
+                 namespace TEXT,
+                 authority_role TEXT,
+                 authority_status TEXT,
+                 authority_scope TEXT
              );
              CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
              CREATE INDEX links_dst ON links(dst);
@@ -784,9 +810,13 @@ mod tests {
             ),
         };
         let document = note.to_file_string().unwrap();
-        assert!(estimate_tokens(&document) > PASSAGE_RANKING_TRIGGER_TOKENS);
+        assert!(estimate_tokens(&document) > PassagePolicy::default().trigger_tokens);
 
-        let ranked = rank_document_passages(&document, "atlas recovery checksum procedure");
+        let ranked = rank_document_passages(
+            &document,
+            "atlas recovery checksum procedure",
+            PassagePolicy::default(),
+        );
 
         assert!(ranked.contains("Rotate the key after a checksum mismatch"));
         assert!(ranked.contains("Checksum recovery procedure"));
@@ -803,10 +833,91 @@ mod tests {
         };
         let document = note.to_file_string().unwrap();
 
-        let ranked = rank_document_passages(&document, "atlas recovery checksum procedure");
+        let ranked = rank_document_passages(
+            &document,
+            "atlas recovery checksum procedure",
+            PassagePolicy::default(),
+        );
 
         assert!(ranked.contains("Rotate the key after a checksum mismatch"));
         assert!(estimate_tokens(&ranked) < 4_000);
+    }
+
+    /// 配信 profile の passage 予算(`session_explicit` は 2 passage / 2,400 token)が
+    /// 既定(3 / 3,600)より本文を狭め、required の passage は落とさないことを固定する。
+    #[test]
+    fn passage_policy_narrows_the_per_document_budget_without_dropping_the_match() {
+        let filler = "Alpha checksum step. ".repeat(120);
+        let note = crate::frontmatter::Note {
+            front: crate::frontmatter::Frontmatter::new_note("Atlas Recovery Handbook"),
+            body: format!(
+                "# Checksum recovery procedure\n\nRotate the key after a checksum mismatch.\n\n\
+                 # Checksum audit one\n\n{filler}\n\n# Checksum audit two\n\n{filler}\n\n\
+                 # Checksum audit three\n\n{filler}\n\n# Appendix\n\n{}",
+                "Unrelated appendix material. ".repeat(400),
+            ),
+        };
+        let document = note.to_file_string().unwrap();
+        let query = "checksum recovery procedure";
+        let default_policy = PassagePolicy::default();
+        let explicit_policy = crate::retrieval_profile::RetrievalProfile::SessionExplicit
+            .plan()
+            .retrieval
+            .passage;
+        assert!(estimate_tokens(&document) > explicit_policy.trigger_tokens);
+
+        let default_ranked = rank_document_passages(&document, query, default_policy);
+        let explicit_ranked = rank_document_passages(&document, query, explicit_policy);
+
+        assert!(default_ranked.contains("Rotate the key after a checksum mismatch"));
+        assert!(explicit_ranked.contains("Rotate the key after a checksum mismatch"));
+        assert_eq!(default_ranked.matches("# Checksum").count(), 3);
+        assert_eq!(explicit_ranked.matches("# Checksum").count(), 2);
+        assert!(estimate_tokens(&explicit_ranked) < estimate_tokens(&default_ranked));
+        assert!(!explicit_ranked.contains("Unrelated appendix material"));
+    }
+
+    /// card-lite の素材: 候補一覧は本文を読まずに authority を持つ。envelope の無い
+    /// legacy note では列を出さない。
+    #[test]
+    fn candidates_carry_authority_for_card_lite_output() {
+        let conn = setup();
+        add_note(&conn, "legacy", "legacy body");
+        conn.execute(
+            "INSERT INTO notes(id, title, status, document, namespace, authority_role,
+                               authority_status, authority_scope)
+             VALUES ('canon', 'canon', 'stable', 'canon body', 'decisions', 'canonical',
+                     'active', 'atlas/recovery')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("INSERT INTO links VALUES ('legacy', 'canon');")
+            .unwrap();
+
+        let bundle = context_documents(
+            &conn,
+            &["legacy".into()],
+            RetrievalOptions {
+                include_incoming: false,
+                ..RetrievalOptions::default()
+            },
+        )
+        .unwrap();
+
+        let legacy = &bundle.candidates[0];
+        assert_eq!(legacy.id, "legacy");
+        assert_eq!(legacy.namespace, None);
+        assert_eq!(legacy.authority_role, None);
+        let canon = &bundle.candidates[1];
+        assert_eq!(canon.id, "canon");
+        assert_eq!(canon.namespace.as_deref(), Some("decisions"));
+        assert_eq!(canon.authority_role.as_deref(), Some("canonical"));
+        assert_eq!(canon.authority_status.as_deref(), Some("active"));
+        assert_eq!(canon.authority_scope.as_deref(), Some("atlas/recovery"));
+
+        let serialized = serde_json::to_value(&bundle.candidates).unwrap();
+        assert!(serialized[0].get("namespace").is_none());
+        assert_eq!(serialized[1]["authority_scope"], "atlas/recovery");
     }
 
     #[test]

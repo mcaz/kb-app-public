@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use kb_core::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace};
 use kb_core::index::{open_db, open_db_read_only, sync};
 use kb_core::registry::Registry;
+use kb_core::retrieval_profile::RetrievalProfile;
 use kb_core::search::recent;
 use kb_core::vault::{NoteProposal, Vault};
 
@@ -36,11 +37,16 @@ enum Command {
     /// 検索(全文+リンク近傍)
     Search {
         query: Vec<String>,
-        #[arg(long, default_value_t = 8)]
-        limit: usize,
+        /// 件数。省略時は profile の既定(session-explicit なら 8)
+        #[arg(long)]
+        limit: Option<usize>,
         /// 語を OR 結合(文まるごとの前出し用)
         #[arg(long)]
         any: bool,
+        /// 配信 profile(session-auto / session-explicit / routine-auto / evaluation)。
+        /// 省略時は host 既定の session-explicit
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// ノート全文を表示
     Get { note: String },
@@ -133,6 +139,10 @@ enum Command {
         /// 公開する用途別ツール面(all / read / write / maintenance)
         #[arg(long, default_value = "all")]
         surface: String,
+        /// process 固定の配信 profile(session-auto / session-explicit / routine-auto /
+        /// evaluation)。省略時は host 既定の session-explicit
+        #[arg(long)]
+        retrieval_profile: Option<String>,
     },
     /// AI 連携向けの端末設定を読み取る
     Settings {
@@ -537,11 +547,23 @@ fn main() -> Result<()> {
                 }
             }
         },
-        Command::Search { query, limit, any } => {
+        Command::Search {
+            query,
+            limit,
+            any,
+            profile,
+        } => {
+            let mut policy = parse_retrieval_profile(profile.as_deref())?.plan().search;
+            if let Some(limit) = limit {
+                policy.limit = limit;
+            }
+            if any {
+                policy.any_terms = true;
+            }
             let vault = open_vault(cli.vault.as_deref())?;
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
-            let out = kb_core::search::search_mode(&conn, &query.join(" "), limit, any);
+            let out = kb_core::search::search_with(&conn, &query.join(" "), &policy);
             println!("{}", serde_json::to_string_pretty(&out)?);
         }
         Command::Get { note } => {
@@ -1052,12 +1074,20 @@ fn main() -> Result<()> {
                 write_eval_output(output.as_ref(), &rendered, "Rule Delivery report")?;
             }
         },
-        Command::Mcp { client, surface } => {
+        Command::Mcp {
+            client,
+            surface,
+            retrieval_profile,
+        } => {
             kb_core::mcp::serve_with_options(
                 &client,
                 kb_core::mcp::ServeOptions {
                     remote_sync: true,
                     tool_surface: kb_core::mcp::ToolSurface::parse(&surface)?,
+                    retrieval_profile: retrieval_profile
+                        .as_deref()
+                        .map(RetrievalProfile::parse)
+                        .transpose()?,
                 },
                 || open_vault(cli.vault.as_deref()),
             )?;
@@ -1094,6 +1124,14 @@ fn main() -> Result<()> {
         },
     }
     Ok(())
+}
+
+/// `--profile` の値。省略時は host 既定(session-explicit)、未知値は既定へ落とさず拒否する。
+fn parse_retrieval_profile(value: Option<&str>) -> Result<RetrievalProfile> {
+    Ok(value
+        .map(RetrievalProfile::parse)
+        .transpose()?
+        .unwrap_or(RetrievalProfile::host_default()))
 }
 
 fn write_eval_output(output: Option<&PathBuf>, rendered: &str, label: &str) -> Result<()> {
@@ -1203,6 +1241,53 @@ mod tests {
             actual, expected,
             "CLI commandを追加・削除する場合は、所有境界を監査してallowlistも更新する"
         );
+    }
+
+    #[test]
+    fn mcp_and_search_accept_a_process_fixed_retrieval_profile() {
+        use kb_core::retrieval_profile::RetrievalProfile;
+
+        let cli = Cli::parse_from([
+            "kb",
+            "mcp",
+            "--surface",
+            "read",
+            "--retrieval-profile",
+            "session-auto",
+        ]);
+        let Command::Mcp {
+            surface,
+            retrieval_profile,
+            ..
+        } = cli.command
+        else {
+            panic!("mcpとして解釈されなかった");
+        };
+        assert_eq!(surface, "read");
+        assert_eq!(retrieval_profile.as_deref(), Some("session-auto"));
+        assert_eq!(
+            super::parse_retrieval_profile(retrieval_profile.as_deref()).unwrap(),
+            RetrievalProfile::SessionAuto
+        );
+        assert_eq!(
+            super::parse_retrieval_profile(None).unwrap(),
+            RetrievalProfile::SessionExplicit
+        );
+        assert!(super::parse_retrieval_profile(Some("gui-browse")).is_err());
+
+        let cli = Cli::parse_from(["kb", "search", "認証", "--profile", "routine-auto"]);
+        let Command::Search {
+            limit,
+            any,
+            profile,
+            ..
+        } = cli.command
+        else {
+            panic!("searchとして解釈されなかった");
+        };
+        assert_eq!(limit, None);
+        assert!(!any);
+        assert_eq!(profile.as_deref(), Some("routine-auto"));
     }
 
     #[test]

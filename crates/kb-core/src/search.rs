@@ -6,9 +6,9 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::degradation::Degradation;
+use crate::retrieval_profile::SearchPolicy;
 use crate::tokenize::match_expr;
 
-const FIELD_RANKING_CANDIDATE_MULTIPLIER: usize = 8;
 const DIVERSITY_MAX_NORMALIZED_CHARS: usize = 2_048;
 const DIVERSITY_MIN_SHINGLES: usize = 8;
 const DIVERSITY_SIMILARITY_PERCENT: usize = 85;
@@ -82,18 +82,32 @@ pub struct SearchOutcome {
 }
 
 pub fn search(conn: &Connection, query: &str, limit: usize) -> SearchOutcome {
-    search_mode(conn, query, limit, false)
+    search_with(conn, query, &SearchPolicy::exact(limit))
 }
 
 /// `any = true` で語を OR 結合(フックの前出しなど、文まるごとを投げる用途。
 /// bm25 が多く当たった文書を上位に出す)。false は従来どおり AND。
 pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> SearchOutcome {
+    search_with(
+        conn,
+        query,
+        &SearchPolicy {
+            any_terms: any,
+            ..SearchPolicy::exact(limit)
+        },
+    )
+}
+
+/// 配信 profile(retrieval_profile.rs)の `SearchPolicy` で経路と予算を決める本体。
+/// policy で経路を切るのは劣化ではないので degraded には載せない。
+pub fn search_with(conn: &Connection, query: &str, policy: &SearchPolicy) -> SearchOutcome {
+    let limit = policy.limit;
     let mut hits: Vec<Hit> = Vec::new();
     let mut degraded = Vec::new();
     let intent = QueryIntent::from_query(query);
 
     // 主経路: lindera 分かち書き + bm25
-    match main_search(conn, query, limit, any) {
+    match main_search(conn, query, policy) {
         Ok(main_hits) => hits.extend(main_hits),
         Err(error) => degraded.push(Degradation::MainSearch {
             detail: error.to_string(),
@@ -112,39 +126,45 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
 
     // 意味検索(段1)。モデル未導入なら黙って全文のみ(段0 の正常形)。
     // 導入済みで失敗した場合は必ず劣化として見せる(沈黙停止の教訓)。
-    match vec_search(conn, query, limit) {
-        Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
-        Ok(None) => {}
-        Err(error) => degraded.push(Degradation::SemanticSearch {
-            detail: error.to_string(),
-        }),
+    if policy.semantic {
+        match vec_search(conn, query, limit) {
+            Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
+            Ok(None) => {}
+            Err(error) => degraded.push(Degradation::SemanticSearch {
+                detail: error.to_string(),
+            }),
+        }
     }
 
-    // レスキュー経路: 主経路で拾えない部分語・未知語形(常に実行し、差分だけ足す)
-    match rescue_search(conn, query, limit) {
-        Ok(rescue_hits) => {
-            for h in rescue_hits {
-                if hits.len() >= limit {
-                    break;
-                }
-                if !hits.iter().any(|x| x.id == h.id) {
-                    hits.push(h);
+    // レスキュー経路: 主経路で拾えない部分語・未知語形(差分だけ足す)
+    if policy.rescue {
+        match rescue_search(conn, query, limit) {
+            Ok(rescue_hits) => {
+                for h in rescue_hits {
+                    if hits.len() >= limit {
+                        break;
+                    }
+                    if !hits.iter().any(|x| x.id == h.id) {
+                        hits.push(h);
+                    }
                 }
             }
+            Err(error) => degraded.push(Degradation::RescueSearch {
+                detail: error.to_string(),
+            }),
         }
-        Err(error) => degraded.push(Degradation::RescueSearch {
-            detail: error.to_string(),
-        }),
     }
 
     // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
     // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
     rank_hits(&mut hits, query, intent);
-    match diversify_hits(conn, &hits, limit) {
-        Ok(diverse_hits) => hits = diverse_hits,
-        Err(error) => degraded.push(Degradation::DiversityRanking {
-            detail: error.to_string(),
-        }),
+    if policy.diversify {
+        match diversify_hits(conn, &hits, limit) {
+            Ok(diverse_hits) => hits = diverse_hits,
+            Err(error) => degraded.push(Degradation::DiversityRanking {
+                detail: error.to_string(),
+            }),
+        }
     }
     hits.truncate(limit);
 
@@ -189,8 +209,9 @@ fn merge_anchor_hits(hits: &mut Vec<Hit>, anchor_hits: Vec<Hit>) {
     }
 }
 
-fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Result<Vec<Hit>> {
-    let expr = if any {
+fn main_search(conn: &Connection, query: &str, policy: &SearchPolicy) -> Result<Vec<Hit>> {
+    let limit = policy.limit;
+    let expr = if policy.any_terms {
         crate::tokenize::match_expr_any(query)
     } else {
         match_expr(query)
@@ -200,9 +221,8 @@ fn main_search(conn: &Connection, query: &str, limit: usize, any: bool) -> Resul
     }
     let field_terms = field_terms(query);
     let intent = QueryIntent::from_query(query);
-    // 再順位付け対象を最終件数より広く取る。8倍は10k fixtureでも最大40行に留まり、
-    // 本文反復だけが強い候補の外からtitle一致を回収できる実測上の最小余裕。
-    let candidate_limit = limit.saturating_mul(FIELD_RANKING_CANDIDATE_MULTIPLIER);
+    // 再順位付け対象を最終件数より広く取る(倍率の根拠は SearchPolicy 側に置く)。
+    let candidate_limit = policy.candidate_limit();
     let mut stmt = conn.prepare_cached(
         "SELECT f.id, n.title, n.status,
                 snippet(fts_main, 1, '[', ']', '…', 12), n.origin, n.tags, n.created, n.generated_at,
@@ -1987,7 +2007,8 @@ mod tests {
         let ((main, rescue), keyword_search) = timed(|| {
             repeat_last(100, || {
                 (
-                    super::main_search(&conn, "検索番兵オーロラ", 20, false).unwrap(),
+                    super::main_search(&conn, "検索番兵オーロラ", &super::SearchPolicy::exact(20))
+                        .unwrap(),
                     super::rescue_search(&conn, "番兵オーロラ", 20).unwrap(),
                 )
             })
@@ -2013,7 +2034,12 @@ mod tests {
             })
         });
 
-        let retrieval_hits = super::main_search(&conn, "検索番兵オーロラ", 5, true).unwrap();
+        let retrieval_hits = super::main_search(
+            &conn,
+            "検索番兵オーロラ",
+            &super::SearchPolicy::any_terms(5),
+        )
+        .unwrap();
         let retrieval_seed_ids = retrieval_hits
             .iter()
             .map(|hit| hit.id.clone())
@@ -2094,7 +2120,8 @@ mod tests {
                 crate::derived_index::force_rebuild(&vault, &conn, artifact).unwrap();
             }
         });
-        let post_rebuild = super::main_search(&conn, "検索番兵オーロラ", 20, false).unwrap();
+        let post_rebuild =
+            super::main_search(&conn, "検索番兵オーロラ", &super::SearchPolicy::exact(20)).unwrap();
         assert!(post_rebuild.iter().any(|hit| hit.id == target_id));
 
         let measurements = [
