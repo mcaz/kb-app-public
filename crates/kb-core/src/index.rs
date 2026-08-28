@@ -14,6 +14,11 @@ use crate::tokenize::wakati;
 use crate::vault::Vault;
 
 const SCHEMA_VERSION: &str = "8";
+/// 現行schema versionの数値形。migration state machineの比較はこちらを使う。
+const CURRENT_SCHEMA: u32 = 8;
+/// 加算migrationを持つ最古のversion。これより古い宣言versionはfail-closed
+/// (unknown versionを破壊的rebuildの合図にしない)。
+const OLDEST_SUPPORTED_SCHEMA: u32 = 3;
 
 pub fn open_db(vault: &Vault) -> Result<Connection> {
     let conn = open_db_recovery(vault)?;
@@ -44,9 +49,19 @@ pub fn open_db_recovery(vault: &Vault) -> Result<Connection> {
     }
     let conn = Connection::open(&path).context("index.db open")?;
     conn.busy_timeout(Duration::from_secs(5))?; // 全接続で必須(PoC ③)
+    // fail-closed判定(corrupt / future / unsupported / durable table欠落)は
+    // `PRAGMA journal_mode=WAL` より前に行う。journal mode変換もDBファイルへの
+    // 書込であり、受け入れないDBには1 byteも書かない。
+    let state = classify_schema(&conn)?;
+    if let SchemaState::Supported(version) = state {
+        verify_durable_tables(&conn, version)?;
+    }
     let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
     debug_assert_eq!(mode.to_lowercase(), "wal");
-    init_schema(&conn)?;
+    match state {
+        SchemaState::Fresh => create_fresh_schema(&conn)?,
+        SchemaState::Supported(version) => migrate_schema(&conn, version)?,
+    }
     Ok(conn)
 }
 
@@ -139,154 +154,119 @@ fn restore_missing_documents(vault: &Vault, conn: &Connection) -> Result<usize> 
     Ok(recovered.len())
 }
 
-fn init_schema(conn: &Connection) -> Result<()> {
-    let ver: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key='schema'", [], |r| {
-            r.get(0)
-        })
-        .ok();
-    if matches!(
-        ver.as_deref(),
-        Some("3" | "4" | "5" | "6" | "7" | SCHEMA_VERSION)
-    ) {
-        let rebuild_anchor_index = ver.as_deref() != Some(SCHEMA_VERSION);
-        // 追加カラムの後方互換マイグレーション(破壊的な作り直しをしない —
-        // 全テーブル再作成は埋め込みの再計算嵐を起こすため)
-        for (col, ddl) in [
-            ("tags", "ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''"),
-            ("created", "ALTER TABLE notes ADD COLUMN created TEXT"),
-            (
-                "document",
-                "ALTER TABLE notes ADD COLUMN document TEXT NOT NULL DEFAULT ''",
-            ),
-            ("note_uid", "ALTER TABLE notes ADD COLUMN note_uid TEXT"),
-            ("namespace", "ALTER TABLE notes ADD COLUMN namespace TEXT"),
-            (
-                "authority_role",
-                "ALTER TABLE notes ADD COLUMN authority_role TEXT",
-            ),
-            (
-                "authority_status",
-                "ALTER TABLE notes ADD COLUMN authority_status TEXT",
-            ),
-            (
-                "authority_scope",
-                "ALTER TABLE notes ADD COLUMN authority_scope TEXT",
-            ),
-        ] {
-            if conn
-                .prepare(&format!("SELECT {col} FROM notes LIMIT 0"))
-                .is_err()
-            {
-                // 破壊的な作り直しをしない(埋め込み再計算の嵐を避ける)
-                conn.execute_batch(&format!("{ddl}; UPDATE notes SET mtime = -1;"))?;
-            }
-        }
-        conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
-             CREATE UNIQUE INDEX IF NOT EXISTS notes_note_uid ON notes(note_uid)
-                 WHERE note_uid IS NOT NULL;
-             CREATE UNIQUE INDEX IF NOT EXISTS notes_active_canonical_scope
-                 ON notes(namespace, authority_scope)
-                 WHERE authority_role = 'canonical' AND authority_status = 'active';
-             CREATE TABLE IF NOT EXISTS note_relations(
-                 src_uid TEXT NOT NULL,
-                 kind TEXT NOT NULL,
-                 target_uid TEXT NOT NULL,
-                 PRIMARY KEY(src_uid, kind, target_uid)
-             );
-             CREATE INDEX IF NOT EXISTS note_relations_target ON note_relations(target_uid);
-             CREATE VIRTUAL TABLE IF NOT EXISTS fts_anchor USING fts5(
-                 src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
-             );
-             CREATE TABLE IF NOT EXISTS note_exports(
-                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                 op_id TEXT NOT NULL UNIQUE,
-                 note_id TEXT NOT NULL,
-                 operation TEXT NOT NULL,
-                 base_document TEXT,
-                 document TEXT,
-                 log_entry TEXT NOT NULL,
-                 commit_message TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS distillation_runs(
-                 execution_id TEXT PRIMARY KEY,
-                 plan_id TEXT NOT NULL,
-                 before_snapshot_digest TEXT NOT NULL,
-                 after_snapshot_digest TEXT NOT NULL,
-                 request_json TEXT NOT NULL,
-                 before_documents TEXT NOT NULL,
-                 after_documents TEXT NOT NULL,
-                 client TEXT NOT NULL,
-                 applied_at TEXT NOT NULL,
-                 status TEXT NOT NULL CHECK(status IN ('applied', 'rolled_back')),
-                 rollback_id TEXT,
-                 rolled_back_at TEXT
-             );
-             CREATE TABLE IF NOT EXISTS action_receipts(
-                 receipt_id TEXT PRIMARY KEY,
-                 workspace TEXT NOT NULL,
-                 request_hash TEXT NOT NULL UNIQUE,
-                 idempotency_key TEXT NOT NULL UNIQUE,
-                 capability_id TEXT,
-                 request_json TEXT NOT NULL,
-                 decision_json TEXT NOT NULL,
-                 status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
-                 reserved_at INTEGER NOT NULL,
-                 execution_started_at INTEGER,
-                 completed_at INTEGER,
-                 external_reference TEXT,
-                 external_target TEXT,
-                 compensation_deadline INTEGER,
-                 compensated_at INTEGER
-             );
-             CREATE INDEX IF NOT EXISTS action_receipts_status
-                 ON action_receipts(status, reserved_at);
-             CREATE TABLE IF NOT EXISTS action_capability_uses(
-                 capability_id TEXT PRIMARY KEY,
-                 issuer TEXT NOT NULL,
-                 receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
-             );",
-        )?;
-        for (column, ddl) in [
-            (
-                "external_target",
-                "ALTER TABLE action_receipts ADD COLUMN external_target TEXT",
-            ),
-            (
-                "compensation_deadline",
-                "ALTER TABLE action_receipts ADD COLUMN compensation_deadline INTEGER",
-            ),
-            (
-                "compensated_at",
-                "ALTER TABLE action_receipts ADD COLUMN compensated_at INTEGER",
-            ),
-        ] {
-            if conn
-                .prepare(&format!("SELECT {column} FROM action_receipts LIMIT 0"))
-                .is_err()
-            {
-                conn.execute_batch(ddl)?;
-            }
-        }
-        if rebuild_anchor_index {
-            rebuild_anchor_index_from_notes(conn)?;
-        }
-        conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?1)",
-            [SCHEMA_VERSION],
-        )?;
-        return Ok(());
+/// open時のschema分類。freshは「`sqlite_schema` が空」の場合だけ。
+/// それ以外の受け入れないDB(corrupt / future / unsupported)は分類時点で
+/// fail-closedエラーになり、Connectionは呼び出し元へ渡らない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaState {
+    /// DBオブジェクトが1つもない空DB。registry生成DDLの唯一の対象。
+    Fresh,
+    /// 加算migrationで現行へ到達できる宣言version({3..=8})。
+    Supported(u32),
+}
+
+/// 非空DBのmeta/schemaを読み、fail-closedで分類する。書込は一切しない。
+/// 旧実装はmetaクエリ失敗を`.ok()`でfresh扱いに潰し、corrupt DBを
+/// 破壊的rebuildへ流していた — その経路をここで塞ぐ。
+fn classify_schema(conn: &Connection) -> Result<SchemaState> {
+    let objects: i64 = conn
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| row.get(0))
+        .context("index.dbのschema一覧を読めない(SQLiteファイルとして壊れている可能性)")?;
+    if objects == 0 {
+        return Ok(SchemaState::Fresh);
     }
-    conn.execute_batch(&format!(
+    let has_meta: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='meta'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_meta == 0 {
+        bail!(
+            "index.dbが非空なのにmetaテーブルがない。壊れたDBとして扱い、\
+             自動再作成はしない(必要ならindex.dbを退避してから再起動する)"
+        );
+    }
+    let declared: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+            row.get(0)
+        })
+        .optional()
+        .context("metaテーブルからschema versionを読めない")?;
+    let Some(declared) = declared else {
+        bail!(
+            "index.dbのmetaにschema versionがない。壊れたDBとして扱い、\
+             自動再作成はしない(必要ならindex.dbを退避してから再起動する)"
+        );
+    };
+    let version: u32 = declared.trim().parse().map_err(|_| {
+        anyhow::anyhow!(
+            "index.dbのschema versionが数値でない: {declared:?}。壊れたDBとして扱い、\
+             自動再作成はしない"
+        )
+    })?;
+    if version > CURRENT_SCHEMA {
+        bail!(
+            "index.dbのschema versionが新しすぎる: {version}(このバイナリの上限: {CURRENT_SCHEMA})。\
+             新しいkbで作られたDBを古いバイナリで開いている。DBには書き込まない"
+        );
+    }
+    if version < OLDEST_SUPPORTED_SCHEMA {
+        bail!(
+            "index.dbのschema versionが古すぎる: {version}(migration対応は {OLDEST_SUPPORTED_SCHEMA} 以上)。\
+             未知の旧versionを破壊的rebuildの合図にはしない"
+        );
+    }
+    Ok(SchemaState::Supported(version))
+}
+
+/// 宣言versionの時点で存在しなければならないdurable table(再構築不能な正本)。
+/// metaはclassify_schemaで検証済みなので含めない。
+fn required_durable_tables(version: u32) -> Vec<&'static str> {
+    let mut required = vec!["notes"];
+    if version >= 4 {
+        required.push("note_exports");
+    }
+    if version >= 5 {
+        required.push("distillation_runs");
+    }
+    if version >= 6 {
+        required.push("action_receipts");
+        required.push("action_capability_uses");
+    }
+    required
+}
+
+/// durable tableの欠落は空表作成で隠さずfail-closed。distillation_runsや
+/// action_receiptsの喪失は復元不能で、空表を作ると喪失自体が見えなくなる。
+fn verify_durable_tables(conn: &Connection, version: u32) -> Result<()> {
+    let mut missing = Vec::new();
+    for table in required_durable_tables(version) {
+        let found: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name=?1",
+            [table],
+            |row| row.get(0),
+        )?;
+        if found == 0 {
+            missing.push(table);
+        }
+    }
+    if !missing.is_empty() {
+        bail!(
+            "schema {version} のindex.dbに復元不能なdurable tableがない: {}。\
+             空表を作って隠さずopenを失敗させる(必要ならバックアップから復旧する)",
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// fresh DB(sqlite_schemaが空)にだけ全オブジェクトを生成する。単一transactionで、
+/// meta schema書込は最後 — 途中失敗はfreshのまま残り、次回openが再試行する。
+fn create_fresh_schema(conn: &Connection) -> Result<()> {
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute_batch(
         "
-        DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS links;
-        DROP TABLE IF EXISTS fts_main; DROP TABLE IF EXISTS fts_tri;
-        DROP TABLE IF EXISTS fts_anchor;
-        CREATE TABLE meta_new(key TEXT PRIMARY KEY, value TEXT);
-        DROP TABLE IF EXISTS meta;
-        ALTER TABLE meta_new RENAME TO meta;
-        INSERT INTO meta(key, value) VALUES('schema', '{SCHEMA_VERSION}');
+        CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
         CREATE TABLE notes(
             id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
             origin TEXT, generated_by TEXT, generated_at TEXT,
@@ -304,7 +284,6 @@ fn init_schema(conn: &Connection) -> Result<()> {
             PRIMARY KEY(src_uid, kind, target_uid)
         );
         CREATE INDEX note_relations_target ON note_relations(target_uid);
-        DROP TABLE IF EXISTS note_vecs;
         CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
         CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
         CREATE VIRTUAL TABLE fts_tri  USING fts5(id UNINDEXED, text, tokenize='trigram');
@@ -358,8 +337,196 @@ fn init_schema(conn: &Connection) -> Result<()> {
             issuer TEXT NOT NULL,
             receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
         );
-        "
-    ))?;
+        ",
+    )?;
+    transaction.execute(
+        "INSERT INTO meta(key, value) VALUES('schema', ?1)",
+        [SCHEMA_VERSION],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// supported versionからの加算migration。明示step列(v3→v4→…→v8)を単一transactionで
+/// 適用し、meta version書込は最後。途中失敗は全stepをrollbackして旧versionのまま残す。
+fn migrate_schema(conn: &Connection, from: u32) -> Result<()> {
+    if from == CURRENT_SCHEMA {
+        return Ok(());
+    }
+    type MigrationStep = fn(&Connection) -> Result<()>;
+    const STEPS: [(u32, &str, MigrationStep); 5] = [
+        (3, "v3→v4", migrate_v3_to_v4),
+        (4, "v4→v5", migrate_v4_to_v5),
+        (5, "v5→v6", migrate_v5_to_v6),
+        (6, "v6→v7", migrate_v6_to_v7),
+        (7, "v7→v8", migrate_v7_to_v8),
+    ];
+    let transaction = conn.unchecked_transaction()?;
+    for (source, label, step) in STEPS {
+        if from <= source {
+            step(&transaction)
+                .with_context(|| format!("schema migration {label} を適用できない"))?;
+        }
+    }
+    transaction.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?1)",
+        [SCHEMA_VERSION],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// v4(337ead1): 正本authorityと安定UID。notesへの追加カラム、UID/scope索引、
+/// note_relations、note_exports(DB正本のoutbox)、links_dst索引。
+/// tags/createdはv3期内の後追い列なので、欠けたv3 DBもここで揃える。
+fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
+    for (col, ddl) in [
+        ("tags", "ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''"),
+        ("created", "ALTER TABLE notes ADD COLUMN created TEXT"),
+        (
+            "document",
+            "ALTER TABLE notes ADD COLUMN document TEXT NOT NULL DEFAULT ''",
+        ),
+        ("note_uid", "ALTER TABLE notes ADD COLUMN note_uid TEXT"),
+        ("namespace", "ALTER TABLE notes ADD COLUMN namespace TEXT"),
+        (
+            "authority_role",
+            "ALTER TABLE notes ADD COLUMN authority_role TEXT",
+        ),
+        (
+            "authority_status",
+            "ALTER TABLE notes ADD COLUMN authority_status TEXT",
+        ),
+        (
+            "authority_scope",
+            "ALTER TABLE notes ADD COLUMN authority_scope TEXT",
+        ),
+    ] {
+        if conn
+            .prepare(&format!("SELECT {col} FROM notes LIMIT 0"))
+            .is_err()
+        {
+            // 破壊的な作り直しをしない(埋め込み再計算の嵐を避ける)。
+            // mtime=-1で次回syncに再索引だけを促す。
+            conn.execute_batch(&format!("{ddl}; UPDATE notes SET mtime = -1;"))?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
+         CREATE UNIQUE INDEX IF NOT EXISTS notes_note_uid ON notes(note_uid)
+             WHERE note_uid IS NOT NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS notes_active_canonical_scope
+             ON notes(namespace, authority_scope)
+             WHERE authority_role = 'canonical' AND authority_status = 'active';
+         CREATE TABLE IF NOT EXISTS note_relations(
+             src_uid TEXT NOT NULL,
+             kind TEXT NOT NULL,
+             target_uid TEXT NOT NULL,
+             PRIMARY KEY(src_uid, kind, target_uid)
+         );
+         CREATE INDEX IF NOT EXISTS note_relations_target ON note_relations(target_uid);
+         CREATE TABLE IF NOT EXISTS note_exports(
+             seq INTEGER PRIMARY KEY AUTOINCREMENT,
+             op_id TEXT NOT NULL UNIQUE,
+             note_id TEXT NOT NULL,
+             operation TEXT NOT NULL,
+             base_document TEXT,
+             document TEXT,
+             log_entry TEXT NOT NULL,
+             commit_message TEXT NOT NULL
+         );",
+    )?;
+    Ok(())
+}
+
+/// v5(7277f8f): semantic蒸留waveのatomic実行・rollback監査表。
+fn migrate_v4_to_v5(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS distillation_runs(
+             execution_id TEXT PRIMARY KEY,
+             plan_id TEXT NOT NULL,
+             before_snapshot_digest TEXT NOT NULL,
+             after_snapshot_digest TEXT NOT NULL,
+             request_json TEXT NOT NULL,
+             before_documents TEXT NOT NULL,
+             after_documents TEXT NOT NULL,
+             client TEXT NOT NULL,
+             applied_at TEXT NOT NULL,
+             status TEXT NOT NULL CHECK(status IN ('applied', 'rolled_back')),
+             rollback_id TEXT,
+             rolled_back_at TEXT
+         );",
+    )?;
+    Ok(())
+}
+
+/// v6(2e32042): action governanceの実行証跡。新規作成は最初から現行(v7相当)の
+/// 全列で作る — 直後のv6→v7 stepの列追加が既存列としてno-opになるだけ。
+fn migrate_v5_to_v6(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS action_receipts(
+             receipt_id TEXT PRIMARY KEY,
+             workspace TEXT NOT NULL,
+             request_hash TEXT NOT NULL UNIQUE,
+             idempotency_key TEXT NOT NULL UNIQUE,
+             capability_id TEXT,
+             request_json TEXT NOT NULL,
+             decision_json TEXT NOT NULL,
+             status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
+             reserved_at INTEGER NOT NULL,
+             execution_started_at INTEGER,
+             completed_at INTEGER,
+             external_reference TEXT,
+             external_target TEXT,
+             compensation_deadline INTEGER,
+             compensated_at INTEGER
+         );
+         CREATE INDEX IF NOT EXISTS action_receipts_status
+             ON action_receipts(status, reserved_at);
+         CREATE TABLE IF NOT EXISTS action_capability_uses(
+             capability_id TEXT PRIMARY KEY,
+             issuer TEXT NOT NULL,
+             receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
+         );",
+    )?;
+    Ok(())
+}
+
+/// v7(6f1286d): receipt schemaのreconcile対応(external_target /
+/// compensation_deadline / compensated_at)。既存行は保持したまま列だけ足す。
+fn migrate_v6_to_v7(conn: &Connection) -> Result<()> {
+    for (column, ddl) in [
+        (
+            "external_target",
+            "ALTER TABLE action_receipts ADD COLUMN external_target TEXT",
+        ),
+        (
+            "compensation_deadline",
+            "ALTER TABLE action_receipts ADD COLUMN compensation_deadline INTEGER",
+        ),
+        (
+            "compensated_at",
+            "ALTER TABLE action_receipts ADD COLUMN compensated_at INTEGER",
+        ),
+    ] {
+        if conn
+            .prepare(&format!("SELECT {column} FROM action_receipts LIMIT 0"))
+            .is_err()
+        {
+            conn.execute_batch(ddl)?;
+        }
+    }
+    Ok(())
+}
+
+/// v8(5b81073): anchor text索引。派生表なのでDB内のnotes本文から一括再構築する。
+fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS fts_anchor USING fts5(
+             src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
+         );",
+    )?;
+    rebuild_anchor_index_from_notes(conn)?;
     Ok(())
 }
 
@@ -1173,6 +1340,11 @@ mod tests {
                  completed_at INTEGER,
                  external_reference TEXT
              );
+             CREATE TABLE action_capability_uses(
+                 capability_id TEXT PRIMARY KEY,
+                 issuer TEXT NOT NULL,
+                 receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
+             );
              INSERT INTO action_receipts(
                  receipt_id, workspace, request_hash, idempotency_key,
                  request_json, decision_json, status, reserved_at
@@ -1566,5 +1738,587 @@ mod tests {
             crate::degradation::Degradation::IndexParse { note, .. }
                 if note == "notes/a.files/inside"
         )));
+    }
+
+    // ------------------------------------------------------------------
+    // migration state machine(S-1)のfixtureとテスト
+    // ------------------------------------------------------------------
+
+    /// spec S-1のdurable table集合(metaはclassifyで検証されるがdumpには含める)。
+    const DURABLE_TABLES: [&str; 6] = [
+        "meta",
+        "notes",
+        "note_exports",
+        "distillation_runs",
+        "action_receipts",
+        "action_capability_uses",
+    ];
+
+    /// `sqlite_schema` と全durable tableの論理dump。ファイルbyteではなく
+    /// 論理内容を比較する(WAL変換などSQLite都合のbyte変化は保証対象外)。
+    fn logical_snapshot(path: &std::path::Path) -> Vec<String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut snapshot = Vec::new();
+        {
+            let mut statement = conn
+                .prepare(
+                    "SELECT type, name, tbl_name, coalesce(sql, '')
+                     FROM sqlite_schema ORDER BY type, name",
+                )
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| {
+                    Ok(format!(
+                        "schema|{}|{}|{}|{}",
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?
+                    ))
+                })
+                .unwrap();
+            for row in rows {
+                snapshot.push(row.unwrap());
+            }
+        }
+        for table in DURABLE_TABLES {
+            let mut statement = match conn.prepare(&format!("SELECT * FROM {table}")) {
+                Ok(statement) => statement,
+                Err(_) => {
+                    snapshot.push(format!("{table}|<absent>"));
+                    continue;
+                }
+            };
+            let columns = statement.column_count();
+            let mut table_rows = Vec::new();
+            let mut rows = statement.query([]).unwrap();
+            while let Some(row) = rows.next().unwrap() {
+                let mut cells = Vec::with_capacity(columns);
+                for index in 0..columns {
+                    use rusqlite::types::ValueRef;
+                    cells.push(match row.get_ref(index).unwrap() {
+                        ValueRef::Null => "NULL".to_owned(),
+                        ValueRef::Integer(value) => value.to_string(),
+                        ValueRef::Real(value) => value.to_string(),
+                        ValueRef::Text(value) => String::from_utf8_lossy(value).into_owned(),
+                        ValueRef::Blob(value) => format!("blob:{}", value.len()),
+                    });
+                }
+                table_rows.push(format!("{table}|{}", cells.join("|")));
+            }
+            table_rows.sort();
+            snapshot.append(&mut table_rows);
+        }
+        snapshot
+    }
+
+    /// 歴史上のfresh DDLを版順に再現し、各版に存在したdurable tableへ実データ行
+    /// (note本文 / pending export / 蒸留履歴 / action receipt)を実装した
+    /// fixture DBを作る。戻り値は保存したnote document文字列。
+    fn build_versioned_fixture(vault: &Vault, version: u32) -> String {
+        assert!((3..=8).contains(&version));
+        let mut front = Frontmatter::new_note("移行");
+        front.origin = Some("agent".into());
+        front.tags = vec!["test".into()];
+        let note = Note {
+            front,
+            body: "See [blue comet policy](/notes/kepler.md).".into(),
+        };
+        vault.write_note_fixture("notes/migrate", &note).unwrap();
+        let document = fs::read_to_string(vault.note_path("notes/migrate").unwrap()).unwrap();
+        std::fs::create_dir_all(vault.index_db_path().parent().unwrap()).unwrap();
+        let conn = Connection::open(vault.index_db_path()).unwrap();
+        // v3(fe2cc42)のfresh DDL
+        conn.execute_batch(
+            "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+             INSERT INTO meta(key, value) VALUES('schema', '3');
+             INSERT INTO meta(key, value) VALUES('runtime_store', 'db-v1');
+             CREATE TABLE notes(
+                 id TEXT PRIMARY KEY, title TEXT, description TEXT, status TEXT,
+                 origin TEXT, generated_by TEXT, generated_at TEXT,
+                 mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT
+             );
+             CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
+             CREATE TABLE note_vecs(id TEXT PRIMARY KEY, stamp TEXT, embedding BLOB);
+             CREATE VIRTUAL TABLE fts_main USING fts5(id UNINDEXED, text, tokenize='unicode61');
+             CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO notes(id, title, status, origin, mtime, body, tags)
+             VALUES('notes/migrate', '移行', 'stable', 'agent', 0, ?1, 'test')",
+            [&note.body],
+        )
+        .unwrap();
+        if version >= 4 {
+            // v4(337ead1): authority列・UID索引・note_relations・note_exports
+            conn.execute_batch(
+                "ALTER TABLE notes ADD COLUMN document TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE notes ADD COLUMN note_uid TEXT;
+                 ALTER TABLE notes ADD COLUMN namespace TEXT;
+                 ALTER TABLE notes ADD COLUMN authority_role TEXT;
+                 ALTER TABLE notes ADD COLUMN authority_status TEXT;
+                 ALTER TABLE notes ADD COLUMN authority_scope TEXT;
+                 CREATE UNIQUE INDEX notes_note_uid ON notes(note_uid)
+                     WHERE note_uid IS NOT NULL;
+                 CREATE UNIQUE INDEX notes_active_canonical_scope
+                     ON notes(namespace, authority_scope)
+                     WHERE authority_role = 'canonical' AND authority_status = 'active';
+                 CREATE INDEX links_dst ON links(dst);
+                 CREATE TABLE note_relations(
+                     src_uid TEXT NOT NULL, kind TEXT NOT NULL, target_uid TEXT NOT NULL,
+                     PRIMARY KEY(src_uid, kind, target_uid)
+                 );
+                 CREATE INDEX note_relations_target ON note_relations(target_uid);
+                 CREATE TABLE note_exports(
+                     seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                     op_id TEXT NOT NULL UNIQUE,
+                     note_id TEXT NOT NULL,
+                     operation TEXT NOT NULL,
+                     base_document TEXT,
+                     document TEXT,
+                     log_entry TEXT NOT NULL,
+                     commit_message TEXT NOT NULL
+                 );
+                 UPDATE meta SET value='4' WHERE key='schema';",
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE notes SET document=?1 WHERE id='notes/migrate'",
+                [&document],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO note_exports(
+                     op_id, note_id, operation, base_document, document,
+                     log_entry, commit_message
+                 ) VALUES('op:matrix-pending', 'notes/migrate', 'upsert', NULL, ?1,
+                          'log entry', 'commit message')",
+                [&document],
+            )
+            .unwrap();
+        }
+        if version >= 5 {
+            // v5(7277f8f): 蒸留waveの監査表
+            conn.execute_batch(
+                "CREATE TABLE distillation_runs(
+                     execution_id TEXT PRIMARY KEY,
+                     plan_id TEXT NOT NULL,
+                     before_snapshot_digest TEXT NOT NULL,
+                     after_snapshot_digest TEXT NOT NULL,
+                     request_json TEXT NOT NULL,
+                     before_documents TEXT NOT NULL,
+                     after_documents TEXT NOT NULL,
+                     client TEXT NOT NULL,
+                     applied_at TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN ('applied', 'rolled_back')),
+                     rollback_id TEXT,
+                     rolled_back_at TEXT
+                 );
+                 INSERT INTO distillation_runs VALUES(
+                     'exec:matrix', 'plan:matrix', 'digest:before', 'digest:after',
+                     '{}', '{}', '{}', 'test/client', '2026-08-01T00:00:00Z',
+                     'applied', NULL, NULL
+                 );
+                 UPDATE meta SET value='5' WHERE key='schema';",
+            )
+            .unwrap();
+        }
+        if version >= 6 {
+            // v6(2e32042): action governance証跡(reconcile列はまだない)
+            conn.execute_batch(
+                "CREATE TABLE action_receipts(
+                     receipt_id TEXT PRIMARY KEY,
+                     workspace TEXT NOT NULL,
+                     request_hash TEXT NOT NULL UNIQUE,
+                     idempotency_key TEXT NOT NULL UNIQUE,
+                     capability_id TEXT,
+                     request_json TEXT NOT NULL,
+                     decision_json TEXT NOT NULL,
+                     status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed')),
+                     reserved_at INTEGER NOT NULL,
+                     execution_started_at INTEGER,
+                     completed_at INTEGER,
+                     external_reference TEXT
+                 );
+                 CREATE INDEX action_receipts_status ON action_receipts(status, reserved_at);
+                 CREATE TABLE action_capability_uses(
+                     capability_id TEXT PRIMARY KEY,
+                     issuer TEXT NOT NULL,
+                     receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
+                 );
+                 INSERT INTO action_receipts(
+                     receipt_id, workspace, request_hash, idempotency_key,
+                     request_json, decision_json, status, reserved_at
+                 ) VALUES('receipt:matrix', 'workspace:test', 'hash:matrix', 'key:matrix',
+                          '{}', '{}', 'pending', 1);
+                 INSERT INTO action_capability_uses VALUES(
+                     'cap:matrix', 'issuer:test', 'receipt:matrix'
+                 );
+                 UPDATE meta SET value='6' WHERE key='schema';",
+            )
+            .unwrap();
+        }
+        if version >= 7 {
+            // v7(6f1286d): receiptのreconcile列
+            conn.execute_batch(
+                "ALTER TABLE action_receipts ADD COLUMN external_target TEXT;
+                 ALTER TABLE action_receipts ADD COLUMN compensation_deadline INTEGER;
+                 ALTER TABLE action_receipts ADD COLUMN compensated_at INTEGER;
+                 UPDATE meta SET value='7' WHERE key='schema';",
+            )
+            .unwrap();
+        }
+        if version >= 8 {
+            // v8(5b81073): anchor text索引
+            conn.execute_batch(
+                "CREATE VIRTUAL TABLE fts_anchor USING fts5(
+                     src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
+                 );
+                 UPDATE meta SET value='8' WHERE key='schema';",
+            )
+            .unwrap();
+        }
+        document
+    }
+
+    /// v3..v8の各fixture(durable行入り)が現行schemaへ到達し、durable行を
+    /// 1行も失わないことのmatrix検証。
+    #[test]
+    fn migration_matrix_reaches_current_schema_and_preserves_durable_rows() {
+        for version in 3..=8u32 {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = Vault::create(dir.path().join("v")).unwrap();
+            let document = build_versioned_fixture(&vault, version);
+
+            let migrated = open_db(&vault)
+                .unwrap_or_else(|error| panic!("v{version} fixtureを開けない: {error:#}"));
+            let schema: String = migrated
+                .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(schema, SCHEMA_VERSION, "v{version}");
+            for table in DURABLE_TABLES {
+                assert!(
+                    migrated
+                        .prepare(&format!("SELECT * FROM {table} LIMIT 0"))
+                        .is_ok(),
+                    "v{version}: {table} が現行schemaに存在しない"
+                );
+            }
+            // note本文(v3は復元経由、v4+はdocument列保持)
+            let (title, body, stored): (String, String, String) = migrated
+                .query_row(
+                    "SELECT title, body, document FROM notes WHERE id='notes/migrate'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(title, "移行", "v{version}");
+            assert!(body.contains("blue comet policy"), "v{version}");
+            assert_eq!(stored, document, "v{version}: note documentが失われた");
+            if version >= 4 {
+                let export: (String, String, Option<String>, String, String) = migrated
+                    .query_row(
+                        "SELECT op_id, operation, base_document, document, log_entry
+                         FROM note_exports WHERE op_id='op:matrix-pending'",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(
+                    export,
+                    (
+                        "op:matrix-pending".to_owned(),
+                        "upsert".to_owned(),
+                        None,
+                        document.clone(),
+                        "log entry".to_owned()
+                    ),
+                    "v{version}: pending exportが失われた"
+                );
+            }
+            if version >= 5 {
+                let run: (String, String, String) = migrated
+                    .query_row(
+                        "SELECT plan_id, applied_at, status
+                         FROM distillation_runs WHERE execution_id='exec:matrix'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    run,
+                    (
+                        "plan:matrix".to_owned(),
+                        "2026-08-01T00:00:00Z".to_owned(),
+                        "applied".to_owned()
+                    ),
+                    "v{version}: 蒸留履歴が失われた"
+                );
+            }
+            if version >= 6 {
+                let receipt: (String, String, Option<String>, Option<i64>, Option<i64>) = migrated
+                    .query_row(
+                        "SELECT workspace, status, external_target,
+                                    compensation_deadline, compensated_at
+                             FROM action_receipts WHERE receipt_id='receipt:matrix'",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(
+                    receipt,
+                    (
+                        "workspace:test".to_owned(),
+                        "pending".to_owned(),
+                        None,
+                        None,
+                        None
+                    ),
+                    "v{version}: action receiptが失われた"
+                );
+                let capability: (String, String) = migrated
+                    .query_row(
+                        "SELECT issuer, receipt_id FROM action_capability_uses
+                         WHERE capability_id='cap:matrix'",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    capability,
+                    ("issuer:test".to_owned(), "receipt:matrix".to_owned()),
+                    "v{version}: capability使用証跡が失われた"
+                );
+            }
+            if version < 8 {
+                // v7→v8 stepがDB本文からanchor索引を再構築している
+                let dst: String = migrated
+                    .query_row(
+                        "SELECT dst FROM fts_anchor WHERE fts_anchor MATCH ?1",
+                        [crate::tokenize::match_expr("blue comet policy")],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(dst, "notes/kepler", "v{version}");
+            }
+        }
+    }
+
+    /// 現行versionのDBを開いても、DDL・DMLを一切行わない(論理snapshot完全一致)。
+    #[test]
+    fn opening_a_current_schema_database_performs_no_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 8);
+        let before = logical_snapshot(&vault.index_db_path());
+
+        drop(open_db(&vault).unwrap());
+
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+    }
+
+    /// future schema(新しいkbで作られたDB)はfail-closed。WAL変換すら行わず、
+    /// `sqlite_schema` と全durable tableの論理内容を変えない。
+    #[test]
+    fn future_schema_fails_closed_before_wal_and_keeps_logical_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 8);
+        let path = vault.index_db_path();
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE meta SET value='999' WHERE key='schema'", [])
+            .unwrap();
+        let before = logical_snapshot(&path);
+
+        let error = open_db(&vault).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("新しすぎる"),
+            "未知のfutureを明確に報告する: {error:#}"
+        );
+        assert_eq!(before, logical_snapshot(&path));
+        // fail-closed判定がWAL設定より前 — journal modeは元のまま
+        let probe = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mode: String = probe
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "delete");
+    }
+
+    /// 非空DBのmeta欠落・schema key欠落・非数値versionはいずれもcorruptとして
+    /// fail-closed。旧実装のように黙ってfresh扱い(破壊的rebuild)へ流さない。
+    #[test]
+    fn corrupt_meta_fails_closed_without_any_ddl() {
+        // (a) metaテーブル自体がない非空DB
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = Vault::create(dir.path().join("v")).unwrap();
+            std::fs::create_dir_all(vault.index_db_path().parent().unwrap()).unwrap();
+            Connection::open(vault.index_db_path())
+                .unwrap()
+                .execute_batch("CREATE TABLE stray(x); INSERT INTO stray VALUES(1);")
+                .unwrap();
+            let before = logical_snapshot(&vault.index_db_path());
+            let error = open_db(&vault).unwrap_err();
+            assert!(format!("{error:#}").contains("meta"), "{error:#}");
+            assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+        }
+        // (b) metaはあるがschema keyがない
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = Vault::create(dir.path().join("v")).unwrap();
+            build_versioned_fixture(&vault, 8);
+            Connection::open(vault.index_db_path())
+                .unwrap()
+                .execute("DELETE FROM meta WHERE key='schema'", [])
+                .unwrap();
+            let before = logical_snapshot(&vault.index_db_path());
+            let error = open_db(&vault).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("schema versionがない"),
+                "{error:#}"
+            );
+            assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+        }
+        // (c) schema versionが数値でない
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = Vault::create(dir.path().join("v")).unwrap();
+            build_versioned_fixture(&vault, 8);
+            Connection::open(vault.index_db_path())
+                .unwrap()
+                .execute("UPDATE meta SET value='eight' WHERE key='schema'", [])
+                .unwrap();
+            let before = logical_snapshot(&vault.index_db_path());
+            let error = open_db(&vault).unwrap_err();
+            assert!(format!("{error:#}").contains("数値でない"), "{error:#}");
+            assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+        }
+    }
+
+    /// migration対応より古い宣言version(v1/v2)は破壊的rebuildの合図にしない。
+    /// 旧実装はここでnotes等をDROPして作り直していた。
+    #[test]
+    fn too_old_schema_is_not_a_destructive_rebuild_signal() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 3);
+        Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute("UPDATE meta SET value='2' WHERE key='schema'", [])
+            .unwrap();
+        let before = logical_snapshot(&vault.index_db_path());
+
+        let error = open_db(&vault).unwrap_err();
+        assert!(format!("{error:#}").contains("古すぎる"), "{error:#}");
+        assert_eq!(
+            before,
+            logical_snapshot(&vault.index_db_path()),
+            "notes行が破壊されず残っている"
+        );
+    }
+
+    /// 宣言versionに必要なdurable tableが欠けたDBは、空表作成で隠さずopen失敗。
+    #[test]
+    fn missing_durable_table_fails_closed_instead_of_recreating_it_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 8);
+        Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch("DROP TABLE distillation_runs;")
+            .unwrap();
+        let before = logical_snapshot(&vault.index_db_path());
+
+        let error = open_db(&vault).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("distillation_runs"),
+            "{error:#}"
+        );
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+    }
+
+    /// migration最初のstepで失敗しても、単一transactionが旧状態を完全に残す。
+    #[test]
+    fn migration_failure_rolls_back_to_the_declared_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 3);
+        Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_migration BEFORE UPDATE ON notes
+                 BEGIN SELECT RAISE(FAIL, 'fixture failure'); END;",
+            )
+            .unwrap();
+        let before = logical_snapshot(&vault.index_db_path());
+
+        let error = open_db(&vault).unwrap_err();
+        assert!(format!("{error:#}").contains("v3→v4"), "{error:#}");
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+        let unchanged = Connection::open(vault.index_db_path()).unwrap();
+        let schema: String = unchanged
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, "3", "meta versionは最後まで書かれない");
+        assert!(
+            unchanged
+                .prepare("SELECT document FROM notes LIMIT 0")
+                .is_err(),
+            "途中まで適用した列追加が残らない"
+        );
+    }
+
+    /// 後段step(v7→v8)の失敗は、前段step(v5→v6)の適用済みDDLも巻き戻す —
+    /// 全stepが単一transactionである検証。
+    #[test]
+    fn late_step_failure_rolls_back_earlier_steps_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 5);
+        // fts_anchorの名前を先取りする通常表 — v7→v8のanchor再構築だけを失敗させる
+        Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch("CREATE TABLE fts_anchor(x);")
+            .unwrap();
+        let before = logical_snapshot(&vault.index_db_path());
+
+        let error = open_db(&vault).unwrap_err();
+        assert!(format!("{error:#}").contains("v7→v8"), "{error:#}");
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+        let unchanged = Connection::open(vault.index_db_path()).unwrap();
+        let schema: String = unchanged
+            .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(schema, "5");
+        assert!(
+            unchanged
+                .prepare("SELECT * FROM action_receipts LIMIT 0")
+                .is_err(),
+            "v5→v6で作ったaction_receiptsも巻き戻る"
+        );
     }
 }
