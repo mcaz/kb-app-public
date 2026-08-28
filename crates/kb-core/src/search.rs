@@ -2032,6 +2032,63 @@ mod tests {
         assert!(retrieval.documents.iter().any(|note| note.id == target_id));
         assert!(retrieval.stats.candidate_count >= 3);
 
+        // ---------------------------------------- 派生索引registry追加計測(2026-08-28)
+        // warm open: 構築済みDBの再open。open毎のhealth check(object存在・型 /
+        // fts_main・fts_triのnote IDカバレッジ / governance validate)込みで5回測る。
+        // healthyなDBでは修復・書込が一切走らないこと自体も検査する。
+        drop(conn);
+        let (warm_outcome, warm_open) = timed(|| {
+            repeat_last(5, || {
+                let outcome = crate::index::open_db_with_outcome(&vault).unwrap();
+                assert!(
+                    outcome.recovered.is_empty(),
+                    "healthyなDBのwarm openで修復が走った"
+                );
+                assert!(outcome.write_blockers.is_empty());
+                outcome
+            })
+        });
+        let conn = warm_outcome.conn;
+
+        // 単一note更新100回: 本番write経路(governance fail-closedゲート →
+        // registry走査での派生索引維持 → 埋め込み無効化 → outbox積み → commit)を
+        // 1件ずつ測り、median / p95 で判定する。Markdown export(git commit)は
+        // registry変更の対象外かつファイルI/O支配のため計測に含めない。
+        // 絶対値予算の根拠は docs/derived-registry.md(baseline実測+15%/+20%規則
+        // にCIゆらぎの余裕を乗せた値)。
+        let update_id = performance_note_id(PERFORMANCE_TARGET + 7);
+        let mut update_note = crate::note_store::read(&conn, &update_id).unwrap();
+        let mut update_samples = Vec::with_capacity(100);
+        for round in 0..100usize {
+            update_note.body =
+                format!("単一更新回帰 {round:03}。派生索引の増分維持と埋め込み無効化を通す本文。");
+            let ((), elapsed) = timed(|| {
+                crate::note_store::put(&vault, &conn, &update_id, &update_note, "perf", "perf")
+                    .unwrap()
+            });
+            update_samples.push(elapsed);
+        }
+        update_samples.sort();
+        let update_median = update_samples[49];
+        let update_p95 = update_samples[94];
+        eprintln!(
+            "performance_gate note_update_x100 us: median {} p95 {} max {}",
+            update_median.as_micros(),
+            update_p95.as_micros(),
+            update_samples[99].as_micros()
+        );
+
+        // artifact rebuild: 自己修復と同じ force_rebuild(DROP→CREATE→再導出、
+        // governanceはvalidate込み)を全artifactへ順に適用した合計時間。
+        // NoteVecsはモデル未導入なのでCapabilityUnavailableで即返る。
+        let (_, artifact_rebuild) = timed(|| {
+            for artifact in crate::derived_index::DerivedArtifact::ALL {
+                crate::derived_index::force_rebuild(&vault, &conn, artifact).unwrap();
+            }
+        });
+        let post_rebuild = super::main_search(&conn, "検索番兵オーロラ", 20, false).unwrap();
+        assert!(post_rebuild.iter().any(|hit| hit.id == target_id));
+
         let measurements = [
             ("index_rebuild", rebuild, Duration::from_secs(30)),
             ("home_db_read_x20", home_read, Duration::from_secs(2)),
@@ -2053,6 +2110,18 @@ mod tests {
             ),
             ("note_detail_x5", note_detail, Duration::from_secs(2)),
             ("linked_context_x20", linked_context, Duration::from_secs(2)),
+            ("warm_open_x5", warm_open, Duration::from_secs(2)),
+            (
+                "note_update_median",
+                update_median,
+                Duration::from_millis(25),
+            ),
+            ("note_update_p95", update_p95, Duration::from_millis(50)),
+            (
+                "artifact_rebuild",
+                artifact_rebuild,
+                Duration::from_secs(10),
+            ),
         ];
         for (name, elapsed, budget) in measurements {
             eprintln!(

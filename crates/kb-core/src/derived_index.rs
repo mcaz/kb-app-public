@@ -139,6 +139,32 @@ pub(crate) enum NoteChange<'a> {
     },
 }
 
+/// 1回の`apply_note_change`内でartifact間に共有する導出のlazyキャッシュ。
+/// fts_main/fts_triの検索テキスト(添付名のFS列挙を含む)とlinks/fts_anchorの
+/// リンク抽出を1回だけ計算する。単一note更新100回gate(S-5 予算)の実測で、
+/// artifactごとの重複計算がupdate経路の主要な加算コストだったため導入。
+/// 意味は不変 — 各artifactが個別に計算した場合と同じ値を返す。
+#[derive(Default)]
+pub(crate) struct ChangeCache {
+    search_text: std::cell::OnceCell<String>,
+    links: std::cell::OnceCell<Vec<crate::index::LinkEntry>>,
+}
+
+impl ChangeCache {
+    fn search_text(&self, vault: &Vault, note_id: &str, note: &Note) -> Result<&str> {
+        if let Some(text) = self.search_text.get() {
+            return Ok(text);
+        }
+        let computed = search_text_for_note(vault, note_id, note)?;
+        Ok(self.search_text.get_or_init(|| computed))
+    }
+
+    fn links(&self, note_id: &str, note: &Note) -> &[crate::index::LinkEntry] {
+        self.links
+            .get_or_init(|| crate::index::extract_link_entries(note_id, &note.body))
+    }
+}
+
 pub(crate) struct ArtifactSpec {
     #[allow(dead_code, reason = "宣言情報(spec S-2)。統合ステージで参照される")]
     pub(crate) lane: Lane,
@@ -146,7 +172,7 @@ pub(crate) struct ArtifactSpec {
     pub(crate) objects: &'static [SqliteObjectSpec],
     pub(crate) health: fn(&Vault, &Connection) -> Result<ArtifactHealth>,
     pub(crate) rebuild: fn(&Vault, &Connection) -> Result<RebuildOutcome>,
-    pub(crate) apply_change: fn(&Vault, &Connection, NoteChange<'_>) -> Result<()>,
+    pub(crate) apply_change: fn(&Vault, &Connection, NoteChange<'_>, &ChangeCache) -> Result<()>,
 }
 
 /// durable state(正本・復元不能な台帳)。registryのobject名がここへ触れることは
@@ -549,14 +575,19 @@ fn note_vecs_rebuild(_vault: &Vault, conn: &Connection) -> Result<RebuildOutcome
 
 // ---------------------------------------------------------------- apply_change
 
-fn fts_main_apply(vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Result<()> {
+fn fts_main_apply(
+    vault: &Vault,
+    conn: &Connection,
+    change: NoteChange<'_>,
+    cache: &ChangeCache,
+) -> Result<()> {
     match change {
         NoteChange::Upsert { note_id, note, .. } => {
             conn.execute("DELETE FROM fts_main WHERE id=?1", [note_id])?;
-            let text = search_text_for_note(vault, note_id, note)?;
+            let text = cache.search_text(vault, note_id, note)?;
             conn.execute(
                 "INSERT INTO fts_main(id, text) VALUES(?1, ?2)",
-                rusqlite::params![note_id, wakati(&text)],
+                rusqlite::params![note_id, wakati(text)],
             )?;
         }
         NoteChange::Remove { note_id, .. } => {
@@ -566,11 +597,16 @@ fn fts_main_apply(vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> R
     Ok(())
 }
 
-fn fts_tri_apply(vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Result<()> {
+fn fts_tri_apply(
+    vault: &Vault,
+    conn: &Connection,
+    change: NoteChange<'_>,
+    cache: &ChangeCache,
+) -> Result<()> {
     match change {
         NoteChange::Upsert { note_id, note, .. } => {
             conn.execute("DELETE FROM fts_tri WHERE id=?1", [note_id])?;
-            let text = search_text_for_note(vault, note_id, note)?;
+            let text = cache.search_text(vault, note_id, note)?;
             conn.execute(
                 "INSERT INTO fts_tri(id, text) VALUES(?1, ?2)",
                 rusqlite::params![note_id, text],
@@ -583,12 +619,17 @@ fn fts_tri_apply(vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Re
     Ok(())
 }
 
-fn links_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Result<()> {
+fn links_apply(
+    _vault: &Vault,
+    conn: &Connection,
+    change: NoteChange<'_>,
+    cache: &ChangeCache,
+) -> Result<()> {
     match change {
         NoteChange::Upsert { note_id, note, .. } => {
             // upsertはsource行だけを置き換える(dst側は他noteのsource行)。
             conn.execute("DELETE FROM links WHERE src=?1", [note_id])?;
-            for link in crate::index::extract_link_entries(note_id, &note.body) {
+            for link in cache.links(note_id, note) {
                 conn.execute(
                     "INSERT OR IGNORE INTO links(src, dst) VALUES(?1, ?2)",
                     rusqlite::params![note_id, link.dst],
@@ -602,7 +643,12 @@ fn links_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Res
     Ok(())
 }
 
-fn fts_anchor_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Result<()> {
+fn fts_anchor_apply(
+    _vault: &Vault,
+    conn: &Connection,
+    change: NoteChange<'_>,
+    cache: &ChangeCache,
+) -> Result<()> {
     match change {
         NoteChange::Upsert {
             note_id,
@@ -615,7 +661,7 @@ fn fts_anchor_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -
             if previously_indexed {
                 conn.execute("DELETE FROM fts_anchor WHERE src=?1", [note_id])?;
             }
-            for link in crate::index::extract_link_entries(note_id, &note.body) {
+            for link in cache.links(note_id, note) {
                 if !link.anchor.is_empty() {
                     conn.execute(
                         "INSERT INTO fts_anchor(src, dst, text) VALUES(?1, ?2, ?3)",
@@ -631,7 +677,12 @@ fn fts_anchor_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -
     Ok(())
 }
 
-fn note_relations_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Result<()> {
+fn note_relations_apply(
+    _vault: &Vault,
+    conn: &Connection,
+    change: NoteChange<'_>,
+    _cache: &ChangeCache,
+) -> Result<()> {
     match change {
         NoteChange::Upsert {
             previous_uid, note, ..
@@ -678,7 +729,12 @@ fn note_relations_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_
     Ok(())
 }
 
-fn note_vecs_apply(_vault: &Vault, conn: &Connection, change: NoteChange<'_>) -> Result<()> {
+fn note_vecs_apply(
+    _vault: &Vault,
+    conn: &Connection,
+    change: NoteChange<'_>,
+    _cache: &ChangeCache,
+) -> Result<()> {
     match change {
         NoteChange::Upsert { note_id, note, .. } => {
             // title/description/bodyのどれかが変われば同transactionで無効化する
@@ -708,9 +764,10 @@ pub(crate) fn apply_note_change(
     conn: &Connection,
     change: NoteChange<'_>,
 ) -> Result<()> {
+    let cache = ChangeCache::default();
     for artifact in DerivedArtifact::ALL {
         let spec = artifact.spec();
-        (spec.apply_change)(vault, conn, change)
+        (spec.apply_change)(vault, conn, change, &cache)
             .with_context(|| format!("派生索引 {artifact} を更新できない"))?;
     }
     Ok(())
@@ -801,17 +858,64 @@ pub(crate) fn check_and_repair(vault: &Vault, conn: &Connection) -> Result<Repai
             }
         }
     }
+    // governance台帳がhealth(=validate_authority_index込み)または修復+validateを
+    // 通過した接続にだけmarkerを置き、write時のfull再検証を省く。修復失敗時は
+    // markerが無いままなので、write側は毎回full検証してfail-closedになる。
+    if !report
+        .write_blockers
+        .contains(&DerivedArtifact::NoteRelations)
+    {
+        mark_governance_validated(conn)?;
+    }
     Ok(report)
+}
+
+/// open時のgovernance検証成功をこの接続に記録するmarker。
+///
+/// TEMP tableは接続ローカル(temp databaseに置かれ、DBファイルへは何も残らない)
+/// なので、spec S-3の「永続の通知済み状態を持たない・毎openで再検査」を保ったまま
+/// 接続単位の検証結果を運べる。10k notes規模で `validate_authority_index` は
+/// 1 write あたり約2 ms(gov_x100実測208 ms)かかり、毎write実行は単一note更新の
+/// median予算(baseline比+15%)を超過したため、full検証はopen時(check_and_repair)
+/// と未検証接続のwriteに限定する。
+const GOVERNANCE_MARKER: &str = "governance_validated_at_open";
+
+fn mark_governance_validated(conn: &Connection) -> Result<()> {
+    conn.execute_batch(&format!(
+        "CREATE TEMP TABLE IF NOT EXISTS {GOVERNANCE_MARKER}(ok INTEGER)"
+    ))?;
+    Ok(())
+}
+
+fn governance_validated_at_open(conn: &Connection) -> Result<bool> {
+    let found: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_temp_schema WHERE type='table' AND name=?1",
+            [GOVERNANCE_MARKER],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(found.is_some())
 }
 
 /// note write(queue_put / delete)の先頭で呼ぶfail-closedゲート。
 /// governance台帳(note_relations)が欠損・不整合の間、noteの書込を拒否する。
-/// openごとの修復が成功していれば透過。永続の「通知済み」状態は持たない。
+///
+/// - object存在・種別は毎write検査する(open後のDROP等をその場で止める)
+/// - 内容整合(`validate_authority_index`)はopen時のhealth check/修復で検証済みの
+///   接続では省略する(markerはこの接続限り)。open時検証を通っていない接続
+///   (生Connection・修復失敗後)は毎writeでfull検証し、fail-closedを維持する
+/// - write自体の整合はupsert後の `validate_authority_write` が同transactionで検査する
+///
+/// 永続の「通知済み」状態は持たない(毎openで再検査)。
 pub(crate) fn require_governance_ready(conn: &Connection) -> Result<()> {
     for object in NOTE_RELATIONS.objects {
         if let ArtifactHealth::Broken { detail } = object_health(conn, object)? {
             bail!("governance台帳が壊れているためnoteを書き込めない(fail-closed): {detail}");
         }
+    }
+    if governance_validated_at_open(conn)? {
+        return Ok(());
     }
     crate::index::validate_authority_index(conn)
         .context("governance台帳が不整合のためnoteを書き込めない(fail-closed)")
@@ -1216,6 +1320,57 @@ mod tests {
         assert!(format!("{error:#}").contains("fail-closed"), "{error:#}");
         // readは影響を受けない
         assert_eq!(crate::note_store::read(&conn, &id).unwrap().body, "本文\n");
+    }
+
+    /// governance内容のfull再検証(`validate_authority_index`)はopen単位。
+    /// open時検証を通っていない生接続は毎writeでfull検証しfail-closedのまま、
+    /// open済み接続はmarkerで素通りする(単一note更新の性能予算S-5)。壊れた
+    /// 内容は次のopenの自己修復がdocument正本から再構築する。
+    #[test]
+    fn governance_content_revalidation_happens_at_open_not_per_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "接続単位検証",
+                "本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        // 生接続(open時検証なし)へdangling relationを注入 → write時に検出される
+        let raw = open_raw(&vault);
+        let src_uid: String = raw
+            .query_row("SELECT note_uid FROM notes WHERE id=?1", [&id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        raw.execute(
+            "INSERT INTO note_relations(src_uid, kind, target_uid) VALUES(?1, 'supports', ?2)",
+            rusqlite::params![src_uid, "u-nowhere"],
+        )
+        .unwrap();
+        let mut note = crate::note_store::read(&raw, &id).unwrap();
+        note.body = "生接続では書けないはず".into();
+        let error =
+            crate::note_store::put(&vault, &raw, &id, &note, "update", "update note").unwrap_err();
+        assert!(format!("{error:#}").contains("fail-closed"), "{error:#}");
+        drop(raw);
+
+        // 次のopenは自己修復がdocument正本からnote_relationsを再構築し、markerを置く
+        let outcome = open_db_with_outcome(&vault).unwrap();
+        assert_eq!(outcome.recovered, vec![DerivedArtifact::NoteRelations]);
+        assert!(outcome.write_blockers.is_empty());
+
+        // open済み接続のwriteは通る(full再検証はopen時に済んでいる)
+        note.body = "open済み接続では書ける".into();
+        crate::note_store::put(&vault, &outcome.conn, &id, &note, "update", "update note").unwrap();
+        assert_eq!(
+            crate::note_store::read(&outcome.conn, &id).unwrap().body,
+            "open済み接続では書ける\n"
+        );
     }
 
     /// S-4: title/description/bodyのどの変更でも埋め込み行が同一transactionで
