@@ -63,9 +63,7 @@ pub fn maintenance_refresh(state: State<'_, AppState>) -> AppResult<MaintenanceR
     let vault = kb_core::vault::Vault::open(&root).map_err(AppError::vault)?;
 
     // pullは内部で別DB接続へimportする。共有AppStateのロックは一切握らない。
-    let mut degraded = kb_core::connect::pull_if_stale(&vault)
-        .into_iter()
-        .collect();
+    let mut degraded = kb_core::connect::pull_if_stale(&vault);
     let conn = kb_core::index::open_db(&vault).map_err(AppError::index)?;
     run_local_maintenance(&vault, &conn, &mut degraded);
     state.set_degraded_for(&root, degraded.clone())?;

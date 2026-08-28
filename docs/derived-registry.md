@@ -9,7 +9,8 @@
 派生索引6種(fts_main / fts_tri / links / fts_anchor / note_relations / note_vecs)を
 静的registry(`derived_index.rs`)へ宣言し、増分維持(ノート書込)と一括rebuild(修復)を
 同じ `apply_change` / `rebuild` に統一した。open時に安価なhealth check(object存在・型、
-fts_main・fts_triのnote IDカバレッジ両方向、governanceのauthority整合検証)を行い、壊れた
+fts_main・fts_triのnote IDカバレッジ両方向、note_vecsのstamp形式、governanceの
+authority整合検証)を行い、壊れた
 artifactはartifact単位transactionでDROP→CREATE→再導出する。durable table 6種
 (notes / meta / note_exports / distillation_runs / action_receipts / action_capability_uses)は
 enumに存在せず型上登録不能で、欠落はfail-closed(open失敗)。governance台帳
@@ -39,6 +40,42 @@ baselineと同一。挙動中立の証明は下の official / holdout 突合。
    `validate_authority_write` が同transactionで検査する。この契約は
    `governance_content_revalidation_happens_at_open_not_per_write` テストが両側
    (生接続はfail-closedのまま / open済み接続は素通り)を固定する。
+
+### 敵対的レビュー後の修正(2026-08-28、同branch)
+
+独立監査(敵対的レビュー)の確定所見2件(F1/F2)と参考指摘3件を反映した。
+
+1. **F1(major): supersedes元削除によるgovernance恒久write停止**。削除時のinbound
+   relation検査はsupersedes**元**(active canonical)の削除を素通りさせ、orphaned
+   superseded canonicalがdurable(相手ノートのdocument)に固定される。以後の全openで
+   note_relations修復(document正本からの再構築)が必ず同じ違反を再現してwrite_blockers
+   が立ち、復旧に必要な操作(相手のstatus復帰・相手の削除)自体がnote writeのため
+   API内に復旧手段が残らない。修正: `note_store::delete` のtransaction末尾で
+   `validate_authority_index` を実行し、違反は同transactionでrollback
+   (DB・outbox・Markdownとも無傷)。import側(`sync_files`)は従来から末尾で同じ
+   全体validateを実行済み。副次効果として、marker検証済み接続でもmid-sessionの
+   台帳破損下の削除はwrite時に検出されるようになった。再現テスト:
+   `deleting_a_supersedes_source_is_rejected_before_it_orphans_the_target`。
+2. **F2(major): embed_pendingの全corpus走査**。複合stamp化(S-4)の際にSQL側
+   prefilterを失い、検索(MCP search)毎に全notesのtitle/description/bodyを
+   materializeしてSHA-256を再計算していた(モデル導入環境で検索毎に恒久実行、
+   モデル未導入で走る性能gateでは不可視)。修正: prefilterを復活 — 候補 = 現行prefix
+   (`{producer}|sha256:`)のstamp行を持たないnote(行なし / stamp NULL / prefix
+   不一致)。現行prefix一致行はwrite経路(`note_vecs_apply`)の同transaction無効化を
+   信頼し、本文を読まない(prefix一致・hash不一致の行をpending扱いしないことを
+   テストで固定 — 新旧バイナリ併存rollout期間の残留staleは既知の制約のまま)。
+   gateへ `embed_pending_scan_x100` を追加し、この経路の退行を止める。
+3. minor: `note_vecs` healthへstamp形式検査を追加(spec S-3の列挙どおり)。現行複合形
+   でないstamp行(旧形式・他producer・破損)はBrokenとしてrebuild(drop→再作成)し、
+   行はembed pendingが追い付く。旧形式行はknn対象外の死蔵行なので、旧バイナリからの
+   移行(全行旧形式)で失うものはない。旧・現行混在のtable(併存rollout=既知の非対応
+   構成)ではdropが現行行も捨てて再埋め込みになる点は既存の併存不可制約の内数。
+4. minor: fts_main / fts_triカバレッジ検査のNULL盲点を修正。fts側にid NULL行が1行
+   あるとNOT INが全行NULLに評価され、実在する欠落・迷子が0件に見えていた。内側query
+   からNULLを除外し、NULL行自体も迷子として数える。
+5. minor: pull経路(`pull_now` / `pull_if_stale`)がopen時の `OpenDbOutcome`
+   (自己修復notice・修復失敗劣化)を捨てていた問題。呼び出し元(MCP / GUI)の
+   degradedへ合流するようにした。
 
 ## 実測
 
@@ -73,6 +110,7 @@ baselineは同一端末で同じ計測コードを一時パッチとして当て
 | 単一note更新 median | 5,184 us | 5,444 us | **+5.0%** | 25 ms |
 | 単一note更新 p95 | 5,789 us | 6,150 us | **+6.2%** | 50 ms |
 | 全artifact一括rebuild(6件) | — | 614 ms | — | 10,000 ms |
+| embed_pendingスキャン 100回(定常状態) | — | 860 ms | — | 1,500 ms |
 
 単一note更新は clean runの幅でも baseline 5,184〜5,521 us(median)/ 5,789〜6,227 us
 (p95)に対し、変更後 5,444〜5,805 us / 6,150〜6,482 us で、**受入基準
@@ -105,6 +143,13 @@ governance write gateを毎write full検証で実装した中間版は、単一n
   監査のような重い検査へ退行したら超過する(実測の15倍超)。
 - **全artifact一括rebuild 10,000 ms**: 実測の約10倍。DB初回復元(30秒)より軽い操作で
   あることを固定する。
+- **embed_pendingスキャン 100回 1,500 ms**(レビューF2の追加gate): 定常状態(全noteが
+  現行prefixのstamp行を持つ)の実測860 ms(約8.6 ms/回 — origin/mainのLEFT JOIN+PK probe
+  filterと同形・同コスト級)に対し約1.7倍。止めたい退行(全corpusの本文materialize+
+  SHA-256再hash)は本fixture規模(本文150〜200B)でも約22 ms/回=2,200 ms級で、この予算が
+  確実に止める。O(n) probe自体の解消(stamp列index等)はschema変更を伴うためAの範囲外。
+  なお「pending扱いの判定がSQL prefilterのみで本文を再hashしない」ことの意味論は
+  `steady_state_trusts_write_time_invalidation_without_rehash` テストが時間と独立に固定する。
 
 ## 受入テスト(実事故の自己修復)
 

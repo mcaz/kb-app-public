@@ -1389,13 +1389,9 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
 
 fn remote_degradations(
     enabled: bool,
-    pull: impl FnOnce() -> Option<crate::degradation::Degradation>,
+    pull: impl FnOnce() -> Vec<crate::degradation::Degradation>,
 ) -> Vec<crate::degradation::Degradation> {
-    if enabled {
-        pull().into_iter().collect()
-    } else {
-        Vec::new()
-    }
+    if enabled { pull() } else { Vec::new() }
 }
 
 #[cfg(test)]
@@ -2733,9 +2729,9 @@ mod tests {
         let called = std::cell::Cell::new(false);
         let degraded = remote_degradations(false, || {
             called.set(true);
-            Some(crate::degradation::Degradation::RemoteSync {
+            vec![crate::degradation::Degradation::RemoteSync {
                 detail: "should not run".into(),
-            })
+            }]
         });
 
         assert!(!called.get());

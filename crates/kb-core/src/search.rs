@@ -2050,6 +2050,14 @@ mod tests {
         });
         let conn = warm_outcome.conn;
 
+        // embed_pendingスキャン(レビューF2): 定常状態(全noteが現行prefixの
+        // stamp行を持つ)ではSQL prefilterだけで候補0件を判定し、本文の
+        // materialize・再hashを行わない。モデル未導入でもSQL+判定部は測れる。
+        // 検索(MCP search)ごとに走る経路なので、全corpus走査の復活をここで止める。
+        let (steady_pending, embed_pending_scan) =
+            timed(|| repeat_last(100, || crate::embed::embed_pending(&conn, 0).unwrap()));
+        assert_eq!(steady_pending, 0, "定常状態でpendingが残っている");
+
         // 単一note更新100回: 本番write経路(governance fail-closedゲート →
         // registry走査での派生索引維持 → 埋め込み無効化 → outbox積み → commit)を
         // 1件ずつ測り、median / p95 で判定する。Markdown export(git commit)は
@@ -2111,6 +2119,11 @@ mod tests {
             ("note_detail_x5", note_detail, Duration::from_secs(2)),
             ("linked_context_x20", linked_context, Duration::from_secs(2)),
             ("warm_open_x5", warm_open, Duration::from_secs(2)),
+            (
+                "embed_pending_scan_x100",
+                embed_pending_scan,
+                Duration::from_millis(1500),
+            ),
             (
                 "note_update_median",
                 update_median,

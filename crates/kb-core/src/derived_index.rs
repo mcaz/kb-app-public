@@ -339,19 +339,48 @@ fn fts_anchor_health(_vault: &Vault, conn: &Connection) -> Result<ArtifactHealth
 }
 
 fn note_vecs_health(_vault: &Vault, conn: &Connection) -> Result<ArtifactHealth> {
-    objects_health(conn, NOTE_VECS.objects)
+    if let ArtifactHealth::Broken { detail } = objects_health(conn, NOTE_VECS.objects)? {
+        return Ok(ArtifactHealth::Broken { detail });
+    }
+    // stamp形式検査(spec S-3の安価health列挙)。現行複合形
+    // (`CURRENT_STAMP_PREFIX`)でない行は旧形式・他producer・破損のいずれかで、
+    // knn対象外の死蔵行。Brokenとしてrebuild(drop→再作成)へ回し、行は
+    // embed_stepのpendingが追い付く。行の欠落(未埋め込み)は正常なので数えない。
+    let malformed: i64 = conn.query_row(
+        "SELECT count(*) FROM note_vecs WHERE stamp IS NULL OR substr(stamp, 1, ?1) <> ?2",
+        rusqlite::params![
+            crate::embed::CURRENT_STAMP_PREFIX.len() as i64,
+            crate::embed::CURRENT_STAMP_PREFIX
+        ],
+        |row| row.get(0),
+    )?;
+    if malformed > 0 {
+        return Ok(ArtifactHealth::Broken {
+            detail: format!("note_vecs のstamp形式が現行と不一致({malformed}件)"),
+        });
+    }
+    Ok(ArtifactHealth::Ready)
 }
 
 /// note IDカバレッジ(安価なhealth check)。notes⊆ftsとfts⊆notesの両方向を数える。
 /// 全文の再parse・再tokenize監査はopenごとには行わない(修復後とテストのみ)。
+/// NOT INはid NULL行が片側に1行あるだけで全体がNULLに評価され、実在する欠落・
+/// 迷子を0件に見せる(レビュー指摘)— 内側からNULLを除外し、fts側のNULL行
+/// 自体も迷子として数える。
 fn fts_coverage_health(conn: &Connection, table: &str) -> Result<ArtifactHealth> {
     let missing: i64 = conn.query_row(
-        &format!("SELECT count(*) FROM notes WHERE id NOT IN (SELECT id FROM {table})"),
+        &format!(
+            "SELECT count(*) FROM notes
+             WHERE id NOT IN (SELECT id FROM {table} WHERE id IS NOT NULL)"
+        ),
         [],
         |row| row.get(0),
     )?;
     let stray: i64 = conn.query_row(
-        &format!("SELECT count(*) FROM {table} WHERE id NOT IN (SELECT id FROM notes)"),
+        &format!(
+            "SELECT count(*) FROM {table}
+             WHERE id IS NULL OR id NOT IN (SELECT id FROM notes WHERE id IS NOT NULL)"
+        ),
         [],
         |row| row.get(0),
     )?;
@@ -1033,6 +1062,88 @@ mod tests {
             )
             .unwrap();
         assert_eq!(dst, "notes/kepler");
+    }
+
+    /// fts側のid NULL行はNOT IN形カバレッジ検査の盲点(全行NULL化で欠落・迷子
+    /// とも0件に見える)だった。NULL行の存在下でも実在する欠落を検出し、
+    /// NULL行自体も迷子として修復されることを固定する(レビュー指摘)。
+    #[test]
+    fn null_id_rows_do_not_blind_the_fts_coverage_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "盲点検査",
+                "amber vole compass の記録。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        drop(open_db(&vault).unwrap());
+        let raw = open_raw(&vault);
+        raw.execute("DELETE FROM fts_main WHERE id=?1", [&id])
+            .unwrap();
+        raw.execute("INSERT INTO fts_main(id, text) VALUES(NULL, 'ghost')", [])
+            .unwrap();
+        drop(raw);
+
+        let outcome = open_db_with_outcome(&vault).unwrap();
+        assert!(
+            outcome.recovered.contains(&DerivedArtifact::FtsMain),
+            "{:?}",
+            outcome.degraded
+        );
+        let null_rows: i64 = outcome
+            .conn
+            .query_row(
+                "SELECT count(*) FROM fts_main WHERE id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(null_rows, 0);
+        let found = crate::search::search(&outcome.conn, "amber vole compass", 5);
+        assert!(found.hits.iter().any(|hit| hit.id == id));
+    }
+
+    /// S-3のstamp形式検査: 現行複合形でないstamp行(旧形式・他producer)は
+    /// open時のhealth checkで検出され、修復(drop→再作成)でembed pendingへ
+    /// 回る。行の欠落(未埋め込み)は正常なので修復を繰り返さない。
+    #[test]
+    fn malformed_stamp_rows_are_detected_and_cleared_at_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test("旧stamp行", "本文", None, &["test".into()], "test/client")
+            .unwrap();
+        open_raw(&vault)
+            .execute(
+                "INSERT OR REPLACE INTO note_vecs(id, stamp, embedding) VALUES(?1, ?2, ?3)",
+                rusqlite::params![
+                    id,
+                    crate::embed::EMBED_PRODUCER_STAMP, // 旧: producer単体形式
+                    crate::embed::to_blob(&[1.0, 0.0])
+                ],
+            )
+            .unwrap();
+
+        let outcome = open_db_with_outcome(&vault).unwrap();
+        assert!(
+            outcome.recovered.contains(&DerivedArtifact::NoteVecs),
+            "{:?}",
+            outcome.degraded
+        );
+        let rows: i64 = outcome
+            .conn
+            .query_row("SELECT count(*) FROM note_vecs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "旧形式stamp行が残っている");
+        drop(outcome);
+
+        // 空のnote_vecs(未埋め込み)は正常 — 次のopenは修復を繰り返さない
+        let second = open_db_with_outcome(&vault).unwrap();
+        assert!(second.recovered.is_empty(), "{:?}", second.degraded);
     }
 
     fn propose_supports_pair(vault: &Vault) -> (String, String, String) {
