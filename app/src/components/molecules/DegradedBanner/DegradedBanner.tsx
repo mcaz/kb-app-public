@@ -23,7 +23,9 @@ export function DegradedBanner({ items, variant = "bar" }: DegradedBannerProps) 
             ? t(`degradation.${item.code}`, { remaining: item.remaining })
             : "note" in item
               ? t(`degradation.${item.code}`, { note: item.note, detail: item.detail })
-              : t(`degradation.${item.code}`, { detail: item.detail });
+              : "artifact" in item
+                ? t(`degradation.${item.code}`, { artifact: item.artifact, detail: item.detail })
+                : t(`degradation.${item.code}`, { detail: item.detail });
         return [key, { key, text }] as const;
       }),
     ).values(),

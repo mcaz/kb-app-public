@@ -129,7 +129,11 @@
     "care_list": "お手入れ一覧を取得できませんでした。0件とは限りません: {{detail}}",
     "tag_counts": "タグ一覧を取得できませんでした。0件とは限りません: {{detail}}",
     "graph_nodes": "一部のノートをグラフに表示できませんでした: {{detail}}",
-    "graph_edges": "一部のつながりをグラフに表示できませんでした: {{detail}}"
+    "graph_edges": "一部のつながりをグラフに表示できませんでした: {{detail}}",
+    "index_recovered": "破損していた索引({{artifact}})を自動修復しました: {{detail}}",
+    "index_repair": "索引({{artifact}})を修復できませんでした。代替経路で続行しています: {{detail}}",
+    "governance_write_blocked": "governance台帳が不整合のため、ノートの書込を停止中です: {{detail}}",
+    "artifact_not_ready": "派生索引({{artifact}})が準備できていないため、通常経路で続行しています: {{detail}}"
   },
   "errors": {
     "noteNotFound": "そのノートはまだありません",
