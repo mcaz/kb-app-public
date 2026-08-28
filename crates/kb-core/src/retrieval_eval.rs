@@ -11,9 +11,10 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::degradation::Degradation;
 use crate::retrieval::{
-    AUTO_SEED_LIMIT, RetrievalBundle, RetrievalOptions, RetrievalSource, context_documents,
+    RetrievalBundle, RetrievalOptions, RetrievalSource, context_documents,
     context_documents_for_query,
 };
+use crate::retrieval_profile::{PassagePolicy, RetrievalProfile};
 
 pub const EVALUATION_SCHEMA_VERSION: &str = "2.0.0";
 pub const HOOK_SPILL_THRESHOLD_TOKENS: usize = 12_000;
@@ -141,19 +142,6 @@ pub struct StrategyConfiguration {
     /// `None`は評価専用top3 baselineの本文量予算なしを表す。
     pub estimated_token_budget: Option<usize>,
     pub include_incoming: bool,
-}
-
-impl StrategyConfiguration {
-    fn retrieval_options(self) -> RetrievalOptions {
-        RetrievalOptions {
-            seed_limit: self.seed_limit,
-            max_depth: self.max_depth,
-            candidate_limit: self.candidate_limit,
-            document_limit: self.document_limit,
-            estimated_token_budget: self.estimated_token_budget.unwrap_or(usize::MAX),
-            include_incoming: self.include_incoming,
-        }
-    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -294,6 +282,7 @@ pub fn evaluate(conn: &Connection, suite: &GoldenSuite) -> Result<EvaluationRepo
 
     // read-only transactionを明示終了し、呼び出し側が同じConnectionを続けて使えるようにする。
     transaction.rollback()?;
+    let search_policy = RetrievalProfile::Evaluation.plan().search;
     let failed_cases = cases
         .iter()
         .filter(|case| {
@@ -312,8 +301,8 @@ pub fn evaluate(conn: &Connection, suite: &GoldenSuite) -> Result<EvaluationRepo
         core_version: crate::CORE_VERSION,
         case_count: cases.len(),
         search_configuration: SearchConfiguration {
-            ranked_hit_limit: AUTO_SEED_LIMIT,
-            any_terms: true,
+            ranked_hit_limit: search_policy.limit,
+            any_terms: search_policy.any_terms,
         },
         strategy_configurations: [EvaluationStrategy::Top3, EvaluationStrategy::LinkedV1]
             .into_iter()
@@ -336,8 +325,11 @@ fn evaluate_case(
     surface: EvaluationSurface,
     query: &str,
 ) -> Result<CaseReport> {
+    // 評価は `evaluation` profile(= 本番 hook の `session_auto`)で引く。ここを変えると
+    // 評価値が本番の挙動を指さなくなるので、profile 側の test が一致を固定している。
+    let plan = RetrievalProfile::Evaluation.plan();
     let search_started = Instant::now();
-    let outcome = crate::search::search_mode(conn, query, AUTO_SEED_LIMIT, true);
+    let outcome = crate::search::search_with(conn, query, &plan.search);
     let search_elapsed_us = micros(search_started.elapsed());
     let ranked_hit_ids = outcome
         .hits
@@ -347,7 +339,7 @@ fn evaluate_case(
 
     let mut strategies = Vec::with_capacity(2);
     for strategy in [EvaluationStrategy::Top3, EvaluationStrategy::LinkedV1] {
-        let options = configuration_for(strategy).retrieval_options();
+        let options = retrieval_options_for(strategy);
         let bundle = match strategy {
             EvaluationStrategy::Top3 => context_documents(conn, &ranked_hit_ids, options)?,
             EvaluationStrategy::LinkedV1 => {
@@ -370,29 +362,33 @@ fn evaluate_case(
     })
 }
 
-fn configuration_for(strategy: EvaluationStrategy) -> StrategyConfiguration {
+fn retrieval_options_for(strategy: EvaluationStrategy) -> RetrievalOptions {
     match strategy {
-        EvaluationStrategy::Top3 => StrategyConfiguration {
-            strategy,
+        // 評価専用 baseline。query を渡さないので passage 予算は使われない。
+        EvaluationStrategy::Top3 => RetrievalOptions {
             seed_limit: 3,
             max_depth: 0,
             candidate_limit: 3,
             document_limit: 3,
-            estimated_token_budget: None,
+            estimated_token_budget: usize::MAX,
             include_incoming: false,
+            passage: PassagePolicy::default(),
         },
-        EvaluationStrategy::LinkedV1 => {
-            let options = RetrievalOptions::default();
-            StrategyConfiguration {
-                strategy,
-                seed_limit: options.seed_limit,
-                max_depth: options.max_depth,
-                candidate_limit: options.candidate_limit,
-                document_limit: options.document_limit,
-                estimated_token_budget: Some(options.estimated_token_budget),
-                include_incoming: options.include_incoming,
-            }
-        }
+        EvaluationStrategy::LinkedV1 => RetrievalProfile::Evaluation.plan().retrieval,
+    }
+}
+
+fn configuration_for(strategy: EvaluationStrategy) -> StrategyConfiguration {
+    let options = retrieval_options_for(strategy);
+    StrategyConfiguration {
+        strategy,
+        seed_limit: options.seed_limit,
+        max_depth: options.max_depth,
+        candidate_limit: options.candidate_limit,
+        document_limit: options.document_limit,
+        estimated_token_budget: (options.estimated_token_budget != usize::MAX)
+            .then_some(options.estimated_token_budget),
+        include_incoming: options.include_incoming,
     }
 }
 

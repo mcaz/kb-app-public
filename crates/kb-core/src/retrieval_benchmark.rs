@@ -304,6 +304,170 @@ mod tests {
         assert!(report.challenges.gate.failed_cases.is_empty());
     }
 
+    /// 配信 profile の変種を既存 2 suite で測る preview。正式な matrix(`--profiles`)は
+    /// experiment/base の runner が持つので、ここは assert せず表を出力するだけにする。
+    /// `cargo test -p kb-core retrieval_benchmark::tests::profile_preview -- --ignored --nocapture`
+    #[test]
+    #[ignore = "計測用。結果は docs/retrieval-profiles.md へ写す"]
+    fn profile_preview_on_existing_suites() {
+        use crate::retrieval::{RetrievalOptions, estimate_tokens};
+        use crate::retrieval_profile::RetrievalProfile;
+
+        let suites = [
+            (
+                "google",
+                include_str!("../../../schemas/examples/retrieval-google-benchmark.example.json"),
+            ),
+            (
+                "holdout",
+                include_str!("../../../schemas/examples/retrieval-realistic-holdout.example.json"),
+            ),
+        ];
+        let variants = [
+            ("session_auto", RetrievalProfile::SessionAuto.plan()),
+            ("session_explicit", RetrievalProfile::SessionExplicit.plan()),
+            // 診断用の変種: 落ちた required が AND 検索(any=false)由来か、depth 1 / cand 20 由来かを切り分ける。
+            ("session_explicit(any:true)", {
+                let mut plan = RetrievalProfile::SessionExplicit.plan();
+                plan.search.any_terms = true;
+                plan
+            }),
+            ("session_explicit(depth2,cand50)", {
+                let mut plan = RetrievalProfile::SessionExplicit.plan();
+                plan.retrieval = RetrievalOptions {
+                    max_depth: 2,
+                    candidate_limit: 50,
+                    ..plan.retrieval
+                };
+                plan
+            }),
+            (
+                "routine_auto(B:docs3)",
+                RetrievalProfile::RoutineAuto.plan(),
+            ),
+            ("routine_auto(A:docs0)", {
+                let mut plan = RetrievalProfile::RoutineAuto.plan();
+                plan.retrieval = RetrievalOptions {
+                    document_limit: 0,
+                    ..plan.retrieval
+                };
+                plan
+            }),
+        ];
+        println!(
+            "suite | group | profile | surfaces | required selected | required candidates | excluded | precision | avg docs | avg tokens | card tokens"
+        );
+        for (name, source) in suites {
+            let suite: RetrievalBenchmarkSuite = serde_json::from_str(source).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let vault = create_fixture(&suite, &directory.path().join("vault")).unwrap();
+            let conn = crate::index::open_db(&vault).unwrap();
+            for (group, golden) in [
+                ("control", &suite.controls),
+                ("challenge", &suite.challenges),
+            ] {
+                for (label, plan) in &variants {
+                    let mut surfaces = 0usize;
+                    let mut required_total = 0usize;
+                    let mut required_selected = 0usize;
+                    let mut required_candidates = 0usize;
+                    let mut excluded = 0usize;
+                    let mut selected_total = 0usize;
+                    let mut precision_sum = 0.0f64;
+                    let mut tokens = 0usize;
+                    let mut card_tokens = 0usize;
+                    let mut lost = Vec::new();
+                    for case in &golden.cases {
+                        for (surface, query) in [
+                            ("codex", &case.queries.codex),
+                            ("claude_code", &case.queries.claude_code),
+                            ("chatgpt", &case.queries.chatgpt),
+                        ] {
+                            let outcome = crate::search::search_with(&conn, query, &plan.search);
+                            let ids = outcome
+                                .hits
+                                .iter()
+                                .map(|hit| hit.id.clone())
+                                .collect::<Vec<_>>();
+                            let bundle = crate::retrieval::context_documents_for_query(
+                                &conn,
+                                &ids,
+                                query,
+                                plan.retrieval,
+                            )
+                            .unwrap();
+                            let candidate_ids = bundle
+                                .candidates
+                                .iter()
+                                .map(|candidate| candidate.id.as_str())
+                                .collect::<BTreeSet<_>>();
+                            let selected_ids = bundle
+                                .documents
+                                .iter()
+                                .map(|document| document.id.as_str())
+                                .collect::<BTreeSet<_>>();
+                            surfaces += 1;
+                            required_total += case.required.len();
+                            required_selected += case
+                                .required
+                                .iter()
+                                .filter(|id| selected_ids.contains(id.as_str()))
+                                .count();
+                            required_candidates += case
+                                .required
+                                .iter()
+                                .filter(|id| candidate_ids.contains(id.as_str()))
+                                .count();
+                            excluded += case
+                                .excluded
+                                .iter()
+                                .filter(|id| selected_ids.contains(id.as_str()))
+                                .count();
+                            selected_total += selected_ids.len();
+                            let relevant_selected = case
+                                .required
+                                .iter()
+                                .chain(&case.relevant)
+                                .filter(|id| selected_ids.contains(id.as_str()))
+                                .count();
+                            if !selected_ids.is_empty() {
+                                precision_sum +=
+                                    relevant_selected as f64 / selected_ids.len() as f64;
+                            }
+                            for id in &case.required {
+                                if !selected_ids.contains(id.as_str()) {
+                                    lost.push(format!(
+                                        "{}/{surface}:{id}({})",
+                                        case.id,
+                                        if candidate_ids.contains(id.as_str()) {
+                                            "候補内"
+                                        } else {
+                                            "候補外"
+                                        }
+                                    ));
+                                }
+                            }
+                            tokens += bundle.stats.estimated_tokens;
+                            card_tokens += estimate_tokens(
+                                &serde_json::to_string(&bundle.candidates).unwrap(),
+                            );
+                        }
+                    }
+                    println!(
+                        "{name} | {group} | {label} | {surfaces} | {required_selected}/{required_total} | {required_candidates}/{required_total} | {excluded} | {:.1}% | {:.2} | {:.0} | {:.0}",
+                        precision_sum * 100.0 / surfaces as f64,
+                        selected_total as f64 / surfaces as f64,
+                        tokens as f64 / surfaces as f64,
+                        card_tokens as f64 / surfaces as f64,
+                    );
+                    if !lost.is_empty() && *label != "routine_auto(A:docs0)" {
+                        println!("  lost required: {}", lost.join(", "));
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn fixture_rejects_unknown_relation_targets_before_writing() {
         let mut suite: RetrievalBenchmarkSuite = serde_json::from_str(include_str!(
