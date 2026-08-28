@@ -37,6 +37,10 @@ semantic経路は、モデル配布状態やrunner CPUの差が大きいquery em
 | 1024次元KNN              |                        10回 |  1,000 ms |
 | 本文 + related + similar |                         5回 |  2,000 ms |
 | 5 seed・2ホップ連鎖取得  |                        20回 |  2,000 ms |
+| warm open(health check込み) |                     5回 |  2,000 ms |
+| 単一note更新 median      |          100回の中央値(1回分) |     25 ms |
+| 単一note更新 p95         |            100回のp95(1回分) |     50 ms |
+| 全artifact一括rebuild    |        force_rebuild 6件合計 | 10,000 ms |
 
 初回実装時のDarwin arm64 / rustc 1.97.1 release実測は、索引再構築15,243 ms、
 カテゴリ20回82 ms、一覧5回443 ms、全文検索100回11 ms、KNN 10回263 ms、
@@ -55,6 +59,16 @@ semantic経路は、モデル配布状態やrunner CPUの差が大きいquery em
 初回測定では索引再構築が20,348 msだった。1ノートごとのSQLite autocommitを単一transactionへ
 変更すると15,105 msになったため、このtransactionは速度だけでなく途中失敗時のatomicityも
 通常の回帰テストで固定する。
+
+2026-08-28の派生索引registry導入時に、write経路とopen時自己修復の退行を止める4指標を
+追加した。warm openは構築済みDBの再open(open毎のhealth check込み)5回、単一note更新は
+本番write経路(governanceゲート→registry走査→埋め込み無効化→outbox→commit)100回の
+median / p95(この2つだけ1回分の値が予算)、全artifact一括rebuildは自己修復と同じ
+`force_rebuild` 6件の合計。同端末のserial 3回実測はwarm open 110〜117 ms、
+更新median 5,444〜5,805 us、p95 6,150〜6,482 us、一括rebuild 614〜704 msで、
+絶対値予算の根拠(baseline比+15% / +20%規則と揺らぎの吸収幅)は
+[derived-registry.md](derived-registry.md) に残した。負荷下ではDB初回復元30秒予算を
+baseline・変更後の両方が超え得ることも同日に記録している(serial再実行で判定する)。
 
 ## 実行
 
