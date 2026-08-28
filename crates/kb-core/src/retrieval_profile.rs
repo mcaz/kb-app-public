@@ -6,14 +6,15 @@
 //! MCP tool の入力 schema には出さない(hook 子 process と host の区別は起動引数で行う)。
 //!
 //! 初期値と gate は docs/claude-led-retrieval-discussion.md §8.4 / §8.8 の実験契約に従う。
-//! 実測は docs/retrieval-profiles.md。
+//! 実測は docs/retrieval-profiles.md。統合 core での host 既定と rerank 軸の扱いは
+//! R4 合意(docs/retrieval-integration-core.md)に従う。
 
 use anyhow::Result;
 
 use crate::retrieval::{AUTO_SEED_LIMIT, RetrievalOptions};
 
-/// host 側 MCP `search` の既定件数。tool 引数 `limit` を省略したときの値で、profile 分離前の
-/// 既定(8)を変えない。
+/// `session_explicit` の host `search` 件数。profile 分離前の tool 既定(8)と同じ値で、
+/// 明示選択(`--retrieval-profile session-explicit`)のときだけ使われる。
 pub const HOST_SEARCH_LIMIT: usize = 8;
 /// field ranking の再順位付け対象を最終件数の何倍まで広げるか。8 倍は 10k fixture でも
 /// 最大 40 行に留まり、本文反復だけが強い候補の外から title 一致を回収できる実測上の最小余裕。
@@ -26,7 +27,7 @@ pub const FIELD_RANKING_CANDIDATE_MULTIPLIER: usize = 8;
 pub enum RetrievalProfile {
     /// 管理 hook の子 process(発話ごとの自動 retrieval)。契約 8 の数値そのもの。
     SessionAuto,
-    /// host 側 MCP(read / all 面)で model が明示的に `search` を呼ぶ経路。
+    /// 予算を絞った明示検索の実験変種。`--retrieval-profile` の明示選択でのみ有効。
     SessionExplicit,
     /// routine 由来の定型 prompt 向け変種。この round では benchmark 上でだけ測り、
     /// hook からの自動選択と card 注入は実装しない(実験契約 §8.12)。
@@ -44,11 +45,14 @@ impl RetrievalProfile {
         Self::Evaluation,
     ];
 
-    /// 起動引数の既定が無いときの host 側 profile。hook 子 process は host と同じ read 面を
-    /// 使うので surface では区別できず、hook_mode が `--retrieval-profile session-auto` を
-    /// 明示する。
+    /// 起動引数の既定が無いときの host 側 profile。統合 core では `session_auto`
+    /// (= 現行の候補展開予算そのもの)を既定にする — R4 I-2: 既定 profile には平均 token
+    /// 改善より「必要候補を落とさない」を優先し、challenge candidate recall 85% の
+    /// `session_explicit` は明示選択(`--retrieval-profile`)でのみ有効化する。
+    /// hook 子 process は host と同じ read 面を使うので surface では区別できず、
+    /// hook_mode が従来どおり `--retrieval-profile session-auto` を明示する。
     pub const fn host_default() -> Self {
-        Self::SessionExplicit
+        Self::SessionAuto
     }
 
     /// report・initialize 表示・JSON で使う名前(serde の名前と同じ)。
@@ -312,6 +316,20 @@ mod tests {
         assert_eq!(variant_a.candidate_limit, retrieval.candidate_limit);
     }
 
+    /// 統合 core の host 既定は `session_auto`(R4 I-2)。`session_explicit` を既定へ戻すのは
+    /// 実 KB 評価で required candidate recall 低下 0 等の条件を満たした別 PR の判断。
+    #[test]
+    fn host_default_is_session_auto_which_keeps_the_current_expansion_budget() {
+        assert_eq!(
+            RetrievalProfile::host_default(),
+            RetrievalProfile::SessionAuto
+        );
+        assert_eq!(
+            RetrievalProfile::host_default().plan().retrieval,
+            RetrievalOptions::default()
+        );
+    }
+
     #[test]
     fn labels_round_trip_through_parse_and_serde() {
         for profile in RetrievalProfile::ALL {
@@ -337,10 +355,6 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", mode.label()));
             assert_eq!(serde_json::from_str::<RerankMode>(&json).unwrap(), mode);
         }
-        assert_eq!(
-            RetrievalProfile::host_default(),
-            RetrievalProfile::SessionExplicit
-        );
     }
 
     #[test]

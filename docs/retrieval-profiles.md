@@ -8,6 +8,22 @@
 - KB参照の劣化: kb-app MCP `search`は`no such table: fts_main`で失敗したままで、UserPromptSubmit hookの
   自動retrievalも同じ劣化を返した。本書はrepo正本（契約 / 実験契約 / kb-core）だけに基づく
 
+## 統合coreでの既定の変更（2026-08-28 R4 I-2）
+
+本branchはhost既定を`session_explicit`にして測ったが、統合core（`integration/retrieval-core`）では
+**host既定を`session_auto`**（= 現行の候補展開予算そのもの）にする。rationale:
+
+- 既定profileには「平均token改善」より「必要候補を落とさない」を優先する。`session_explicit`は
+  token −44.8%（G1）を出す一方、holdout challengeでrequired candidate recall 85%
+  （`notes/helios-migration-review-2024`が候補集合から落ちる2 surface）の既知回帰がある
+- `session_explicit`は削除せず、明示選択（`--retrieval-profile session-explicit` / `kb search --profile`）
+  でのみ有効。未知profileのfail-closed・tool schema非露出・hook子processの
+  `--retrieval-profile session-auto`明示は本branchの実装のまま
+- 既定変更を再判断する条件（別PR）: 実KB評価でrequired candidate recall低下0・excluded増加0・
+  token改善が複数query familyで再現・surface別の最低値でもgate通過を同時に満たすこと
+
+以下の本文は実験時点（host既定=`session_explicit`）の記録。routingの現状は上記が優先する。
+
 ## 変更
 
 同じ`search` toolでも、管理hookが発話ごとに自動で引く経路と、host側でmodelが明示的に呼ぶ経路とでは
@@ -18,7 +34,7 @@
 | profile | any | limit | seed | depth | cand | docs | token | incoming | passage（trigger / 件 / token） | 出力 | 用途 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
 | `session_auto` | true | 5 | 5 | 2 | 50 | 10 | 10,000 | true | 4,000 / 3 / 3,600 | 本文 | 管理hookの子process（契約8の数値そのもの） |
-| `session_explicit` | 引数（既定false） | 8 | 5 | 1 | 20 | 5 | 6,000 | true | 4,000 / 2 / 2,400 | 本文 | host側MCP `search`（read / all面の既定） |
+| `session_explicit` | 引数（既定false） | 8 | 5 | 1 | 20 | 5 | 6,000 | true | 4,000 / 2 / 2,400 | 本文 | host側MCP `search`の実験変種（統合coreでは明示選択のみ） |
 | `routine_auto` | true | 5 | 3 | 1 | 20 | 3（変種A: 0） | 3,000 | true | 2,000 / 1 / 1,200 | card-lite + 本文≤3 | benchmark上の変種のみ |
 | `evaluation` | = `session_auto`（同じ計画を返す。一致は`retrieval_profile.rs`のtestで固定） | | | | | | | | | | `kb eval retrieval` / benchmarkの`linked_v1` |
 
@@ -31,15 +47,19 @@
 - `RetrievalCandidate`にauthority（namespace / role / status / scope）を足した（card-liteの素材。envelopeの
   無いlegacy noteでは出力しない）。`OutputShape::CardLite`はこのroundでは応答の組み立てを変えず、
   routine変種のラベルと表示にだけ使う（routine routing・card注入は§8.12の範囲外）
-- routing: 起動引数`--retrieval-profile`（`kb mcp` / `kb-app --mcp`）> host既定`session_explicit`。
-  未知値はfail-closed（`kb-app --mcp`はexit 2、`kb mcp`はエラー終了）。管理hookの子processは
+- routing: 起動引数`--retrieval-profile`（`kb mcp` / `kb-app --mcp`）> host既定（実験時点は
+  `session_explicit`、**統合coreでは`session_auto`** — 冒頭の節）。未知値はfail-closed
+  （`kb-app --mcp`はexit 2、`kb mcp`はエラー終了）。管理hookの子processは
   `child_mcp_args`で`--retrieval-profile session-auto`を明示する（`ai_guard.rs`のhook登録引数は不変）。
   環境変数・markerによる`routine_auto`の自動選択は実装しない（§6-3）
 - 表示: initializeの`capabilities.experimental.kbApp.retrieval_profile`と、`search`応答の
   `structuredContent.retrieval_profile`。tool入力schemaは不変。`kb search --profile`も同じ値を受ける
 - 契約変更なし（契約8はhook経路だけを縛る。§6-4）。`docs/contract.md`・`contract_guard.rs`は触っていない
 - host経路の実挙動変更は1点だけ: read / all面の`search(include_documents)`が`RetrievalOptions::default()`
-  （= `session_auto`）から`session_explicit`の予算へ移る。hook経路はbyte同一（下記）
+  （= `session_auto`）から`session_explicit`の予算へ移る。hook経路はbyte同一（下記）。
+  **統合coreではこの1点を採らず**、host既定=`session_auto`により候補展開は現行予算のまま
+  （`search`の引数省略時既定はprofileに従いlimit 5 / OR結合になる。tool引数`limit` / `any`での
+  上書きは従来どおり）
 
 ## 現行挙動の保証（G0 / G1: `session_auto` = `evaluation`）
 

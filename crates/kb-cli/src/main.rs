@@ -37,14 +37,14 @@ enum Command {
     /// 検索(全文+リンク近傍)
     Search {
         query: Vec<String>,
-        /// 件数。省略時は profile の既定(session-explicit なら 8)
+        /// 件数。省略時は profile の既定(session-auto なら 5、session-explicit なら 8)
         #[arg(long)]
         limit: Option<usize>,
         /// 語を OR 結合(文まるごとの前出し用)
         #[arg(long)]
         any: bool,
         /// 配信 profile(session-auto / session-explicit / routine-auto / evaluation)。
-        /// 省略時は host 既定の session-explicit
+        /// 省略時は host 既定の session-auto(R4 I-2)
         #[arg(long)]
         profile: Option<String>,
     },
@@ -140,7 +140,7 @@ enum Command {
         #[arg(long, default_value = "all")]
         surface: String,
         /// process 固定の配信 profile(session-auto / session-explicit / routine-auto /
-        /// evaluation)。省略時は host 既定の session-explicit
+        /// evaluation)。省略時は host 既定の session-auto(R4 I-2)
         #[arg(long)]
         retrieval_profile: Option<String>,
     },
@@ -1126,7 +1126,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// `--profile` の値。省略時は host 既定(session-explicit)、未知値は既定へ落とさず拒否する。
+/// `--profile` の値。省略時は host 既定(session-auto — R4 I-2)、未知値は既定へ落とさず拒否する。
 fn parse_retrieval_profile(value: Option<&str>) -> Result<RetrievalProfile> {
     Ok(value
         .map(RetrievalProfile::parse)
@@ -1271,7 +1271,7 @@ mod tests {
         );
         assert_eq!(
             super::parse_retrieval_profile(None).unwrap(),
-            RetrievalProfile::SessionExplicit
+            RetrievalProfile::SessionAuto
         );
         assert!(super::parse_retrieval_profile(Some("gui-browse")).is_err());
 

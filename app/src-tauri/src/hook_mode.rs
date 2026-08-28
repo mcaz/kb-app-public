@@ -28,7 +28,8 @@ fn child_mcp_args(client: &str) -> [&str; 8] {
         "--client",
         client,
         // host の read 面と同じ surface なので、hook 用の配信 profile(契約 8 の数値)は
-        // 引数で明示する。省略すると host 既定の session-explicit になる。
+        // 引数で明示する。host 既定(session-auto)と同値だが、既定の変更が hook 経路へ
+        // 波及しないよう明示のまま維持する。
         "--retrieval-profile",
         "session-auto",
     ]

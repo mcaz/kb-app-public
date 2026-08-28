@@ -116,8 +116,9 @@ pub struct ServeOptions {
     /// 書込・保守ツールは別MCP登録へ分離できるようにする。
     pub tool_surface: ToolSurface,
     /// process 固定の配信 profile(`--retrieval-profile`)。`None` は host 既定
-    /// (`session_explicit`)。hook 子 process は同じ read 面を使うので `session_auto` を
-    /// 起動引数で明示する(app の hook_mode)。tool 引数では変えられない。
+    /// (`session_auto` = 現行の候補展開予算 — R4 I-2。`session_explicit` は明示選択のみ)。
+    /// hook 子 process は同じ read 面を使うので `session_auto` を起動引数で明示する
+    /// (app の hook_mode)。tool 引数では変えられない。
     pub retrieval_profile: Option<RetrievalProfile>,
 }
 
@@ -2812,17 +2813,18 @@ mod tests {
         assert!(ServeOptions::default().remote_sync);
         assert_eq!(ServeOptions::default().tool_surface, ToolSurface::All);
         assert_eq!(ServeOptions::default().retrieval_profile, None);
+        // 統合coreのhost既定はsession_auto(R4 I-2)。session_explicitは明示選択のみ。
         assert_eq!(
             ServeOptions::default().resolved_retrieval_profile(),
-            RetrievalProfile::SessionExplicit
+            RetrievalProfile::SessionAuto
         );
         assert_eq!(
             ServeOptions {
-                retrieval_profile: Some(RetrievalProfile::SessionAuto),
+                retrieval_profile: Some(RetrievalProfile::SessionExplicit),
                 ..ServeOptions::default()
             }
             .resolved_retrieval_profile(),
-            RetrievalProfile::SessionAuto
+            RetrievalProfile::SessionExplicit
         );
     }
 
@@ -3343,32 +3345,64 @@ mod tests {
         );
     }
 
-    /// host 側(read / all 面)の既定は `session_explicit`: 同じ 3 段リンクでも depth 1 で
-    /// 止まり、3 段目は候補にも入れない。hook 経路の 2 ホップ(上の test)と対で固定する。
+    /// host 側(read / all 面)の既定は `session_auto`(R4 I-2): hook 経路と同じ現行予算で
+    /// 3 段リンクを 2 ホップまで展開し、必要候補を落とさない。予算を絞る
+    /// `session_explicit` は明示選択(`--retrieval-profile`)のときだけ depth 1 で止まる。
     #[test]
-    fn host_search_defaults_to_session_explicit_and_stops_at_one_hop() {
+    fn host_search_defaults_to_session_auto_and_explicit_opt_in_stops_at_one_hop() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        let [root, direct, _deep] = chain_of_three(&vault);
+        let [root, direct, deep] = chain_of_three(&vault);
+        let arguments = serde_json::json!({
+            "name": "search",
+            "arguments": {
+                "query": "固有番兵ネビュラ",
+                "any": true,
+                "include_documents": true
+            }
+        });
 
+        // 既定(profile 引数なし)= session_auto: 3 段目まで候補・本文に入る。
         let result = handle(
             Some(&vault),
             "test/client",
             true,
             true,
             "tools/call",
-            Some(&serde_json::json!({
-                "name": "search",
-                "arguments": {
-                    "query": "固有番兵ネビュラ",
-                    "any": true,
-                    "include_documents": true
-                }
-            })),
+            Some(&arguments),
         )
         .unwrap()
         .unwrap();
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["retrieval_profile"], "session_auto");
+        assert_eq!(
+            structured["documents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|document| document["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            [root.as_str(), direct.as_str(), deep.as_str()]
+        );
+        assert_eq!(structured["retrieval"]["candidate_limit"], 50);
+        assert_eq!(structured["retrieval"]["document_limit"], 10);
+        assert_eq!(structured["retrieval"]["estimated_token_budget"], 10_000);
 
+        // 明示選択した session_explicit だけが depth 1 で止まり、予算を絞る。
+        let result = handle_with_search_options(
+            Some(&vault),
+            "test/client",
+            true,
+            ToolCallOptions {
+                retrieval_profile: RetrievalProfile::SessionExplicit,
+                ..ToolCallOptions::test(true, true)
+            },
+            &mut RemovalPlans::default(),
+            "tools/call",
+            Some(&arguments),
+        )
+        .unwrap()
+        .unwrap();
         let structured = &result["structuredContent"];
         assert_eq!(structured["retrieval_profile"], "session_explicit");
         assert_eq!(
@@ -3495,12 +3529,13 @@ mod tests {
 
     #[test]
     fn initialize_reports_the_process_fixed_retrieval_profile() {
+        // host 既定は session_auto(R4 I-2)。session_explicit は明示選択でだけ現れる。
         let host = handle(None, "test/client", true, false, "initialize", None)
             .unwrap()
             .unwrap();
         assert_eq!(
             host["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
-            "session_explicit"
+            "session_auto"
         );
         assert_eq!(
             host["capabilities"]["experimental"]["kbApp"]["client_surface"],
@@ -3516,12 +3551,31 @@ mod tests {
         );
         assert_eq!(hook["serverInfo"]["name"], "kb-app-read");
 
+        let explicit = handle_with_search_options(
+            None,
+            "test/client",
+            true,
+            ToolCallOptions {
+                retrieval_profile: RetrievalProfile::SessionExplicit,
+                ..ToolCallOptions::test(false, false)
+            },
+            &mut RemovalPlans::default(),
+            "initialize",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            explicit["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
+            "session_explicit"
+        );
+
         let disabled = handle(None, "test/client", false, false, "initialize", None)
             .unwrap()
             .unwrap();
         assert_eq!(
             disabled["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
-            "session_explicit"
+            "session_auto"
         );
     }
 
