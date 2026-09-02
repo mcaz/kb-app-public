@@ -15,7 +15,10 @@ export interface NotePreviewProps {
   compact: boolean;
   emptyLabel: string;
   backLabel: string;
+  /** 開く操作の名前。ラベルを隠す場合もアクセシブル名として使う。 */
   openLabel: string;
+  /** false でアイコンだけの開くボタンにする。 */
+  showOpenLabel?: boolean;
   onBack: () => void;
   onOpen: (id: string) => void;
   /** 本文中のリンクを辿る先。既定は onOpen と同じ。 */
@@ -29,6 +32,7 @@ export function NotePreview({
   emptyLabel,
   backLabel,
   openLabel,
+  showOpenLabel = true,
   onBack,
   onOpen,
   onOpenLink,
@@ -63,9 +67,14 @@ export function NotePreview({
           </Button>
         )}
         <span className="min-w-0 flex-1" />
-        <Button size="sm" onClick={() => onOpen(note.id)}>
+        <Button
+          size={showOpenLabel ? "sm" : "icon"}
+          aria-label={openLabel}
+          title={openLabel}
+          onClick={() => onOpen(note.id)}
+        >
           <ExternalLink className="size-3.5" />
-          {openLabel}
+          {showOpenLabel && openLabel}
         </Button>
       </div>
 

@@ -1,18 +1,16 @@
 import { tv } from "tailwind-variants";
 
 /**
- * つながり(緑)と近いノート(琥珀)を色で見分ける。右ペインの RelatedList と同じ配色。
- * data-selected の指定を tone ごとに書くのは、CommandItem 既定の bg-accent が
- * tone の背景を上書きして選択中だけ色が消えるため。
+ * 行そのものは検索Modalの結果行と同じ形にし、つながり(緑)と近いノート(琥珀)は
+ * 左端の2pxだけで見分ける。3行になった行を色面で塗ると一覧が読めなくなるため。
+ * data-selected 側にも tone を書くのは、選択枠の border-line が左端まで上書きするから。
  */
 export const relatedItemVariants = tv({
-  base: "flex cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-xs",
+  base: "flex cursor-pointer flex-col items-stretch gap-1 border border-l-2 border-transparent px-3 py-2.5 data-[selected=true]:border-line",
   variants: {
     tone: {
-      linked:
-        "border-grow-soft bg-grow-soft text-grow hover:border-grow data-[selected=true]:border-ink data-[selected=true]:bg-grow-soft data-[selected=true]:text-grow",
-      similar:
-        "border-prop-soft bg-prop-soft text-prop hover:border-prop data-[selected=true]:border-ink data-[selected=true]:bg-prop-soft data-[selected=true]:text-prop",
+      linked: "border-l-grow data-[selected=true]:border-l-grow",
+      similar: "border-l-prop data-[selected=true]:border-l-prop",
     },
   },
 });

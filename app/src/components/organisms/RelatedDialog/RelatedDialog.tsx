@@ -14,7 +14,8 @@ import {
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { NotePreview } from "@/components/organisms/NotePreview";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { useNote } from "@/lib/queries";
+import { formatDateTime } from "@/lib/format";
+import { useHomeState, useNote } from "@/lib/queries";
 import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/lib/searchDialog";
 
 import { relatedItemVariants } from "./variants";
@@ -36,6 +37,10 @@ interface RelatedEntry {
   title: string;
   distance: number | null;
   tone: Tone;
+  /** 一覧の判断材料。NoteView の related/similar は id と title しか持たないので home 側から補う。 */
+  snippet: string;
+  tags: string[];
+  updated: string | null;
 }
 
 /** つながりの一覧と、選んだノートの本文を左右に並べて読む。 */
@@ -46,26 +51,34 @@ export function RelatedDialog({
   onOpenNote,
   onOpenGraph,
 }: RelatedDialogProps) {
-  const { t } = useTranslation(["notes", "common"]);
+  const { t, i18n } = useTranslation(["notes", "common"]);
   const { data: note } = useNote(noteId);
+  const { data: home } = useHomeState();
   const compact = useMediaQuery("(max-width: 759px)");
   const [compactPane, setCompactPane] = useState<SearchPane>("results");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const linked: RelatedEntry[] = (note?.related ?? []).map(([id, title]) => ({
-    key: `linked:${id}`,
-    id,
-    title: title ?? id,
-    distance: null,
-    tone: "linked",
-  }));
-  const similar: RelatedEntry[] = (note?.similar ?? []).map(([id, title, distance]) => ({
-    key: `similar:${id}`,
-    id,
-    title: title ?? id,
-    distance,
-    tone: "similar",
-  }));
+  // recent(500) の範囲外だと本文要約・タグ・更新日が付かない。その行はタイトルだけで出す。
+  const summaries = new Map((home?.notes ?? []).map((hit) => [hit.id, hit]));
+  const entryOf = (id: string, title: string | null, tone: Tone, distance: number | null) => {
+    const hit = summaries.get(id);
+    return {
+      key: `${tone}:${id}`,
+      id,
+      title: title ?? hit?.title ?? id,
+      distance,
+      tone,
+      snippet: hit?.snippet ?? "",
+      tags: hit?.tags ?? [],
+      updated: hit?.updated ?? null,
+    };
+  };
+  const linked: RelatedEntry[] = (note?.related ?? []).map(([id, title]) =>
+    entryOf(id, title, "linked", null),
+  );
+  const similar: RelatedEntry[] = (note?.similar ?? []).map(([id, title, distance]) =>
+    entryOf(id, title, "similar", distance),
+  );
   const entries = [...linked, ...similar];
 
   const effectiveSelectedKey = resolveSearchSelection(
@@ -115,9 +128,24 @@ export function RelatedDialog({
             onSelect={() => select(entry)}
             className={relatedItemVariants({ tone })}
           >
-            <span className="min-w-0 flex-1 truncate">{entry.title}</span>
-            {entry.distance != null && (
-              <span className="shrink-0 text-[10.5px] opacity-75">{entry.distance.toFixed(2)}</span>
+            <div className="flex min-w-0 items-start gap-2">
+              <span className="line-clamp-2 min-w-0 flex-1 font-semibold">{entry.title}</span>
+              {entry.updated && (
+                <span className="text-muted shrink-0 text-[10px]">
+                  {formatDateTime(entry.updated, i18n.language, t("common:date.unknown"))}
+                </span>
+              )}
+            </div>
+            {entry.snippet && (
+              <div className="text-muted line-clamp-2 text-xs">{entry.snippet}</div>
+            )}
+            {(entry.tags.length > 0 || entry.distance != null) && (
+              <div className="text-muted flex items-center gap-2 text-[10.5px]">
+                <span className="min-w-0 truncate">{entry.tags.join(" · ")}</span>
+                {entry.distance != null && (
+                  <span className="ml-auto shrink-0">{entry.distance.toFixed(2)}</span>
+                )}
+              </div>
             )}
           </CommandItem>
         ))
@@ -163,14 +191,15 @@ export function RelatedDialog({
                 <div className="truncate text-sm font-semibold">{note.title}</div>
               </div>
               <Button
-                size="sm"
+                size="icon"
+                aria-label={t("notes:related.openGraph")}
+                title={t("notes:related.openGraph")}
                 onClick={() => {
                   onOpenGraph(note.id);
                   close();
                 }}
               >
                 <Icon as={Waypoints} size="sm" />
-                {t("notes:related.openGraph")}
               </Button>
             </div>
           )}
@@ -204,6 +233,7 @@ export function RelatedDialog({
                   emptyLabel={t("notes:related.previewEmpty")}
                   backLabel={t("notes:related.backToList")}
                   openLabel={t("notes:related.openAsMain")}
+                  showOpenLabel={false}
                   onBack={() => setCompactPane("results")}
                   onOpen={openNote}
                   onOpenLink={openNote}
