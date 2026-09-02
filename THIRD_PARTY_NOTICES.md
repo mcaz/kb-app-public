@@ -6,7 +6,7 @@
 このファイルは依存関係のロックファイルとローカルのパッケージキャッシュから機械生成しました。
 依存を変更したら `python3 scripts/gen-third-party-notices.py` で再生成してください(CONTRIBUTING.md 参照)。
 
-- Rust クレート: 664 件
+- Rust クレート: 663 件
 - npm パッケージ(非dev): 106 件
 - 同梱バイナリ: 1 件
 
@@ -270,7 +270,6 @@
 | js-sys | 0.3.104 | MIT OR Apache-2.0 |
 | json-patch | 3.0.1 | MIT/Apache-2.0 |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 |
-| kb-app | 0.0.1 | (未取得: cacheに無し) |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 |
 | keyring | 4.1.6 | MIT OR Apache-2.0 |
 | keyring-core | 1.0.0 | MIT OR Apache-2.0 |
@@ -1611,11 +1610,4 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 3. This notice may not be removed or altered from any source distribution.
 ```
-
-
-## 付録: ローカルキャッシュに存在せずライセンスを確認できなかったクレート
-
-- kb-app 0.0.1
-
-`cargo fetch` の後に再生成してください。
 

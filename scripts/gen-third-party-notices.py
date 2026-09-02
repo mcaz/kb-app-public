@@ -25,7 +25,15 @@ for block in lock.split("[[package]]")[1:]:
     if n and v:
         pkgs.append((n.group(1), v.group(1)))
 
-local = {os.path.basename(p.rstrip("/")) for p in glob.glob(os.path.join(ROOT, "crates", "*"))}
+# ワークスペース自身のクレートは第三者ではないので除外する。
+root_toml = read(os.path.join(ROOT, "Cargo.toml")) or ""
+members = re.findall(r'"([^"]+)"', (re.search(r'^members\s*=\s*\[(.*?)\]', root_toml, re.M | re.S) or type("", (), {"group": lambda *_: ""})()).group(1))
+local = set()
+for m in members:
+    mt = read(os.path.join(ROOT, m, "Cargo.toml")) or ""
+    nm = re.search(r'^name\s*=\s*"(.*?)"', mt, re.M)
+    if nm:
+        local.add(nm.group(1))
 rust, missing = [], []
 license_texts = {}   # spdx -> (text, source_pkg)
 notices = {}         # sha -> (text, [pkgs])
