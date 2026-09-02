@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
+import { NotePreview } from "@/components/organisms/NotePreview";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { formatDateTime } from "@/lib/format";
@@ -26,7 +27,6 @@ import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/
 import { useSession } from "@/lib/stores/session";
 
 import { SearchFilterBar } from "./SearchFilterBar";
-import { SearchPreview } from "./SearchPreview";
 
 export interface GlobalSearchDialogProps {
   open: boolean;
@@ -215,9 +215,12 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
 
             {showPreview && (
               <section className="bg-panel min-h-0 min-w-0">
-                <SearchPreview
+                <NotePreview
                   noteId={effectiveSelectedId}
                   compact={compact}
+                  emptyLabel={t("notes:search.previewEmpty")}
+                  backLabel={t("notes:search.backToResults")}
+                  openLabel={t("notes:search.openNote")}
                   onBack={() => setCompactPane("results")}
                   onOpen={openNote}
                 />

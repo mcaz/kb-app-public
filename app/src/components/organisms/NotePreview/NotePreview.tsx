@@ -9,14 +9,30 @@ import { IN_TAURI } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useNote } from "@/lib/queries";
 
-interface SearchPreviewProps {
+export interface NotePreviewProps {
   noteId: string | null;
+  /** 一覧と同時に置けない幅では、この面だけを出して戻る導線を足す。 */
   compact: boolean;
+  emptyLabel: string;
+  backLabel: string;
+  openLabel: string;
   onBack: () => void;
   onOpen: (id: string) => void;
+  /** 本文中のリンクを辿る先。既定は onOpen と同じ。 */
+  onOpenLink?: (id: string) => void;
 }
 
-export function SearchPreview({ noteId, compact, onBack, onOpen }: SearchPreviewProps) {
+/** 一覧の隣に置く読み取り専用の本文面。検索と関連の2つの Modal が共有する。 */
+export function NotePreview({
+  noteId,
+  compact,
+  emptyLabel,
+  backLabel,
+  openLabel,
+  onBack,
+  onOpen,
+  onOpenLink,
+}: NotePreviewProps) {
   const { t, i18n } = useTranslation(["notes", "common"]);
   const { data: note, isPending } = useNote(noteId);
   const at = (iso: string | null) => formatDateTime(iso, i18n.language, t("common:date.unknown"));
@@ -24,7 +40,7 @@ export function SearchPreview({ noteId, compact, onBack, onOpen }: SearchPreview
   if (!noteId) {
     return (
       <div className="text-muted flex h-full items-center justify-center p-8 text-sm">
-        {t("notes:search.previewEmpty")}
+        {emptyLabel}
       </div>
     );
   }
@@ -43,13 +59,13 @@ export function SearchPreview({ noteId, compact, onBack, onOpen }: SearchPreview
         {compact && (
           <Button variant="quiet" size="sm" onClick={onBack}>
             <ArrowLeft className="size-4" />
-            {t("notes:search.backToResults")}
+            {backLabel}
           </Button>
         )}
         <span className="min-w-0 flex-1" />
         <Button size="sm" onClick={() => onOpen(note.id)}>
           <ExternalLink className="size-3.5" />
-          {t("notes:search.openNote")}
+          {openLabel}
         </Button>
       </div>
 
@@ -76,7 +92,7 @@ export function SearchPreview({ noteId, compact, onBack, onOpen }: SearchPreview
           body={note.body}
           vaultRoot={note.vault_root}
           inTauri={IN_TAURI}
-          onOpenNote={onOpen}
+          onOpenNote={onOpenLink ?? onOpen}
         />
       </div>
     </article>
