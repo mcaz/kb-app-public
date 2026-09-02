@@ -71,10 +71,7 @@
     "similar": "近いノート",
     "similarEmpty": "見つかりませんでした",
     "previewEmpty": "一覧から選ぶと、ここに内容が表示されます。",
-    "backToList": "つながり一覧へ戻る",
-    "keyMove": "↑↓ 選択",
-    "keyOpen": "Enter 本文として開く",
-    "keyClose": "Esc 閉じる"
+    "backToList": "つながり一覧へ戻る"
   },
   "note": {
     "deprecated": "しまってある",

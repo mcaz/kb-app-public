@@ -71,10 +71,7 @@
     "similar": "Similar notes",
     "similarEmpty": "None found",
     "previewEmpty": "Choose an item to preview it here.",
-    "backToList": "Back to the list",
-    "keyMove": "↑↓ Select",
-    "keyOpen": "Enter Open as main note",
-    "keyClose": "Esc Close"
+    "backToList": "Back to the list"
   },
   "note": {
     "deprecated": "Archived",

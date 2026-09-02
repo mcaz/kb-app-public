@@ -128,11 +128,19 @@ export function RelatedDialog({
       <DialogContent
         showCloseButton={false}
         className="h-[80vh] max-h-[760px] w-[calc(100%-1rem)] max-w-[1180px] gap-0 overflow-hidden p-0 sm:max-w-[1180px]"
-        onKeyDown={(event) => {
-          if (!compact || effectiveCompactPane !== "preview" || event.key !== "Enter") return;
-          if (event.nativeEvent.isComposing || !selected) return;
-          event.preventDefault();
-          openNote(selected.id);
+        // capture で拾うのは、cmdk が Enter を onSelect に変えるより先に決めたいため。
+        onKeyDownCapture={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            setTab((current) => (current === "linked" ? "similar" : "linked"));
+            return;
+          }
+          if (event.key === "Enter" && selected) {
+            event.preventDefault();
+            event.stopPropagation();
+            openNote(selected.id);
+          }
         }}
       >
         <DialogTitle className="sr-only">{t("notes:related.dialogTitle")}</DialogTitle>
@@ -254,12 +262,6 @@ export function RelatedDialog({
               </section>
             )}
           </div>
-
-          <footer className="border-line text-muted flex h-10 flex-none items-center gap-4 border-t px-3 text-[11px] max-[560px]:hidden">
-            {showList && <span>{t("notes:related.keyMove")}</span>}
-            <span>{t("notes:related.keyOpen")}</span>
-            <span>{t("notes:related.keyClose")}</span>
-          </footer>
         </Command>
       </DialogContent>
     </Dialog>
