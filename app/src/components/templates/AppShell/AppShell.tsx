@@ -16,7 +16,7 @@ export function AppShell({ banner, tabs, sidebar, children }: AppShellProps) {
         <div
           id="workspace-panel"
           role="tabpanel"
-          className="bg-panel min-w-0 flex-1 overflow-hidden"
+          className="bg-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
         >
           {children}
         </div>
