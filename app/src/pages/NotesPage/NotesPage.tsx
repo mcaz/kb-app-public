@@ -7,7 +7,6 @@ import { Button } from "@/components/atoms/ui/button";
 import { CategoryNoteList } from "@/components/organisms/CategoryNoteList";
 import { NotePane } from "@/components/organisms/NotePane";
 import { RelatedDialog } from "@/components/organisms/RelatedDialog";
-import { RelatedNoteDialog } from "@/components/organisms/RelatedNoteDialog";
 import { NotesLayout } from "@/components/templates/NotesLayout";
 import { useSession } from "@/lib/stores/session";
 
@@ -26,7 +25,6 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
   const showCategoryList = useSession((s) => s.showCategoryList);
   const focusGraph = useSession((s) => s.focusGraph);
   const [relatedOpen, setRelatedOpen] = useState(false);
-  const [relatedNoteId, setRelatedNoteId] = useState<string | null>(null);
 
   const list = selectedCategory !== null && (
     <CategoryNoteList
@@ -63,19 +61,8 @@ export function NotesPage({ onOpenSearch }: NotesPageProps) {
         noteId={selectedId}
         open={relatedOpen}
         onOpenChange={setRelatedOpen}
-        onOpenNote={setRelatedNoteId}
+        onOpenNote={openNote}
         onOpenGraph={focusGraph}
-      />
-      <RelatedNoteDialog
-        noteId={relatedNoteId}
-        onOpenChange={(open) => {
-          if (!open) setRelatedNoteId(null);
-        }}
-        onOpenNote={setRelatedNoteId}
-        onPromote={(id) => {
-          openNote(id);
-          setRelatedNoteId(null);
-        }}
       />
     </NotesLayout>
   );

@@ -64,14 +64,14 @@
     "open": "Related",
     "dialogTitle": "Linked and similar notes",
     "dialogDescription": "Shows notes linked to the current note and notes with similar content.",
-    "noteDialogTitle": "Related note",
-    "noteDialogDescription": "Shows the selected related note in a modal.",
     "openAsMain": "Open as main note",
     "openGraph": "View in graph",
     "linked": "Linked notes",
     "linkedEmpty": "None yet",
     "similar": "Similar notes",
-    "similarEmpty": "None found"
+    "similarEmpty": "None found",
+    "previewEmpty": "Choose an item to preview it here.",
+    "backToList": "Back to the list"
   },
   "note": {
     "deprecated": "Archived",
