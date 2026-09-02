@@ -1,16 +1,19 @@
 import { tv } from "tailwind-variants";
 
-/**
- * 行そのものは検索Modalの結果行と同じ形にし、つながり(緑)と近いノート(琥珀)は
- * 左端の2pxだけで見分ける。3行になった行を色面で塗ると一覧が読めなくなるため。
- * data-selected 側にも tone を書くのは、選択枠の border-line が左端まで上書きするから。
- */
+/** 行は検索Modalの結果行と同じ形。つながりと近いノートの区別はタブ側の色が持つ。 */
 export const relatedItemVariants = tv({
-  base: "flex cursor-pointer flex-col items-stretch gap-1 border border-l-2 border-transparent px-3 py-2.5 data-[selected=true]:border-line",
+  base: "flex cursor-pointer flex-col items-stretch gap-1 border border-transparent px-3 py-2.5 data-[selected=true]:border-line",
+});
+
+/** 面の色(つながり=緑 / 近いノート=琥珀)はここだけが持つ。 */
+export const relatedTabVariants = tv({
+  base: "flex cursor-pointer items-center gap-1.5 rounded-t-md border-b-2 border-transparent bg-transparent px-3 py-1.5 text-xs",
   variants: {
-    tone: {
-      linked: "border-l-grow data-[selected=true]:border-l-grow",
-      similar: "border-l-prop data-[selected=true]:border-l-prop",
-    },
+    tone: { linked: "", similar: "" },
+    active: { true: "font-semibold", false: "text-muted hover:text-ink" },
   },
+  compoundVariants: [
+    { tone: "linked", active: true, class: "border-grow bg-grow-soft text-grow" },
+    { tone: "similar", active: true, class: "border-prop bg-prop-soft text-prop" },
+  ],
 });

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
-import { Command, CommandGroup, CommandItem, CommandList } from "@/components/atoms/ui/command";
+import { Command, CommandItem, CommandList } from "@/components/atoms/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +18,7 @@ import { formatDateTime } from "@/lib/format";
 import { useHomeState, useNote } from "@/lib/queries";
 import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/lib/searchDialog";
 
-import { relatedItemVariants } from "./variants";
+import { relatedItemVariants, relatedTabVariants } from "./variants";
 
 export interface RelatedDialogProps {
   noteId: string | null;
@@ -57,6 +57,8 @@ export function RelatedDialog({
   const compact = useMediaQuery("(max-width: 759px)");
   const [compactPane, setCompactPane] = useState<SearchPane>("results");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  // つながりが本命なので既定はこちら。近いノートはまだ関連づいていない候補。
+  const [tab, setTab] = useState<Tone>("linked");
 
   // recent(500) の範囲外だと本文要約・タグ・更新日が付かない。その行はタイトルだけで出す。
   const summaries = new Map((home?.notes ?? []).map((hit) => [hit.id, hit]));
@@ -79,7 +81,7 @@ export function RelatedDialog({
   const similar: RelatedEntry[] = (note?.similar ?? []).map(([id, title, distance]) =>
     entryOf(id, title, "similar", distance),
   );
-  const entries = [...linked, ...similar];
+  const entries = tab === "linked" ? linked : similar;
 
   const effectiveSelectedKey = resolveSearchSelection(
     selectedKey,
@@ -92,6 +94,7 @@ export function RelatedDialog({
 
   const close = () => {
     setCompactPane("results");
+    setTab("linked");
     onOpenChange(false);
   };
 
@@ -106,58 +109,19 @@ export function RelatedDialog({
     else openNote(entry.id);
   };
 
-  const group = (tone: Tone, list: RelatedEntry[], head: string, empty: string) => (
-    <CommandGroup
-      className="px-1 pb-2"
-      heading={
-        <span className="text-muted flex items-center gap-1.5 text-[11.5px] tracking-[0.08em]">
-          <Icon as={tone === "linked" ? Link : Sparkles} size="sm" />
-          {head}
-          <span>({list.length})</span>
-        </span>
-      }
-    >
-      {list.length === 0 ? (
-        <div className="text-muted px-2 py-1 text-xs">{empty}</div>
-      ) : (
-        list.map((entry) => (
-          <CommandItem
-            key={entry.key}
-            value={entry.key}
-            onMouseMove={() => setSelectedKey(entry.key)}
-            onSelect={() => select(entry)}
-            className={relatedItemVariants({ tone })}
-          >
-            <div className="flex min-w-0 items-start gap-2">
-              <span className="line-clamp-2 min-w-0 flex-1 font-semibold">{entry.title}</span>
-              {entry.updated && (
-                <span className="text-muted shrink-0 text-[10px]">
-                  {formatDateTime(entry.updated, i18n.language, t("common:date.unknown"))}
-                </span>
-              )}
-            </div>
-            {entry.snippet && (
-              <div className="text-muted line-clamp-2 text-xs">{entry.snippet}</div>
-            )}
-            {(entry.tags.length > 0 || entry.distance != null) && (
-              <div className="text-muted flex items-center gap-2 text-[10.5px]">
-                <span className="min-w-0 truncate">{entry.tags.join(" · ")}</span>
-                {entry.distance != null && (
-                  <span className="ml-auto shrink-0">{entry.distance.toFixed(2)}</span>
-                )}
-              </div>
-            )}
-          </CommandItem>
-        ))
-      )}
-    </CommandGroup>
-  );
+  const tabs: { tone: Tone; label: string; count: number }[] = [
+    { tone: "linked", label: t("notes:related.linked"), count: linked.length },
+    { tone: "similar", label: t("notes:related.similar"), count: similar.length },
+  ];
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!next) setCompactPane("results");
+        if (!next) {
+          setCompactPane("results");
+          setTab("linked");
+        }
         onOpenChange(next);
       }}
     >
@@ -208,18 +172,67 @@ export function RelatedDialog({
             {showList && (
               <section className="border-line flex min-h-0 min-w-0 flex-col border-r max-[759px]:border-r-0">
                 <DegradedBanner items={note?.degraded ?? []} variant="inline" />
+                <div className="border-line flex flex-none items-end gap-1 border-b px-2 pt-2">
+                  {tabs.map((entry) => (
+                    <button
+                      key={entry.tone}
+                      type="button"
+                      aria-pressed={tab === entry.tone}
+                      onClick={() => setTab(entry.tone)}
+                      className={relatedTabVariants({
+                        tone: entry.tone,
+                        active: tab === entry.tone,
+                      })}
+                    >
+                      <Icon as={entry.tone === "linked" ? Link : Sparkles} size="sm" />
+                      {entry.label}
+                      <span className="opacity-70">({entry.count})</span>
+                    </button>
+                  ))}
+                </div>
                 <CommandList className="max-h-none min-h-0 flex-1 px-2 py-2">
-                  {group(
-                    "linked",
-                    linked,
-                    t("notes:related.linked"),
-                    t("notes:related.linkedEmpty"),
-                  )}
-                  {group(
-                    "similar",
-                    similar,
-                    t("notes:related.similar"),
-                    t("notes:related.similarEmpty"),
+                  {entries.length === 0 ? (
+                    <div className="text-muted px-3 py-2 text-xs">
+                      {tab === "linked"
+                        ? t("notes:related.linkedEmpty")
+                        : t("notes:related.similarEmpty")}
+                    </div>
+                  ) : (
+                    entries.map((entry) => (
+                      <CommandItem
+                        key={entry.key}
+                        value={entry.key}
+                        onMouseMove={() => setSelectedKey(entry.key)}
+                        onSelect={() => select(entry)}
+                        className={relatedItemVariants()}
+                      >
+                        <div className="flex min-w-0 items-start gap-2">
+                          <span className="line-clamp-2 min-w-0 flex-1 font-semibold">
+                            {entry.title}
+                          </span>
+                          {entry.updated && (
+                            <span className="text-muted shrink-0 text-[10px]">
+                              {formatDateTime(
+                                entry.updated,
+                                i18n.language,
+                                t("common:date.unknown"),
+                              )}
+                            </span>
+                          )}
+                        </div>
+                        {entry.snippet && (
+                          <div className="text-muted line-clamp-2 text-xs">{entry.snippet}</div>
+                        )}
+                        {(entry.tags.length > 0 || entry.distance != null) && (
+                          <div className="text-muted flex items-center gap-2 text-[10.5px]">
+                            <span className="min-w-0 truncate">{entry.tags.join(" · ")}</span>
+                            {entry.distance != null && (
+                              <span className="ml-auto shrink-0">{entry.distance.toFixed(2)}</span>
+                            )}
+                          </div>
+                        )}
+                      </CommandItem>
+                    ))
                   )}
                 </CommandList>
               </section>
