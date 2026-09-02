@@ -11,3 +11,6 @@ app/src-tauri/binaries/git-lfs*
 
 # macOS が各ディレクトリに勝手に作る
 .DS_Store
+
+# ローカル専用(絶対path・他プロジェクト参照が入る)
+.claude/launch.json
