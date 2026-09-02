@@ -1,5 +1,8 @@
 {
   "around": "Around “{{title}}”",
   "showAll": "Show everything",
-  "hint": "Click to open / drag to move / scroll to zoom"
+  "hint": "Click to open / drag to move / scroll to zoom",
+  "loading": "Loading connections…",
+  "retry": "Retry",
+  "empty": "There are no notes to show."
 }
