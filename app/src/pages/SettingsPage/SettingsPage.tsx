@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import {
   Select,
@@ -7,15 +8,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/atoms/ui/select";
+import { Switch } from "@/components/atoms/ui/switch";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
+import { useErrorText } from "@/hooks/useErrorText";
 import { SUPPORTED_LANGUAGES, isLanguage } from "@/i18n";
+import { useAutostart, useSetAutostart } from "@/lib/queries";
 import { usePrefs } from "@/lib/stores/prefs";
 import { isTheme, THEMES } from "@/lib/theme";
 
 import { SettingRow } from "./SettingRow";
 
 /**
- * 端末ごとの設定。ここに置くのは「この端末での見え方」だけで、
+ * 端末ごとの設定。ここに置くのは「この端末での見え方・ふるまい」だけで、
  * vault の中身に影響するものは置かない(ノートは AI の領分 — 原則)。
  */
 export function SettingsPage() {
@@ -23,6 +27,9 @@ export function SettingsPage() {
   const theme = usePrefs((s) => s.theme);
   const language = usePrefs((s) => s.language);
   const setPrefs = usePrefs((s) => s.set);
+  const { data: autostart, isPending: isAutostartPending } = useAutostart();
+  const setAutostart = useSetAutostart();
+  const errorText = useErrorText();
 
   const themeLabel = {
     system: t("settings.themeSystem"),
@@ -30,11 +37,12 @@ export function SettingsPage() {
     dark: t("settings.themeDark"),
   };
   const languageLabel = { ja: t("settings.languageJa"), en: t("settings.languageEn") };
+  const autostartSupported = autostart?.supported ?? false;
 
   return (
     <SinglePaneLayout>
       <div className="max-w-[46em] px-6 py-5">
-        <h1 className="mb-4 text-lg font-bold">{t("settings.theme")}</h1>
+        <h1 className="mb-4 text-lg font-bold">{t("settings.general")}</h1>
         <h2 className="text-muted mb-2 text-xs tracking-[0.08em]">{t("settings.appearance")}</h2>
 
         <div className="border-line bg-panel flex flex-col gap-3 rounded-xl border px-4 py-3.5">
@@ -78,6 +86,32 @@ export function SettingsPage() {
                 ))}
               </SelectContent>
             </Select>
+          </SettingRow>
+        </div>
+
+        <h2 className="text-muted mt-5 mb-2 text-xs tracking-[0.08em]">{t("settings.startup")}</h2>
+
+        <div className="border-line bg-panel flex flex-col gap-3 rounded-xl border px-4 py-3.5">
+          <SettingRow
+            id="setting-autostart"
+            label={t("settings.launchAtLogin")}
+            description={
+              autostartSupported
+                ? t("settings.launchAtLoginDescription")
+                : t("settings.launchAtLoginUnsupported")
+            }
+          >
+            <Switch
+              id="setting-autostart"
+              checked={autostart?.enabled ?? false}
+              disabled={isAutostartPending || setAutostart.isPending || !autostartSupported}
+              aria-describedby="setting-autostart-description"
+              onCheckedChange={(checked) => {
+                setAutostart.mutate(checked, {
+                  onError: (error) => toast(errorText(error)),
+                });
+              }}
+            />
           </SettingRow>
         </div>
 

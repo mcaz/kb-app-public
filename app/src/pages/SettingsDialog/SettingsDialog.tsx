@@ -18,7 +18,7 @@ export interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type SettingsSection = "kb" | "connect" | "theme";
+type SettingsSection = "kb" | "connect" | "general";
 
 /** KB利用・接続・端末設定を、アプリ本体の画面遷移を変えずにまとめて扱う。 */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
@@ -27,7 +27,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const items = [
     { id: "kb" as const, icon: Brain, label: t("settings.kbUsage") },
     { id: "connect" as const, icon: Plug, label: t("nav.connect") },
-    { id: "theme" as const, icon: Palette, label: t("settings.theme") },
+    { id: "general" as const, icon: Palette, label: t("settings.general") },
   ];
 
   return (

@@ -19,6 +19,20 @@ export const useSettings = () =>
 export const useAiGuardStatus = () =>
   useQuery({ queryKey: queryKeys.aiGuard, queryFn: api.settingsAiGuardStatus });
 
+/** ログイン自動起動。正本はOSのログイン項目なので、設定ファイルとは別に引く。 */
+export const useAutostart = () =>
+  useQuery({ queryKey: queryKeys.autostart, queryFn: api.autostartStatus });
+
+export function useSetAutostart() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.autostartSet,
+    onSuccess: (state) => {
+      qc.setQueryData(queryKeys.autostart, state);
+    },
+  });
+}
+
 export function useInstallAiGuard() {
   const qc = useQueryClient();
   return useMutation({

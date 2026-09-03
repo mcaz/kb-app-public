@@ -78,6 +78,11 @@ LaunchServices registration and launch. It leaves `kb-app --mcp` processes runni
 reconnect MCP in each active AI client after the update. `install:app` remains as a
 compatibility alias.
 
+The GUI is resident (ADR-0017): closing the window hides it, so "the app is not on screen"
+does not mean it stopped. Quit it from the tray menu, or with
+`osascript -e 'quit app "kb-app"'` — which is also what the deploy script uses. A release
+build registers a login item on its first run; debug builds never do.
+
 Use kb-app MCP `search` and `get` for prior product decisions before making a
 conflicting design choice. Do not use the vault files as a shortcut.
 

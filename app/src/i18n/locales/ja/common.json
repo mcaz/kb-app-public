@@ -53,9 +53,13 @@
     "starting": "起動しています…",
     "startupFailed": "kb-appを起動できませんでした"
   },
+  "tray": {
+    "show": "kb-app を開く",
+    "quit": "終了"
+  },
   "settings": {
     "title": "設定",
-    "dialogDescription": "AIでのKB利用、接続、この端末の見た目を設定します。",
+    "dialogDescription": "AIでのKB利用、接続、この端末の見た目と起動を設定します。",
     "kbUsage": "KBの利用",
     "aiUsage": "AIとの会話",
     "aiGuardTitle": "生ファイルをAIから保護",
@@ -97,6 +101,7 @@
     "gptKbOnDone": "GPT / CodexでのKB利用を有効にしました",
     "gptKbOffDone": "GPT / CodexでのKB利用を無効にしました",
     "aiKbRestartNote": "正確に比較するには、切り替えたAIアプリを再起動し、新しい会話を始めてください。会話へすでに渡ったKBの内容は途中で取り除けません。",
+    "general": "一般",
     "appearance": "見た目",
     "theme": "テーマ",
     "themeSystem": "システムに合わせる",
@@ -105,6 +110,10 @@
     "language": "言語",
     "languageJa": "日本語",
     "languageEn": "English",
+    "startup": "起動",
+    "launchAtLogin": "PCの起動時に自動で始める",
+    "launchAtLoginDescription": "画面は出さず、常駐したままトレイのアイコンから開けるようにします。",
+    "launchAtLoginUnsupported": "このOSではログイン時の自動起動を登録できません。",
     "note": "この設定はこの端末にだけ保存されます(ノートには入りません)。"
   },
   "degradation": {

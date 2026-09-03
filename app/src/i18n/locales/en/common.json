@@ -53,9 +53,13 @@
     "starting": "Starting…",
     "startupFailed": "kb-app could not start"
   },
+  "tray": {
+    "show": "Open kb-app",
+    "quit": "Quit"
+  },
   "settings": {
     "title": "Settings",
-    "dialogDescription": "Manage AI knowledge-base use, connections, and appearance for this device.",
+    "dialogDescription": "Manage AI knowledge-base use, connections, appearance, and startup for this device.",
     "kbUsage": "Knowledge base",
     "aiUsage": "AI conversations",
     "aiGuardTitle": "Protect raw files from AI",
@@ -97,6 +101,7 @@
     "gptKbOnDone": "Knowledge-base use enabled for GPT / Codex",
     "gptKbOffDone": "Knowledge-base use disabled for GPT / Codex",
     "aiKbRestartNote": "For an accurate comparison, restart the AI app you changed and begin a new conversation. Knowledge already added to a conversation cannot be removed midway.",
+    "general": "General",
     "appearance": "Appearance",
     "theme": "Theme",
     "themeSystem": "Match the system",
@@ -105,6 +110,10 @@
     "language": "Language",
     "languageJa": "日本語",
     "languageEn": "English",
+    "startup": "Startup",
+    "launchAtLogin": "Start automatically when this computer starts",
+    "launchAtLoginDescription": "Runs in the background without a window, ready to open from the tray icon.",
+    "launchAtLoginUnsupported": "This operating system cannot register a login item.",
     "note": "These settings are stored on this device only (they never go into your notes)."
   },
   "degradation": {

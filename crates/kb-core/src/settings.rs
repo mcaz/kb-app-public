@@ -20,6 +20,9 @@ pub struct Settings {
     pub ai_kb_enabled: bool,
     pub claude_kb_enabled: bool,
     pub gpt_kb_enabled: bool,
+    /// ログイン自動起動の既定を適用済みか。登録の正本はOS側のログイン項目で、
+    /// ここは「一度でも既定を書いたか」だけを覚える(`autostart::initialize`)。
+    pub launch_at_login_initialized: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +32,8 @@ impl Default for Settings {
             ai_kb_enabled: true,
             claude_kb_enabled: true,
             gpt_kb_enabled: true,
+            // 既存利用者にも初回起動で1回だけ既定を適用する。
+            launch_at_login_initialized: false,
         }
     }
 }
@@ -63,6 +68,10 @@ pub fn set_claude_kb_enabled(enabled: bool) -> Result<Settings> {
 
 pub fn set_gpt_kb_enabled(enabled: bool) -> Result<Settings> {
     update(|settings| settings.gpt_kb_enabled = enabled)
+}
+
+pub fn mark_launch_at_login_initialized() -> Result<Settings> {
+    update(|settings| settings.launch_at_login_initialized = true)
 }
 
 fn update(change: impl FnOnce(&mut Settings)) -> Result<Settings> {
@@ -136,6 +145,7 @@ mod tests {
                 ai_kb_enabled: false,
                 claude_kb_enabled: false,
                 gpt_kb_enabled: true,
+                ..Settings::default()
             },
         )
         .unwrap();
@@ -146,6 +156,7 @@ mod tests {
                 ai_kb_enabled: false,
                 claude_kb_enabled: false,
                 gpt_kb_enabled: true,
+                ..Settings::default()
             }
         );
 
@@ -159,6 +170,7 @@ mod tests {
                 ai_kb_enabled: true,
                 claude_kb_enabled: true,
                 gpt_kb_enabled: false,
+                ..Settings::default()
             }
         );
     }
@@ -175,8 +187,25 @@ mod tests {
                 ai_kb_enabled: false,
                 claude_kb_enabled: true,
                 gpt_kb_enabled: true,
+                ..Settings::default()
             }
         );
+    }
+
+    /// 自動起動の既定は「1回だけ適用する」ので、この印が落ちると毎回登録し直して
+    /// ユーザーがOS側で外した設定を打ち消す。
+    #[test]
+    fn the_launch_at_login_mark_persists_and_defaults_to_unapplied() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, r#"{"ai_kb_enabled":true}"#).unwrap();
+        assert!(!load_at(&path).unwrap().launch_at_login_initialized);
+
+        update_at(&path, |settings| {
+            settings.launch_at_login_initialized = true;
+        })
+        .unwrap();
+        assert!(load_at(&path).unwrap().launch_at_login_initialized);
     }
 
     #[test]
@@ -185,6 +214,7 @@ mod tests {
             ai_kb_enabled: true,
             claude_kb_enabled: false,
             gpt_kb_enabled: true,
+            ..Settings::default()
         };
 
         assert!(!settings.ai_kb_enabled_for("claude-code/claude"));

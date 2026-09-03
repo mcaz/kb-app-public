@@ -15,7 +15,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# tray-icon: 常駐して trayアイコンから復帰する(ADR-0017)
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 kb-core = { path = "../../crates/kb-core", features = ["specta"] }
 # TS 型と invoke ラッパの生成(app/src/lib/bindings.ts)。手書きの型合わせを廃止する
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
