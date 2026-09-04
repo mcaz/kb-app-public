@@ -24,6 +24,7 @@ import { useFileDownload, useFileFetch, useFileOpen, useFilePreview } from "@/li
 import { useSession } from "@/lib/stores/session";
 
 import { fileKind } from "./fileKind";
+import { FileThumbnail } from "./FileThumbnail";
 import { filePaneTabVariants, relatedItemVariants } from "./variants";
 
 import type { FileCard } from "@/lib/api";
@@ -163,6 +164,9 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
 
                 {pane === "file" ? (
                   <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+                    {/* 一覧のカードと同じ見え方。どのファイルを開いているかが、
+                        右の面を読まなくても分かる */}
+                    <FileThumbnail file={file} className="h-32 rounded-md border" />
                     <dl className="flex flex-col gap-1.5 text-xs">
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted">{t("details.kind")}</dt>
