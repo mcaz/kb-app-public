@@ -32,11 +32,11 @@ export function FileCard({ file, onOpen, onPurge, busy = false }: FileCardProps)
 
   return (
     // カード全体を button にすると中へ操作を足せない(button の入れ子は不正)。
-    // 開く口は内側の button に閉じ込め、操作はその外に並べる
-    <div className={fileCardVariants()}>
+    // 開く口は内側の button に閉じ込め、操作はその外へ重ねる
+    <div className={fileCardVariants({ className: "relative" })}>
       <button type="button" className="block w-full min-w-0 text-left" onClick={onOpen}>
         <FileThumbnail file={file} />
-        <span className="block min-w-0 p-[12px_12px_4px_12px]">
+        <span className="block min-w-0 p-[12px]">
           <span className="line-clamp-2 text-[15px] leading-[1.35] font-bold break-all">
             {file.name}
           </span>
@@ -60,9 +60,13 @@ export function FileCard({ file, onOpen, onPurge, busy = false }: FileCardProps)
         </span>
       </button>
 
-      <div className="flex justify-end px-2 pb-2">
-        <PurgeButton disabled={busy} onClick={onPurge} />
-      </div>
+      {/* サムネイルの右上へ重ねる。行を1本増やさずに済み、どのカードでも
+          同じ位置に来る。画像の上でも読めるよう地を敷く */}
+      <PurgeButton
+        className="bg-panel/80 absolute top-2 right-2 backdrop-blur-sm"
+        disabled={busy}
+        onClick={onPurge}
+      />
     </div>
   );
 }
