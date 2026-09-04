@@ -61,8 +61,6 @@ fn is_only_copy(origin: &str) -> bool {
 pub enum Refusal {
     /// 台帳に無い(既に取り除かれた・一覧が古い)。
     NotInLedger,
-    /// 参照名が指している。先に参照を外す。
-    PointedAtByRef { name: String },
     /// token を知らない(使用済み・別の窓が使った)。
     UnknownToken,
     /// token の期限が切れた。
@@ -79,12 +77,6 @@ impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotInLedger => write!(f, "台帳に無い"),
-            Self::PointedAtByRef { name } => {
-                write!(
-                    f,
-                    "参照名 {name} が指しているので purge できない。先に参照を外す"
-                )
-            }
             Self::UnknownToken => write!(f, "purge token が無効または使用済み。下見からやり直す"),
             Self::Expired => write!(f, "purge token の期限が切れた。下見からやり直す"),
             Self::WrongTarget => write!(f, "purge 対象が下見時と一致しない。下見からやり直す"),
@@ -115,6 +107,9 @@ pub struct PurgePlan {
     pub origin: String,
     /// まだ結び付いているノート。空なら孤児。
     pub notes: Vec<String>,
+    /// 一緒に外れる参照名。**残すほうが宙に浮く** — 本文の
+    /// `kb-artifact-ref:` は、どちらにせよこのファイルへは辿り着けなくなる。
+    pub refs: Vec<String>,
     /// 同じ実体を指す他の台帳。1件でもあれば実体は残す。
     pub shares_object_with: Vec<ArtifactId>,
     /// 実体が消え、かつ原本が無い来歴 → `confirmed` 無しでは通さない。
@@ -193,13 +188,6 @@ impl PendingPurges {
             .cloned()
             .ok_or(Refusal::NotInLedger)?;
 
-        // 参照名が指しているものは消さない。dangling ref を作らない
-        if let Some(r) = ledger.ref_for(id) {
-            bail!(Refusal::PointedAtByRef {
-                name: r.name.to_string(),
-            });
-        }
-
         let shares_object_with: Vec<ArtifactId> = all
             .iter()
             .filter(|m| m.id != *id && m.hash == manifest.hash)
@@ -243,6 +231,11 @@ impl PendingPurges {
             display_name: manifest.display_name.clone(),
             origin: manifest.created.origin.clone(),
             notes: manifest.notes.clone(),
+            refs: ledger
+                .refs_for(id)
+                .into_iter()
+                .map(|(_, r)| r.name.to_string())
+                .collect(),
             shares_object_with,
             needs_confirmation,
             superseded_by,
@@ -539,10 +532,12 @@ mod tests {
 
     /// 参照名が指しているものは dangling ref を作るので下見で止める。
     #[test]
-    fn an_artifact_a_ref_points_at_cannot_be_purged() {
+    fn purging_also_removes_the_refs_that_point_at_it() {
+        // 参照名を残すと、存在しない Artifact を指したまま居座る。
+        // 本文リンクはどちらにせよ辿り着けないので、一緒に外す
         let e = env();
-        let m = put(&e, A, b"referenced", "picker", &[]);
-        let name = crate::artifact::RefName::from_str("logo").unwrap();
+        let m = put(&e, A, b"x", "picker", &[]);
+        let name = crate::artifact::RefName::from_str("sheet").unwrap();
         e.ledger
             .put_ref(
                 &e.vault,
@@ -550,8 +545,18 @@ mod tests {
                 &crate::artifact::ArtifactRef::new("ws-a", name.clone(), m.id.clone()),
             )
             .unwrap();
+
         let mut p = PendingPurges::default();
-        assert!(p.prepare(&e.ledger, &m.id, "理由").is_err());
+        let plan = p.prepare(&e.ledger, &m.id, "壊れていた").unwrap();
+        assert_eq!(
+            plan.refs,
+            vec!["sheet".to_string()],
+            "一緒に外れる参照名が出ない"
+        );
+
+        p.commit(e.ws(), &m.id, &plan.token, true, "2026-09-04T01:00:00Z")
+            .unwrap();
+        assert!(e.ledger.get_ref(&name).unwrap().is_none(), "参照名が残った");
     }
 
     /// 消したことは残す。

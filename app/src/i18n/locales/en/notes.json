@@ -110,6 +110,7 @@
     "purgeScope": "Removes it from this device and from future syncs. It stays in history that has already been synced, so other devices can still retrieve it.",
     "purgeShared": "{{count}} other file(s) share the same content, so the data itself stays",
     "purgeSuperseded": "A newer version points at this one as the version it replaced",
+    "purgeDropsRefs": "The reference {{names}} is removed with it",
     "purgeOnlyCopy": "This came from a conversation and has no original file. Removing it cannot be undone",
     "purgeReason": "removed from the app",
     "purgeCancel": "Cancel",

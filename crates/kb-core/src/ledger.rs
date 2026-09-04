@@ -149,6 +149,15 @@ impl Ledger {
                 removed.push(path);
             }
         }
+        // 指していた参照名も一緒に外す。台帳だけ消すと、残った参照が
+        // 存在しない Artifact を指す(本文リンクが宙に浮くのはこちら)
+        for (s, r) in self.refs_for(&manifest.id) {
+            let path = self.ref_path(s, &r.name);
+            if path.is_file() {
+                fs::remove_file(&path)?;
+                removed.push(path);
+            }
+        }
         removed.push(tomb);
         Ok(self.commit_if_tracked(vault, &removed, "vault: ファイルを取り除く"))
     }
@@ -317,6 +326,13 @@ impl Ledger {
     /// 本文リンク(`kb-artifact-ref:`)が古い版を指したままになり、
     /// 「本文リンクは最新版に追従する」(ADR-0003 決定5)が破れる。
     pub fn ref_for(&self, id: &ArtifactId) -> Option<ArtifactRef> {
+        self.refs_for(id).into_iter().next().map(|(_, r)| r)
+    }
+
+    /// その台帳を指している参照すべて。名前を変えて付け替えた履歴があると
+    /// 複数ぶら下がりうるので、取り除くときは全部を見る。
+    pub fn refs_for(&self, id: &ArtifactId) -> Vec<(SyncPolicy, ArtifactRef)> {
+        let mut out = Vec::new();
         for sync in [SyncPolicy::Full, SyncPolicy::LocalOnly] {
             let dir = self.base(sync).join("refs");
             let Ok(entries) = fs::read_dir(&dir) else {
@@ -330,11 +346,11 @@ impl Ledger {
                 if let Ok(r) = serde_json::from_str::<ArtifactRef>(&text)
                     && r.artifact_id == *id
                 {
-                    return Some(r);
+                    out.push((sync, r));
                 }
             }
         }
-        None
+        out
     }
 
     /// その名前が既に使われているか(衝突時に別名を提案するため)。

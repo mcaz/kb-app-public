@@ -152,7 +152,6 @@
     "fileClientRepoLocked": "This file lives in a work repository, so the setting can’t be changed",
     "fileNeedsConfirm": "Widening what leaves this device needs a confirmation",
     "purgeNotInLedger": "This file has already been removed",
-    "purgePointedAtByRef": "The reference \\u201c{{name}}\\u201d still points at it. Remove the reference first",
     "purgeRetry": "Start the removal over",
     "purgeNeedsConfirmation": "The original is not on this device, so removal needs a confirmation",
     "fileMalformed": "That file reference is not valid",

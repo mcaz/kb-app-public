@@ -601,6 +601,7 @@ export const demoApi = {
       size: named?.size ?? 0,
       origin: onlyCopy ? "mcp-content:claude-code/claude" : "picker",
       notes: holders,
+      refs: [],
       shares_object_with: onlyCopy ? [] : ["demo-shared"],
       drops_object: onlyCopy,
       needs_confirmation: onlyCopy,

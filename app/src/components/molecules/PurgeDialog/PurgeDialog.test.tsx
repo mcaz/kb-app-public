@@ -18,6 +18,7 @@ const plan = (over: Partial<PurgePlan> = {}): PurgePlan => ({
   display_name: "壊れた.xls",
   origin: "picker",
   notes: [],
+  refs: [],
   shares_object_with: [],
   needs_confirmation: false,
   superseded_by: [],
@@ -73,6 +74,11 @@ describe("PurgeDialog", () => {
   it("どのノートからも外れていれば参照の警告は出さない", () => {
     render(<PurgeDialog flow={flow(plan())} />);
     expect(screen.queryByText(/purgeStillUsed/)).not.toBeInTheDocument();
+  });
+
+  it("一緒に外れる参照名を伝える", () => {
+    render(<PurgeDialog flow={flow(plan({ refs: ["sheet"] }))} />);
+    expect(screen.getByText("file.purgeDropsRefs:1")).toBeInTheDocument();
   });
 
   it("差し替え元として参照されていることを伝える", () => {

@@ -53,6 +53,13 @@ export function PurgeDialog({ flow }: PurgeDialogProps) {
           {plan.shares_object_with.length > 0 && (
             <li>{t("file.purgeShared", { count: plan.shares_object_with.length })}</li>
           )}
+          {/* 参照名は本文リンク(kb-artifact-ref:)の宛先。ファイルごと消える以上
+              残しても宙に浮くので一緒に外すが、黙って外さない */}
+          {plan.refs.length > 0 && (
+            <li>
+              {t("file.purgeDropsRefs", { count: plan.refs.length, names: plan.refs.join("、") })}
+            </li>
+          )}
           {plan.superseded_by.length > 0 && <li>{t("file.purgeSuperseded")}</li>}
           {plan.needs_confirmation && <li className="text-attn">{t("file.purgeOnlyCopy")}</li>}
         </ul>

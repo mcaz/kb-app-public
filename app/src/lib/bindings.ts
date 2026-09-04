@@ -595,6 +595,11 @@ export type PurgePlan = {
 	origin: string,
 	/**  まだ結び付いているノート。空なら孤児。 */
 	notes: string[],
+	/**
+	 *  一緒に外れる参照名。**残すほうが宙に浮く** — 本文の
+	 *  `kb-artifact-ref:` は、どちらにせよこのファイルへは辿り着けなくなる。
+	 */
+	refs: string[],
 	/**  同じ実体を指す他の台帳。1件でもあれば実体は残す。 */
 	shares_object_with: ArtifactId[],
 	/**  実体が消え、かつ原本が無い来歴 → `confirmed` 無しでは通さない。 */
@@ -631,8 +636,6 @@ export type Purged = {
 export type Refusal = 
 /**  台帳に無い(既に取り除かれた・一覧が古い)。 */
 { reason: "not_in_ledger" } | 
-/**  参照名が指している。先に参照を外す。 */
-{ reason: "pointed_at_by_ref"; name: string } | 
 /**  token を知らない(使用済み・別の窓が使った)。 */
 { reason: "unknown_token" } | 
 /**  token の期限が切れた。 */

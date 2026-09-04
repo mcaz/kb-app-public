@@ -65,8 +65,6 @@ function purgeRefusalKey(refusal: Refusal) {
   switch (refusal.reason) {
     case "not_in_ledger":
       return "errors.purgeNotInLedger";
-    case "pointed_at_by_ref":
-      return "errors.purgePointedAtByRef";
     case "unknown_token":
     case "expired":
     case "wrong_target":
@@ -124,7 +122,7 @@ export function useErrorText(): (e: unknown) => string {
         case "file_needs_confirm":
           return t("errors.fileNeedsConfirm");
         case "file_purge_refused":
-          return t(purgeRefusalKey(d.refusal), { name: "name" in d.refusal ? d.refusal.name : "" });
+          return t(purgeRefusalKey(d.refusal));
         case "file_malformed":
           return t("errors.fileMalformed");
         case "file_not_here":
