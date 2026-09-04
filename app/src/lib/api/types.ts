@@ -1,5 +1,6 @@
 import type {
   AiGuardStatus,
+  AutostartState,
   ConnectState,
   Degradation,
   Favorite_Serialize,
@@ -35,6 +36,7 @@ export type Favorite = Favorite_Serialize;
 
 export type {
   AiGuardStatus,
+  AutostartState,
   ConnectState,
   Degradation,
   FileCard,

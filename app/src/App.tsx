@@ -14,6 +14,7 @@ import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
 import { useNavigationHistoryShortcut } from "@/hooks/useNavigationHistoryShortcut";
 import { useSettingsShortcut } from "@/hooks/useSettingsShortcut";
 import { useTheme } from "@/hooks/useTheme";
+import { useTrayLabels } from "@/hooks/useTrayLabels";
 import { GraphPage } from "@/pages/GraphPage";
 import { FilesPage } from "@/pages/FilesPage";
 import { HomePage } from "@/pages/HomePage";
@@ -62,6 +63,8 @@ export function App() {
 
   // 選んだテーマ(システム/ライト/ダーク)を <html data-theme> へ反映する
   const theme = useTheme();
+  // 常駐中のtrayメニューを、画面と同じ言語に保つ
+  useTrayLabels();
 
   // ノートを開いている間だけ、ペースト・ドロップを添付として受ける
   useNoteFileIntake(selectedId, view === "notes");

@@ -6,6 +6,7 @@ import type { AppError } from "@/lib/bindings";
 
 import type {
   AiGuardStatus,
+  AutostartState,
   Availability,
   ConnectState,
   Favorite,
@@ -74,6 +75,14 @@ export const api = {
     IN_TAURI
       ? unwrap(commands.settingsEnableAiGuardDevelopmentMode())
       : (await demo()).settingsEnableAiGuardDevelopmentMode(),
+  autostartStatus: async (): Promise<AutostartState> =>
+    IN_TAURI ? unwrap(commands.autostartStatus()) : (await demo()).autostartStatus(),
+  autostartSet: async (enabled: boolean): Promise<AutostartState> =>
+    IN_TAURI ? unwrap(commands.autostartSet(enabled)) : (await demo()).autostartSet(enabled),
+  /** trayメニューの文言。ブラウザプレビューにtrayは無いので何もしない。 */
+  traySetLabels: async (show: string, quit: string): Promise<void> => {
+    if (IN_TAURI) await unwrap(commands.traySetLabels(show, quit));
+  },
   onboard: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboard()) : (await demo()).onboard(),
   onboardExisting: async (url: string): Promise<SetupState> =>

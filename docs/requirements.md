@@ -351,6 +351,17 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   この間はCodexのkb-app MCPと自動retrievalをfail-closedにし、Claude Codeのstrict guardは維持する。
   設定UIとCLIは状態を明示し、検証・テスト・リリース前はstrict modeへの復旧を要求する。CLIの
   `kb settings dev-mode release-check`はstrict modeでなければ失敗する。
+- **FR-A10 常駐と自動起動(2026-09-04 本人決定)**: 管理アプリは常駐し、窓を閉じても
+  プロセスを残す。タスクトレイ／メニューバーのアイコンを左クリックすると画面が出て、
+  右クリックのメニューに「開く」と「終了」を置く。**終了の入口はこのメニューだけ**にし、
+  閉じるボタンでは終わらせない(閉じるたびにcold startへ戻ると常駐の意味が無くなるため)。
+  macOSはDockアイコンを残し、窓を隠している間のDockクリックも同じ復帰経路へ流す。
+  ログイン時の自動起動は`--hidden`で窓を出さずtrayだけを出す。登録の正本はOSのログイン項目で、
+  アプリは初回起動の1回だけ既定として有効化し、以後はアプリ内switchとOS設定のどちらの操作にも従う
+  (毎回書き直してユーザーが外した判断を打ち消さない)。実行ファイルが移動したときだけ登録を
+  書き直し、pathがずれた登録を「有効」と表示しない。対応OSはmacOSがLaunchAgent、Linuxが
+  autostart desktop entry、WindowsがHKCUのRunキー。登録できないOSではswitchを操作不能にし、
+  できない事実を画面に出す。詳細は [ADR-0017](adr/0017-background-residency.md)
 
 ### 将来(ステージ外)
 

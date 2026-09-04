@@ -2,12 +2,14 @@
 //!
 //! 構成(ADR-0002):
 //!   commands/  … `invoke` で呼ばれる関数。機能ごとに分割
+//!   background.rs… trayアイコン・閉じるでの待機・ログイン自動起動(ADR-0017)
 //!   state.rs   … vault と索引接続の共有(コマンドごとに開き直さない)
 //!   error.rs   … 画面へ返すエラー。種類を型にして訳し分けられるようにする
 //!   mcp_mode.rs… 同じ実行ファイルを MCP サーバーとして動かす経路
 //!
 //! このファイルは Builder の組み立てだけを持つ。
 
+pub mod background;
 pub mod commands;
 pub mod error;
 pub mod hook_mode;
@@ -17,12 +19,17 @@ pub mod state;
 use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events};
 
-use commands::{connect, favorites, files, home, notes, settings, setup};
+use commands::{
+    background as background_commands, connect, favorites, files, home, notes, settings, setup,
+};
 
 /// GUI が呼べるコマンドとイベントの全集合。ここが `app/src/lib/bindings.ts` の正本。
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(collect_commands![
+            background_commands::autostart_status,
+            background_commands::autostart_set,
+            background_commands::tray_set_labels,
             setup::setup_state,
             setup::onboard,
             setup::onboard_existing,
@@ -107,6 +114,28 @@ pub fn run() {
         .setup(move |app| {
             // イベントの購読口を張る(進捗通知など)
             builder.mount_events(app);
+            // trayと「閉じても常駐」。窓は既定で非表示なので、ここで出す側に回る。
+            // trayを作れない環境(indicatorの無いLinux等)では常駐せず、閉じるボタンは
+            // 従来どおり終了になる。開く手段が無い状態で隠したままにはしない。
+            let resident = match background::install(app.handle()) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("kb-app: trayを用意できなかったので常駐しない: {error}");
+                    false
+                }
+            };
+            if !resident || !background::starts_hidden() {
+                background::show(app.handle());
+            }
+            // 開発ビルドの実行ファイルをログイン項目へ登録しない。`#[cfg]` で
+            // 切ると release でしか型検査されないので、実行時の判定にしてある。
+            if !cfg!(debug_assertions)
+                && let Ok(exe) = std::env::current_exe()
+                && let Err(error) = kb_core::autostart::initialize(&exe)
+            {
+                // 常駐そのものは続ける。失敗は設定画面のswitchがOFFとして映す。
+                eprintln!("kb-app: 自動起動を登録できなかった: {error}");
+            }
             // vault と索引接続はここに集約する(生成は遅延 — 未オンボーディングでも起動できる)
             app.manage(state::AppState::default());
             // asset protocolの静的scopeは空。登録済みの現在Vaultだけを動的に許可する。
@@ -117,8 +146,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("tauri run");
+        .build(tauri::generate_context!())
+        .expect("tauri build")
+        // Dockアイコンからの復帰。窓を隠して常駐している間、macOSはここしか通らない
+        // (窓が破棄されていないので、Launchpad / Spotlight もこの経路になる)。
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                background::show(_app);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -128,6 +165,18 @@ mod tests {
     #[test]
     fn bindings_are_up_to_date() {
         super::export_bindings().expect("bindings.ts の生成に失敗");
+    }
+
+    /// 窓を `visible: false` で作るのは、ログイン起動でちらつかせないため(ADR-0017)。
+    /// 表示は setup が担うので、この既定を戻すと `--hidden` の無表示起動が壊れる。
+    #[test]
+    fn the_main_window_starts_hidden_and_is_shown_from_setup() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(
+            config["app"]["windows"][0]["visible"],
+            serde_json::json!(false)
+        );
     }
 
     #[test]

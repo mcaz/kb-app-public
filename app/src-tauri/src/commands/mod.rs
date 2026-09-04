@@ -3,6 +3,7 @@
 //! すべて kb-core の API を呼ぶだけで、統治のロジックはここに置かない
 //! (NFR-M2 相当。コアはヘッドレスで完結し、GUI・CLI・MCP はその薄い口)。
 
+pub mod background;
 pub mod connect;
 pub mod favorites;
 pub mod files;

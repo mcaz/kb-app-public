@@ -6,6 +6,13 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	autostartStatus: () => typedError<AutostartState, AppError>(__TAURI_INVOKE("autostart_status")),
+	autostartSet: (enabled: boolean) => typedError<AutostartState, AppError>(__TAURI_INVOKE("autostart_set", { enabled })),
+	/**
+	 *  trayメニューを画面と同じ言語にする。言語設定はwebview側にしかないので、
+	 *  起動時と切り替え時にフロントから渡す(常駐開始直後だけ既定の日本語が出る)。
+	 */
+	traySetLabels: (show: string, quit: string) => typedError<null, AppError>(__TAURI_INVOKE("tray_set_labels", { show, quit })),
 	setupState: () => typedError<SetupState, AppError>(__TAURI_INVOKE("setup_state")),
 	/**  最初の vault を自動作成(既定名「わたしのノート」実体 my-notes)。 */
 	onboard: () => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard")),
@@ -192,6 +199,12 @@ export type Authority = {
 export type AuthorityRole = "canonical" | "record" | "proposal";
 
 export type AuthorityStatus = "active" | "historical" | "superseded";
+
+export type AutostartState = {
+	enabled: boolean,
+	/**  このOSでログイン項目を登録できるか。false のとき `enabled` は常に false。 */
+	supported: boolean,
+};
 
 /**  この端末で実体を開けるか。**台帳には載せない**(上の doc 参照)。 */
 export type Availability = 
@@ -571,6 +584,11 @@ export type Settings = {
 	ai_kb_enabled?: boolean,
 	claude_kb_enabled?: boolean,
 	gpt_kb_enabled?: boolean,
+	/**
+	 *  ログイン自動起動の既定を適用済みか。登録の正本はOS側のログイン項目で、
+	 *  ここは「一度でも既定を書いたか」だけを覚える(`autostart::initialize`)。
+	 */
+	launch_at_login_initialized?: boolean,
 };
 
 export type SetupState = {

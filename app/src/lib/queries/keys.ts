@@ -3,6 +3,7 @@ export const queryKeys = {
   setup: ["setup"] as const,
   settings: ["settings"] as const,
   aiGuard: ["aiGuard"] as const,
+  autostart: ["autostart"] as const,
   home: ["home"] as const,
   maintenance: ["maintenance"] as const,
   tagOverview: ["tagOverview"] as const,

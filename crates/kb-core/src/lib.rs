@@ -10,6 +10,7 @@ pub mod ai_guard;
 pub mod artifact;
 pub mod artifact_search;
 pub mod authority;
+pub mod autostart;
 pub mod backup;
 pub mod care;
 pub mod client_surface;

@@ -3,6 +3,7 @@ import { KbError } from "@/lib/api/error";
 import type {
   Added,
   AiGuardStatus,
+  AutostartState,
   Availability,
   CareProposal,
   ConnectState,
@@ -271,7 +272,10 @@ let settings: Settings = {
   ai_kb_enabled: true,
   claude_kb_enabled: true,
   gpt_kb_enabled: true,
+  launch_at_login_initialized: true,
 };
+
+let autostart: AutostartState = { enabled: true, supported: true };
 
 function aiGuard(): AiGuardStatus {
   const phase = params().get("guard");
@@ -320,6 +324,11 @@ export const demoApi = {
   settingsSetGptKbEnabled: (enabled: boolean): Promise<Settings> => {
     settings = { ...settings, gpt_kb_enabled: enabled };
     return delay(settings);
+  },
+  autostartStatus: (): Promise<AutostartState> => delay(autostart),
+  autostartSet: (enabled: boolean): Promise<AutostartState> => {
+    autostart = { ...autostart, enabled };
+    return delay(autostart);
   },
   settingsAiGuardStatus: (): Promise<AiGuardStatus> => delay(guardOverride ?? aiGuard()),
   settingsInstallAiGuard: (): Promise<AiGuardStatus> => {
