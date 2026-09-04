@@ -151,12 +151,12 @@ export const api = {
     IN_TAURI ? unwrap(commands.filesOrphans()) : (await demo()).filesOrphans(),
   /** purge の下見。まだ消さない。 */
   filePurgePlan: async (id: string, reason: string): Promise<PurgePlan> =>
-    IN_TAURI ? unwrap(commands.filePurgePlan(id, reason)) : (await demo()).filePurgePlan(),
+    IN_TAURI ? unwrap(commands.filePurgePlan(id, reason)) : (await demo()).filePurgePlan(id),
   /** 下見どおりに取り除く。`confirmed` は画面が本人へ訊いたときだけ true。 */
   filePurgeCommit: async (id: string, token: string, confirmed: boolean): Promise<Purged> =>
     IN_TAURI
       ? unwrap(commands.filePurgeCommit(id, token, confirmed))
-      : (await demo()).filePurgeCommit(),
+      : (await demo()).filePurgeCommit(id),
   fileFetch: async (id: string): Promise<Availability> =>
     IN_TAURI ? unwrap(commands.fileFetch(id)) : (await demo()).fileFetch(),
   /** 中身はコアの resolver 経由でしか出てこない(画面はパスを受け取らない)。 */

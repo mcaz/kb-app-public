@@ -191,6 +191,38 @@ const noteCategory = (id: string) => {
 };
 
 /** ノートごとのファイル。取得できていない行も1つ置いて、状態の見え方を確かめられるようにする。 */
+/** どのノートからも外れた見本。孤児の節が空でないことを画面で確かめるため。 */
+const orphanFiles: FileRow[] = [
+  {
+    id: "demo-orphan-1",
+    version: 3,
+    name: "旧・見積書.xls",
+    size: 17920,
+    media_type: "application/vnd.ms-excel",
+    availability: "local",
+    sensitivity: "private",
+    sync: "full",
+    linked: false,
+    client_repo: false,
+    can_fetch: false,
+    added_at: "2026-08-02T04:10:00Z",
+  },
+  {
+    id: "demo-orphan-2",
+    version: 1,
+    name: "会話から受け取った図.png",
+    size: 40960,
+    media_type: "image/png",
+    availability: "local",
+    sensitivity: "private",
+    sync: "local_only",
+    linked: false,
+    client_repo: false,
+    can_fetch: false,
+    added_at: "2026-08-20T09:30:00Z",
+  },
+];
+
 const files: Record<string, FileRow[]> = {
   "notes/引っ越し手続きメモ": [
     {
@@ -516,24 +548,32 @@ export const demoApi = {
   // ブラウザでは DOM の paste 経路が動くのでフォールバックは不要
   fileAddFromClipboard: () => delay<Added | null>(null),
   fileDetach: () => delay(null),
-  filesOrphans: (): Promise<FileRow[]> => delay([]),
-  filePurgePlan: (): Promise<PurgePlan> =>
-    delay({
+  filesOrphans: (): Promise<FileRow[]> => delay(orphanFiles),
+  filePurgePlan: (id: string): Promise<PurgePlan> => {
+    const onlyCopy = id === "demo-orphan-2";
+    return delay({
       token: "demo",
-      id: "demo",
-      display_name: "見本.bin",
+      id,
+      display_name: orphanFiles.find((f) => f.id === id)?.name ?? "見本.bin",
       hash: "0".repeat(64),
       size: 0,
-      origin: "picker",
+      origin: onlyCopy ? "mcp-content:claude-code/claude" : "picker",
       notes: [],
-      shares_object_with: [],
-      drops_object: true,
-      needs_confirmation: false,
+      shares_object_with: onlyCopy ? [] : ["demo-1"],
+      drops_object: onlyCopy,
+      needs_confirmation: onlyCopy,
       superseded_by: [],
       reason: "見本",
+    });
+  },
+  // 下見と同じ規則で答える。プレビューが実物と違う結末を見せないため
+  filePurgeCommit: (id: string): Promise<Purged> =>
+    delay({
+      id,
+      display_name: orphanFiles.find((f) => f.id === id)?.name ?? "見本.bin",
+      dropped_object: id === "demo-orphan-2",
+      sync_error: null,
     }),
-  filePurgeCommit: (): Promise<Purged> =>
-    delay({ id: "demo", display_name: "見本.bin", dropped_object: true, sync_error: null }),
   fileFetch: () => delay<Availability>("local"),
   // ブラウザからは OS のアプリへ渡せない(この経路は Tauri でしか通らない)
   fileOpen: () => delay(null),
