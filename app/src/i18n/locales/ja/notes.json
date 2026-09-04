@@ -116,6 +116,7 @@
     "purgeConfirm": "取り除く",
     "purged": "取り除きました(履歴には残ります)",
     "purgedKeptObject": "台帳から取り除きました。同じ内容の別のファイルがあるので実体は残しています",
+    "purgedKeptBytes": "取り除きましたが、実体を消せませんでした: {{error}}",
     "purgeSyncFailed": "取り除きましたが同期に失敗しました: {{error}}",
     "purgeStillUsed": "{{count}}件のノートがまだこのファイルを持っています。取り除くとそのノートから消えます"
   }

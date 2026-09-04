@@ -613,6 +613,7 @@ export const demoApi = {
       id,
       display_name: demoFile(id)?.name ?? "見本.bin",
       dropped_object: id === "demo-orphan-2",
+      object_error: null,
       sync_error: null,
     }),
   fileFetch: () => delay<Availability>("local"),

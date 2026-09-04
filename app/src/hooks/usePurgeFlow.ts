@@ -36,7 +36,14 @@ export function usePurgeFlow(noteId?: string) {
     try {
       const out = await commit.mutateAsync({ id: target.id, token: target.token, noteId });
       setTarget(null);
-      toast(out.dropped_object ? t("file.purged") : t("file.purgedKeptObject"));
+      // 実体を消せなくても台帳からは外れている。失敗ではなく、片付け残しとして伝える
+      toast(
+        out.object_error
+          ? t("file.purgedKeptBytes", { error: out.object_error })
+          : out.dropped_object
+            ? t("file.purged")
+            : t("file.purgedKeptObject"),
+      );
       if (out.sync_error) toast(t("file.purgeSyncFailed", { error: out.sync_error }));
     } catch (e) {
       // 失敗しても token は使い切られている。下見からやり直させる

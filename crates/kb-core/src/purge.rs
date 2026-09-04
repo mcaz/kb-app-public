@@ -131,6 +131,13 @@ pub struct Purged {
     pub display_name: String,
     /// 実体も消したか(他が参照していれば false)。
     pub dropped_object: bool,
+    /// 実体を消せなかった理由。**台帳からは既に外れている。**
+    ///
+    /// 台帳を先に消すのは、実体だけ先に消えて台帳が残る(開けない行が残る)の
+    /// を避けるため。つまりここへ来た時点で取り除く操作自体は成立していて、
+    /// 失敗にすると「一覧から消えたのにエラー」という嘘になる。残るのは
+    /// ディスクを取り戻せなかったことだけなので、結果に添えて伝える。
+    pub object_error: Option<String>,
     /// 同期の失敗は purge 自体の失敗にしない(派生 — 契約4)。
     pub sync_error: Option<String>,
 }
@@ -275,16 +282,20 @@ impl PendingPurges {
             .any(|m| m.id != *id && m.hash == manifest.hash);
 
         let outcome = ws.ledger.purge(ws.vault, &manifest, &pending.reason, at)?;
-        let dropped_object = if still_shared {
-            false
+        let (dropped_object, object_error) = if still_shared {
+            (false, None)
         } else {
-            crate::store::drop_object(ws.vault, ws.stores, &manifest)?
+            match crate::store::drop_object(ws.vault, ws.stores, &manifest) {
+                Ok(dropped) => (dropped, None),
+                Err(error) => (false, Some(format!("{error:#}"))),
+            }
         };
 
         Ok(Purged {
             id: manifest.id,
             display_name: manifest.display_name,
             dropped_object,
+            object_error,
             sync_error: outcome.sync_error,
         })
     }
@@ -559,6 +570,28 @@ mod tests {
         assert_eq!(tomb[0].id, m.id);
         assert_eq!(tomb[0].reason, "壊れているので取り除く");
         assert_eq!(tomb[0].at, "2026-09-04T01:00:00Z");
+    }
+
+    #[test]
+    fn a_failure_to_drop_the_object_still_removes_the_ledger_entry() {
+        let e = env();
+        let m = put(&e, A, b"x", "picker", &[]);
+        // 実体の置き場を directory にして、消せない状態を作る
+        let object = e.stores.object_path(SyncPolicy::LocalOnly, &m.hash);
+        std::fs::remove_file(&object).unwrap();
+        std::fs::create_dir(&object).unwrap();
+        std::fs::write(object.join("blocker"), b"x").unwrap();
+
+        let mut p = PendingPurges::default();
+        let plan = p.prepare(&e.ledger, &m.id, "壊れていた").unwrap();
+        let out = p
+            .commit(e.ws(), &m.id, &plan.token, true, "2026-09-04T01:00:00Z")
+            .unwrap();
+
+        // 台帳からは外れている。ここで失敗を返すと「消えたのにエラー」になる
+        assert!(e.ledger.get(&m.id).unwrap().is_none());
+        assert!(!out.dropped_object);
+        assert!(out.object_error.is_some(), "消せなかったことが伝わらない");
     }
 
     #[test]

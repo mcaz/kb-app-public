@@ -155,7 +155,7 @@ impl Stores {
     }
 
     /// content-addressed な置き場所。先頭2文字で掘るのは1階層に溜めすぎないため。
-    fn object_path(&self, sync: SyncPolicy, hash: &ContentHash) -> PathBuf {
+    pub(crate) fn object_path(&self, sync: SyncPolicy, hash: &ContentHash) -> PathBuf {
         let h = hash.as_str();
         let (head, rest) = h.split_at(2);
         self.boundary_dir(sync)
