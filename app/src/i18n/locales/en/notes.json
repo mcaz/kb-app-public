@@ -116,6 +116,7 @@
     "purgeConfirm": "Remove",
     "purged": "Removed (it stays in history)",
     "purgedKeptObject": "Removed from the ledger. The data stays because another file shares the same content",
-    "purgeSyncFailed": "Removed, but syncing failed: {{error}}"
+    "purgeSyncFailed": "Removed, but syncing failed: {{error}}",
+    "purgeStillUsed": "{{count}} note(s) still hold this file. Removing it takes it out of those notes"
   }
 }

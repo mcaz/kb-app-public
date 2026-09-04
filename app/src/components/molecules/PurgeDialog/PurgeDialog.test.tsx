@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PurgeDialog } from "./PurgeDialog";
 
@@ -30,6 +30,9 @@ const plan = (over: Partial<PurgePlan> = {}): PurgePlan => ({
 
 describe("PurgeDialog", () => {
   const noop = () => {};
+
+  // ダイアログは portal で body へ出る。片付けないと前のテストが次に見える
+  afterEach(cleanup);
 
   it("下見が無ければ何も描かない", () => {
     const { container } = render(<PurgeDialog plan={null} onConfirm={noop} onOpenChange={noop} />);
@@ -64,6 +67,23 @@ describe("PurgeDialog", () => {
       />,
     );
     expect(screen.getByText("file.purgeOnlyCopy")).toBeInTheDocument();
+  });
+
+  /** 一覧からは参照中でも押せる。消すとノートからファイルが消えることを先に言う。 */
+  it("まだノートが持っているときは件数を出す", () => {
+    render(
+      <PurgeDialog
+        plan={plan({ notes: ["notes/a", "notes/b"] })}
+        onConfirm={noop}
+        onOpenChange={noop}
+      />,
+    );
+    expect(screen.getByText("file.purgeStillUsed:2")).toBeInTheDocument();
+  });
+
+  it("どのノートからも外れていれば参照の警告は出さない", () => {
+    render(<PurgeDialog plan={plan()} onConfirm={noop} onOpenChange={noop} />);
+    expect(screen.queryByText(/purgeStillUsed/)).not.toBeInTheDocument();
   });
 
   it("差し替え元として参照されていることを伝える", () => {

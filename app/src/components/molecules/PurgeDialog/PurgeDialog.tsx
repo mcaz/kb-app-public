@@ -36,6 +36,11 @@ export function PurgeDialog({ plan, busy = false, onConfirm, onOpenChange }: Pur
         </DialogHeader>
 
         <ul className="text-muted flex list-disc flex-col gap-1 pl-4 text-[12px]">
+          {/* まだノートが持っているものを消すと、そのノートからファイルが消える。
+              一覧からは参照中でも押せるので、ここで件数を見せて止める機会を作る */}
+          {plan.notes.length > 0 && (
+            <li className="text-attn">{t("file.purgeStillUsed", { count: plan.notes.length })}</li>
+          )}
           {plan.shares_object_with.length > 0 && (
             <li>{t("file.purgeShared", { count: plan.shares_object_with.length })}</li>
           )}

@@ -268,6 +268,23 @@ const files: Record<string, FileRow[]> = {
       added_at: "2026-08-12T05:00:00Z",
     },
   ],
+  // 「間取り図.png」を2本のノートが持つ。参照数の表示を確かめるための例
+  "notes/確定申告の準備": [
+    {
+      id: "demo-1",
+      version: 1,
+      name: "間取り図.png",
+      size: 245760,
+      media_type: "image/png",
+      availability: "local",
+      sensitivity: "private",
+      sync: "full",
+      linked: false,
+      client_repo: false,
+      can_fetch: false,
+      added_at: "2026-08-10T05:00:00Z",
+    },
+  ],
 };
 
 const care: CareProposal[] = [
@@ -513,14 +530,20 @@ export const demoApi = {
       legacy: id === "notes/引っ越し手続きメモ" ? [{ name: "旧・間取り図.png", size: 245760 }] : [],
     }),
   filesList: (): Promise<FilesPage> => {
-    const cards: FileCard[] = Object.entries(files).flatMap(([noteId, rows]) => {
+    // 実アプリの files_list は台帳1件につきカード1枚で、ひもづくノートを配列で返す。
+    // ノート側から組み立てるとき同じファイルが複数枚に割れるので、ID で束ねる
+    const byId = new Map<string, FileCard>();
+    for (const [noteId, rows] of Object.entries(files)) {
       const note = notes.find((item) => item.id === noteId);
-      return rows.map((file) => ({
-        ...file,
-        notes: [{ id: noteId, title: note?.title ?? noteId }],
-      }));
-    });
-    return delay({ files: cards, degraded: [] });
+      for (const file of rows) {
+        const card = byId.get(file.id) ?? { ...file, notes: [] };
+        card.notes = [...card.notes, { id: noteId, title: note?.title ?? noteId }];
+        byId.set(file.id, card);
+      }
+    }
+    // どのノートからも外れたものも一覧に出る(差し替えられた版だけが外れる)
+    for (const file of orphanFiles) byId.set(file.id, { ...file, notes: [] });
+    return delay({ files: [...byId.values()], degraded: [] });
   },
   fileAdd: (noteId: string, path: string): Promise<Added> => {
     const file: FileRow = {
@@ -551,26 +574,38 @@ export const demoApi = {
   filesOrphans: (): Promise<FileRow[]> => delay(orphanFiles),
   filePurgePlan: (id: string): Promise<PurgePlan> => {
     const onlyCopy = id === "demo-orphan-2";
+    const holders = Object.entries(files)
+      .filter(([, rows]) => rows.some((f) => f.id === id))
+      .map(([noteId]) => noteId);
+    const named =
+      orphanFiles.find((f) => f.id === id) ??
+      Object.values(files)
+        .flat()
+        .find((f) => f.id === id);
     return delay({
       token: "demo",
       id,
-      display_name: orphanFiles.find((f) => f.id === id)?.name ?? "見本.bin",
+      display_name: named?.name ?? "見本.bin",
       hash: "0".repeat(64),
-      size: 0,
+      size: named?.size ?? 0,
       origin: onlyCopy ? "mcp-content:claude-code/claude" : "picker",
-      notes: [],
-      shares_object_with: onlyCopy ? [] : ["demo-1"],
+      notes: holders,
+      shares_object_with: onlyCopy ? [] : ["demo-shared"],
       drops_object: onlyCopy,
       needs_confirmation: onlyCopy,
       superseded_by: [],
       reason: "見本",
     });
   },
-  // 下見と同じ規則で答える。プレビューが実物と違う結末を見せないため
   filePurgeCommit: (id: string): Promise<Purged> =>
     delay({
       id,
-      display_name: orphanFiles.find((f) => f.id === id)?.name ?? "見本.bin",
+      display_name:
+        orphanFiles.find((f) => f.id === id)?.name ??
+        Object.values(files)
+          .flat()
+          .find((f) => f.id === id)?.name ??
+        "見本.bin",
       dropped_object: id === "demo-orphan-2",
       sync_error: null,
     }),

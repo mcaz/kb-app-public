@@ -1,22 +1,24 @@
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/atoms/ui/button";
-import { PurgeDialog } from "@/components/molecules/PurgeDialog";
-import { usePurgeFlow } from "@/hooks/usePurgeFlow";
 import { formatSize } from "@/lib/format";
 import { useFilesOrphans } from "@/lib/queries";
+
+export interface OrphanSectionProps {
+  onPurge: (id: string) => void;
+  busy?: boolean;
+}
 
 /**
  * どのノートからも外れたファイル。
  *
- * 「このノートから外す」は実体を消さないので、拾う場所が無いと置き場に溜まり続ける。
- * ここが ADR kb-app/artifact-deletion の言う「整理の下見」で、**見えることが本体**。
+ * 一覧のカードにも同じ操作があるが、こちらは**片付ける対象だけ**を集める。
+ * ADR kb-app/artifact-deletion の言う「整理の下見」で、見えることが本体。
  * 溜まっていなければ節ごと出さない(片付けるものが無いのに掃除の口を見せない)。
  */
-export function OrphanSection() {
+export function OrphanSection({ onPurge, busy = false }: OrphanSectionProps) {
   const { t } = useTranslation("files");
   const { data } = useFilesOrphans();
-  const purge = usePurgeFlow();
   const orphans = data ?? [];
 
   if (orphans.length === 0) return null;
@@ -35,23 +37,14 @@ export function OrphanSection() {
               variant="quiet"
               size="sm"
               className="ml-auto"
-              disabled={purge.busy}
-              onClick={() => void purge.planPurge(file.id)}
+              disabled={busy}
+              onClick={() => onPurge(file.id)}
             >
               {t("orphans.purge")}
             </Button>
           </li>
         ))}
       </ul>
-
-      <PurgeDialog
-        plan={purge.target}
-        busy={purge.busy}
-        onConfirm={() => void purge.confirmPurge()}
-        onOpenChange={(open) => {
-          if (!open) purge.clear();
-        }}
-      />
     </section>
   );
 }

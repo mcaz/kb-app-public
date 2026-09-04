@@ -3,6 +3,8 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
+import { PurgeDialog } from "@/components/molecules/PurgeDialog";
+import { usePurgeFlow } from "@/hooks/usePurgeFlow";
 import {
   Select,
   SelectContent,
@@ -24,6 +26,7 @@ const FILE_KINDS = ["pdf", "image", "document", "other"] as const;
 export function FilesPage() {
   const { t, i18n } = useTranslation("files");
   const { data, isPending } = useFiles();
+  const purge = usePurgeFlow();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<FileKind | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -110,13 +113,28 @@ export function FilesPage() {
         ) : (
           <div className="grid grid-cols-3 gap-4 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
             {files.map((file) => (
-              <FileCard key={file.id} file={file} onOpen={() => setSelectedId(file.id)} />
+              <FileCard
+                key={file.id}
+                file={file}
+                busy={purge.busy}
+                onOpen={() => setSelectedId(file.id)}
+                onPurge={() => void purge.planPurge(file.id)}
+              />
             ))}
           </div>
         )}
 
-        <OrphanSection />
+        <OrphanSection busy={purge.busy} onPurge={(id) => void purge.planPurge(id)} />
       </div>
+
+      <PurgeDialog
+        plan={purge.target}
+        busy={purge.busy}
+        onConfirm={() => void purge.confirmPurge()}
+        onOpenChange={(open) => {
+          if (!open) purge.clear();
+        }}
+      />
 
       <FilePreviewDialog
         file={selected}

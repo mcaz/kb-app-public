@@ -36,5 +36,10 @@
     "title": "Detached files",
     "help": "Removing a file from a note leaves the data behind. Clear out what you no longer need here.",
     "purge": "Remove"
+  },
+  "purge": "Remove",
+  "references": {
+    "none": "No note points at this",
+    "many": "Referenced by {{count}} notes"
   }
 }
