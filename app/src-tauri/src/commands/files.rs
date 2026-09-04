@@ -74,10 +74,19 @@ pub struct NoteFiles {
     legacy: Vec<LegacyFile>,
 }
 
+/// 横断一覧のカードと、プレビューの参照ノート一覧が使う。
+///
+/// 題名だけでは「どのノートだったか」を思い出せないので、関連 Modal の行と
+/// 同じ材料(抜粋・タグ・更新)まで返す。索引の1行から取れるので追加の I/O は無い。
 #[derive(Serialize, specta::Type)]
 pub struct FileNote {
     id: String,
     title: String,
+    /// description が無ければ本文の先頭。改行は畳んで1行に見せる
+    snippet: String,
+    tags: Vec<String>,
+    /// RFC3339。索引に無ければ None
+    updated: Option<String>,
 }
 
 /// 横断一覧の1枚。内部の台帳用語を画面へ渡さず、カードと操作に要る値だけを返す。
@@ -193,17 +202,38 @@ pub fn files_list(state: State<'_, AppState>) -> AppResult<FilesPage> {
                     .notes
                     .iter()
                     .map(|id| {
-                        let title = conn
-                            .query_row(
-                                "SELECT coalesce(title, id) FROM notes WHERE id = ?1",
-                                [id],
-                                |record| record.get::<_, String>(0),
-                            )
-                            .unwrap_or_else(|_| id.clone());
-                        FileNote {
+                        conn.query_row(
+                            "SELECT coalesce(title, id),
+                                    coalesce(description, substr(body, 1, 120)),
+                                    tags, generated_at
+                             FROM notes WHERE id = ?1",
+                            [id],
+                            |record| {
+                                Ok(FileNote {
+                                    id: id.clone(),
+                                    title: record.get::<_, String>(0)?,
+                                    snippet: record
+                                        .get::<_, Option<String>>(1)?
+                                        .unwrap_or_default()
+                                        .replace('\n', " "),
+                                    tags: record
+                                        .get::<_, Option<String>>(2)?
+                                        .unwrap_or_default()
+                                        .split_whitespace()
+                                        .map(String::from)
+                                        .collect(),
+                                    updated: record.get::<_, Option<String>>(3)?,
+                                })
+                            },
+                        )
+                        // 索引に無いノート(まだ取り込まれていない等)でも行は出す
+                        .unwrap_or_else(|_| FileNote {
                             id: id.clone(),
-                            title,
-                        }
+                            title: id.clone(),
+                            snippet: String::new(),
+                            tags: Vec::new(),
+                            updated: None,
+                        })
                     })
                     .collect();
                 FileCard {

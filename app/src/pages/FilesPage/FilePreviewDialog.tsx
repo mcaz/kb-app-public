@@ -15,6 +15,7 @@ import {
   TWO_PANE_DIALOG,
 } from "@/components/atoms/ui/dialog";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
+import { NoteResultRow } from "@/components/molecules/NoteResultRow";
 import { NotePreview } from "@/components/organisms/NotePreview";
 import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
@@ -220,7 +221,12 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                             active: selectedNote === note.id,
                           })}
                         >
-                          <span className="line-clamp-2 min-w-0 font-semibold">{note.title}</span>
+                          <NoteResultRow
+                            title={note.title}
+                            updated={note.updated}
+                            snippet={note.snippet}
+                            tags={note.tags}
+                          />
                         </button>
                       </li>
                     ))}

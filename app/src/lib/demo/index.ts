@@ -537,7 +537,16 @@ export const demoApi = {
       const note = notes.find((item) => item.id === noteId);
       for (const file of rows) {
         const card = byId.get(file.id) ?? { ...file, notes: [] };
-        card.notes = [...card.notes, { id: noteId, title: note?.title ?? noteId }];
+        card.notes = [
+          ...card.notes,
+          {
+            id: noteId,
+            title: note?.title ?? noteId,
+            snippet: note?.description ?? "",
+            tags: note?.tags ?? [],
+            updated: note?.generated_at ?? null,
+          },
+        ];
         byId.set(file.id, card);
       }
     }

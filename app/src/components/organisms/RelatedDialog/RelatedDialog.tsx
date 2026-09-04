@@ -13,9 +13,9 @@ import {
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
+import { NoteResultRow } from "@/components/molecules/NoteResultRow";
 import { NotePreview } from "@/components/organisms/NotePreview";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { formatDateTime } from "@/lib/format";
 import { useHomeState, useNote } from "@/lib/queries";
 import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/lib/searchDialog";
 
@@ -52,7 +52,7 @@ export function RelatedDialog({
   onOpenNote,
   onOpenGraph,
 }: RelatedDialogProps) {
-  const { t, i18n } = useTranslation(["notes", "common"]);
+  const { t } = useTranslation(["notes", "common"]);
   const { data: note } = useNote(noteId);
   const { data: home } = useHomeState();
   const compact = useMediaQuery("(max-width: 759px)");
@@ -215,31 +215,13 @@ export function RelatedDialog({
                         onSelect={() => select(entry)}
                         className={relatedItemVariants()}
                       >
-                        <div className="flex min-w-0 items-start gap-2">
-                          <span className="line-clamp-2 min-w-0 flex-1 font-semibold">
-                            {entry.title}
-                          </span>
-                          {entry.updated && (
-                            <span className="text-muted shrink-0 text-[10px]">
-                              {formatDateTime(
-                                entry.updated,
-                                i18n.language,
-                                t("common:date.unknown"),
-                              )}
-                            </span>
-                          )}
-                        </div>
-                        {entry.snippet && (
-                          <div className="text-muted line-clamp-2 text-xs">{entry.snippet}</div>
-                        )}
-                        {(entry.tags.length > 0 || entry.distance != null) && (
-                          <div className="text-muted flex items-center gap-2 text-[10.5px]">
-                            <span className="min-w-0 truncate">{entry.tags.join(" · ")}</span>
-                            {entry.distance != null && (
-                              <span className="ml-auto shrink-0">{entry.distance.toFixed(2)}</span>
-                            )}
-                          </div>
-                        )}
+                        <NoteResultRow
+                          title={entry.title}
+                          updated={entry.updated}
+                          snippet={entry.snippet}
+                          tags={entry.tags}
+                          distance={entry.distance}
+                        />
                       </CommandItem>
                     ))
                   )}

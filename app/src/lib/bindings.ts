@@ -358,9 +358,20 @@ export type FileCard = {
 	notes: FileNote[],
 };
 
+/**
+ *  横断一覧のカードと、プレビューの参照ノート一覧が使う。
+ * 
+ *  題名だけでは「どのノートだったか」を思い出せないので、関連 Modal の行と
+ *  同じ材料(抜粋・タグ・更新)まで返す。索引の1行から取れるので追加の I/O は無い。
+ */
 export type FileNote = {
 	id: string,
 	title: string,
+	/**  description が無ければ本文の先頭。改行は畳んで1行に見せる */
+	snippet: string,
+	tags: string[],
+	/**  RFC3339。索引に無ければ None */
+	updated: string | null,
 };
 
 /**
