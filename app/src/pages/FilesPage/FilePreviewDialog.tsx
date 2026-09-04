@@ -127,6 +127,13 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
       <DialogContent
         className={TWO_PANE_DIALOG}
         showCloseButton
+        // 既定では先頭のタブへフォーカスが移り、最初のキー操作で輪郭が出る
+        // (押した本人はタブを選んだつもりが無いので、位置がずれて見える)。
+        // 面の外枠へ当てておけば、キー操作は拾えたまま輪郭は出ない
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.focus();
+        }}
         // capture で拾うのは、cmdk が Enter を onSelect に変えるより先に決めたいため。
         onKeyDownCapture={(event) => {
           if (event.nativeEvent.isComposing) return;
