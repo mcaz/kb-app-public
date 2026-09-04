@@ -12,6 +12,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  TWO_PANE_DIALOG,
 } from "@/components/atoms/ui/dialog";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
 import { NotePreview } from "@/components/organisms/NotePreview";
@@ -121,7 +122,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="h-[min(780px,calc(100%-2rem))] max-w-[min(1080px,calc(100%-2rem))] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
+        className={`${TWO_PANE_DIALOG} grid-rows-[auto_minmax(0,1fr)]`}
         showCloseButton
       >
         {file && (

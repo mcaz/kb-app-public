@@ -13,6 +13,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  TWO_PANE_DIALOG,
   DialogDescription,
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
@@ -97,7 +98,7 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
     >
       <DialogContent
         showCloseButton={false}
-        className="h-[80vh] max-h-[760px] w-[calc(100%-1rem)] max-w-[1180px] gap-0 overflow-hidden p-0 sm:max-w-[1180px]"
+        className={TWO_PANE_DIALOG}
         onKeyDown={(event) => {
           if (!compact || effectiveCompactPane !== "preview" || event.key !== "Enter") return;
           if (event.nativeEvent.isComposing || !effectiveSelectedId) return;

@@ -128,7 +128,17 @@ function DialogDescription({
   );
 }
 
+/**
+ * 一覧と詳細を左右に並べる Modal の寸法。検索・関連・ファイルで同じ大きさにする。
+ *
+ * 幅が Modal ごとに違うと、開くたびに画面が跳ねて読み位置を取り直すことになる。
+ * 中の段組みは呼ぶ側が `grid-rows-*` で足す。
+ */
+const TWO_PANE_DIALOG =
+  "h-[80vh] max-h-[760px] w-[calc(100%-1rem)] max-w-[1180px] gap-0 overflow-hidden p-0 sm:max-w-[1180px]";
+
 export {
+  TWO_PANE_DIALOG,
   Dialog,
   DialogClose,
   DialogContent,

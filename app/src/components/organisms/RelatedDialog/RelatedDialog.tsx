@@ -8,6 +8,7 @@ import { Command, CommandItem, CommandList } from "@/components/atoms/ui/command
 import {
   Dialog,
   DialogContent,
+  TWO_PANE_DIALOG,
   DialogDescription,
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
@@ -127,7 +128,7 @@ export function RelatedDialog({
     >
       <DialogContent
         showCloseButton={false}
-        className="h-[80vh] max-h-[760px] w-[calc(100%-1rem)] max-w-[1180px] gap-0 overflow-hidden p-0 sm:max-w-[1180px]"
+        className={TWO_PANE_DIALOG}
         // capture で拾うのは、cmdk が Enter を onSelect に変えるより先に決めたいため。
         onKeyDownCapture={(event) => {
           if (event.nativeEvent.isComposing) return;
