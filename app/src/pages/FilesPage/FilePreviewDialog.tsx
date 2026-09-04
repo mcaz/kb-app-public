@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
+import { Command, CommandItem, CommandList } from "@/components/atoms/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -124,11 +125,44 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className={`${TWO_PANE_DIALOG} grid-rows-[auto_minmax(0,1fr)]`}
+        className={TWO_PANE_DIALOG}
         showCloseButton
+        // capture で拾うのは、cmdk が Enter を onSelect に変えるより先に決めたいため。
+        onKeyDownCapture={(event) => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+            event.preventDefault();
+            setPane((current) => (current === "file" ? "notes" : "file"));
+            return;
+          }
+          // 上下は cmdk も持つが、閉じるボタンにフォーカスがあると Command まで
+          // 届かない。フォーカス位置に依存しないよう、ここで決める
+          if (pane === "notes" && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            const ids = file?.notes.map((note) => note.id) ?? [];
+            if (ids.length === 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const step = event.key === "ArrowDown" ? 1 : -1;
+            const at = selectedNote ? ids.indexOf(selectedNote) : -1;
+            const next =
+              at < 0 ? (step > 0 ? 0 : ids.length - 1) : (at + step + ids.length) % ids.length;
+            setSelectedNote(ids[next] ?? null);
+            return;
+          }
+          if (event.key === "Enter" && pane === "notes" && selectedNote) {
+            event.preventDefault();
+            event.stopPropagation();
+            openNote(selectedNote);
+          }
+        }}
       >
         {file && (
-          <>
+          <Command
+            shouldFilter={false}
+            value={selectedNote ?? ""}
+            onValueChange={(value) => setSelectedNote(value || null)}
+            className="bg-ground rounded-none"
+          >
             <DialogHeader className="border-line min-w-0 border-b px-5 py-3 pr-12">
               <DialogTitle className="truncate text-[15px]">{file.name}</DialogTitle>
               <DialogDescription className="truncate text-xs">
@@ -138,7 +172,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
               </DialogDescription>
             </DialogHeader>
 
-            <div className="grid min-h-0 grid-cols-[minmax(280px,38%)_minmax(0,1fr)] max-[759px]:grid-cols-1">
+            <div className="grid min-h-0 flex-1 grid-cols-[minmax(280px,38%)_minmax(0,1fr)] max-[759px]:grid-cols-1">
               <section className="border-line flex min-h-0 min-w-0 flex-col border-r max-[759px]:border-r-0">
                 <div className="border-line flex flex-none items-end gap-1 border-b px-2 pt-2">
                   <button
@@ -215,26 +249,24 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                 ) : file.notes.length === 0 ? (
                   <div className="text-muted px-3 py-2 text-xs">{t("references.none")}</div>
                 ) : (
-                  <ul className="min-h-0 flex-1 list-none overflow-y-auto p-2">
+                  <CommandList className="max-h-none min-h-0 flex-1 px-2 py-2">
                     {file.notes.map((note) => (
-                      <li key={note.id}>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedNote(note.id)}
-                          className={relatedItemVariants({
-                            active: selectedNote === note.id,
-                          })}
-                        >
-                          <NoteResultRow
-                            title={note.title}
-                            updated={note.updated}
-                            snippet={note.snippet}
-                            tags={note.tags}
-                          />
-                        </button>
-                      </li>
+                      <CommandItem
+                        key={note.id}
+                        value={note.id}
+                        onMouseMove={() => setSelectedNote(note.id)}
+                        onSelect={() => openNote(note.id)}
+                        className={relatedItemVariants()}
+                      >
+                        <NoteResultRow
+                          title={note.title}
+                          updated={note.updated}
+                          snippet={note.snippet}
+                          tags={note.tags}
+                        />
+                      </CommandItem>
                     ))}
-                  </ul>
+                  </CommandList>
                 )}
               </section>
 
@@ -261,7 +293,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                 )}
               </section>
             </div>
-          </>
+          </Command>
         )}
       </DialogContent>
     </Dialog>

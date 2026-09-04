@@ -34,11 +34,7 @@ export const filePaneTabVariants = tv({
   defaultVariants: { active: false },
 });
 
-/** 参照ノートの行。関連 Modal の結果行と同じ見え方に揃える。 */
+/** 参照ノートの行。関連 Modal の結果行と同じ形(選択は cmdk の data-selected)。 */
 export const relatedItemVariants = tv({
-  base: "flex w-full cursor-pointer flex-col items-stretch gap-1 rounded-md border border-transparent px-3 py-2.5 text-left text-xs",
-  variants: {
-    active: { true: "border-line bg-sel", false: "hover:bg-sel/60" },
-  },
-  defaultVariants: { active: false },
+  base: "flex cursor-pointer flex-col items-stretch gap-1 border border-transparent px-3 py-2.5 data-[selected=true]:border-line",
 });
