@@ -1,3 +1,13 @@
+import { Braces, FileImage, FileText, FileType2 } from "lucide-react";
+
+/** 種類ごとの記号。画像の中身が出せないときの代わりにもなる。 */
+export const FILE_ICONS = {
+  pdf: FileText,
+  image: FileImage,
+  document: Braces,
+  other: FileType2,
+} as const;
+
 import type { FileCard } from "@/lib/api";
 
 export type FileKind = "pdf" | "image" | "document" | "other";

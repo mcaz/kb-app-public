@@ -8,17 +8,17 @@ import { Command, CommandItem, CommandList } from "@/components/atoms/ui/command
 import {
   Dialog,
   DialogContent,
+  TWO_PANE_DIALOG,
   DialogDescription,
   DialogTitle,
+  twoPaneTabVariants,
 } from "@/components/atoms/ui/dialog";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
+import { NoteResultRow, noteResultItemVariants } from "@/components/molecules/NoteResultRow";
 import { NotePreview } from "@/components/organisms/NotePreview";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { formatDateTime } from "@/lib/format";
 import { useHomeState, useNote } from "@/lib/queries";
 import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/lib/searchDialog";
-
-import { relatedItemVariants, relatedTabVariants } from "./variants";
 
 export interface RelatedDialogProps {
   noteId: string | null;
@@ -51,7 +51,7 @@ export function RelatedDialog({
   onOpenNote,
   onOpenGraph,
 }: RelatedDialogProps) {
-  const { t, i18n } = useTranslation(["notes", "common"]);
+  const { t } = useTranslation(["notes", "common"]);
   const { data: note } = useNote(noteId);
   const { data: home } = useHomeState();
   const compact = useMediaQuery("(max-width: 759px)");
@@ -127,7 +127,7 @@ export function RelatedDialog({
     >
       <DialogContent
         showCloseButton={false}
-        className="h-[80vh] max-h-[760px] w-[calc(100%-1rem)] max-w-[1180px] gap-0 overflow-hidden p-0 sm:max-w-[1180px]"
+        className={TWO_PANE_DIALOG}
         // capture で拾うのは、cmdk が Enter を onSelect に変えるより先に決めたいため。
         onKeyDownCapture={(event) => {
           if (event.nativeEvent.isComposing) return;
@@ -187,7 +187,7 @@ export function RelatedDialog({
                       type="button"
                       aria-pressed={tab === entry.tone}
                       onClick={() => setTab(entry.tone)}
-                      className={relatedTabVariants({
+                      className={twoPaneTabVariants({
                         tone: entry.tone,
                         active: tab === entry.tone,
                       })}
@@ -212,33 +212,15 @@ export function RelatedDialog({
                         value={entry.key}
                         onMouseMove={() => setSelectedKey(entry.key)}
                         onSelect={() => select(entry)}
-                        className={relatedItemVariants()}
+                        className={noteResultItemVariants()}
                       >
-                        <div className="flex min-w-0 items-start gap-2">
-                          <span className="line-clamp-2 min-w-0 flex-1 font-semibold">
-                            {entry.title}
-                          </span>
-                          {entry.updated && (
-                            <span className="text-muted shrink-0 text-[10px]">
-                              {formatDateTime(
-                                entry.updated,
-                                i18n.language,
-                                t("common:date.unknown"),
-                              )}
-                            </span>
-                          )}
-                        </div>
-                        {entry.snippet && (
-                          <div className="text-muted line-clamp-2 text-xs">{entry.snippet}</div>
-                        )}
-                        {(entry.tags.length > 0 || entry.distance != null) && (
-                          <div className="text-muted flex items-center gap-2 text-[10.5px]">
-                            <span className="min-w-0 truncate">{entry.tags.join(" · ")}</span>
-                            {entry.distance != null && (
-                              <span className="ml-auto shrink-0">{entry.distance.toFixed(2)}</span>
-                            )}
-                          </div>
-                        )}
+                        <NoteResultRow
+                          title={entry.title}
+                          updated={entry.updated}
+                          snippet={entry.snippet}
+                          tags={entry.tags}
+                          distance={entry.distance}
+                        />
                       </CommandItem>
                     ))
                   )}

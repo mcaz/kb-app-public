@@ -21,6 +21,8 @@ import type {
   NoteSummary,
   NoteView,
   PreviewFile,
+  PurgePlan,
+  Purged,
   SearchOutcome,
   Settings,
   SetupState,
@@ -189,6 +191,45 @@ const noteCategory = (id: string) => {
 };
 
 /** ノートごとのファイル。取得できていない行も1つ置いて、状態の見え方を確かめられるようにする。 */
+/** どのノートからも外れた見本。孤児の節が空でないことを画面で確かめるため。 */
+const orphanFiles: FileRow[] = [
+  {
+    id: "demo-orphan-1",
+    version: 3,
+    name: "旧・見積書.xls",
+    size: 17920,
+    media_type: "application/vnd.ms-excel",
+    availability: "local",
+    sensitivity: "private",
+    sync: "full",
+    linked: false,
+    client_repo: false,
+    can_fetch: false,
+    added_at: "2026-08-02T04:10:00Z",
+  },
+  {
+    id: "demo-orphan-2",
+    version: 1,
+    name: "会話から受け取った図.png",
+    size: 40960,
+    media_type: "image/png",
+    availability: "local",
+    sensitivity: "private",
+    sync: "local_only",
+    linked: false,
+    client_repo: false,
+    can_fetch: false,
+    added_at: "2026-08-20T09:30:00Z",
+  },
+];
+
+/** id からファイルを引く。孤児と、ノートに付いているものの両方から探す。 */
+const demoFile = (id: string): FileRow | undefined =>
+  orphanFiles.find((file) => file.id === id) ??
+  Object.values(files)
+    .flat()
+    .find((file) => file.id === id);
+
 const files: Record<string, FileRow[]> = {
   "notes/引っ越し手続きメモ": [
     {
@@ -232,6 +273,23 @@ const files: Record<string, FileRow[]> = {
       client_repo: true,
       can_fetch: false,
       added_at: "2026-08-12T05:00:00Z",
+    },
+  ],
+  // 「間取り図.png」を2本のノートが持つ。参照数の表示を確かめるための例
+  "notes/確定申告の準備": [
+    {
+      id: "demo-1",
+      version: 1,
+      name: "間取り図.png",
+      size: 245760,
+      media_type: "image/png",
+      availability: "local",
+      sensitivity: "private",
+      sync: "full",
+      linked: false,
+      client_repo: false,
+      can_fetch: false,
+      added_at: "2026-08-10T05:00:00Z",
     },
   ],
 };
@@ -479,14 +537,29 @@ export const demoApi = {
       legacy: id === "notes/引っ越し手続きメモ" ? [{ name: "旧・間取り図.png", size: 245760 }] : [],
     }),
   filesList: (): Promise<FilesPage> => {
-    const cards: FileCard[] = Object.entries(files).flatMap(([noteId, rows]) => {
+    // 実アプリの files_list は台帳1件につきカード1枚で、ひもづくノートを配列で返す。
+    // ノート側から組み立てるとき同じファイルが複数枚に割れるので、ID で束ねる
+    const byId = new Map<string, FileCard>();
+    for (const [noteId, rows] of Object.entries(files)) {
       const note = notes.find((item) => item.id === noteId);
-      return rows.map((file) => ({
-        ...file,
-        notes: [{ id: noteId, title: note?.title ?? noteId }],
-      }));
-    });
-    return delay({ files: cards, degraded: [] });
+      for (const file of rows) {
+        const card = byId.get(file.id) ?? { ...file, notes: [] };
+        card.notes = [
+          ...card.notes,
+          {
+            id: noteId,
+            title: note?.title ?? noteId,
+            snippet: note?.description ?? "",
+            tags: note?.tags ?? [],
+            updated: note?.generated_at ?? null,
+          },
+        ];
+        byId.set(file.id, card);
+      }
+    }
+    // どのノートからも外れたものも一覧に出る(差し替えられた版だけが外れる)
+    for (const file of orphanFiles) byId.set(file.id, { ...file, notes: [] });
+    return delay({ files: [...byId.values()], degraded: [] });
   },
   fileAdd: (noteId: string, path: string): Promise<Added> => {
     const file: FileRow = {
@@ -514,6 +587,37 @@ export const demoApi = {
   // ブラウザでは DOM の paste 経路が動くのでフォールバックは不要
   fileAddFromClipboard: () => delay<Added | null>(null),
   fileDetach: () => delay(null),
+  filePurgePlan: (id: string): Promise<PurgePlan> => {
+    const onlyCopy = id === "demo-orphan-2";
+    const holders = Object.entries(files)
+      .filter(([, rows]) => rows.some((f) => f.id === id))
+      .map(([noteId]) => noteId);
+    const named = demoFile(id);
+    return delay({
+      token: "demo",
+      id,
+      display_name: named?.name ?? "見本.bin",
+      hash: "0".repeat(64),
+      size: named?.size ?? 0,
+      origin: onlyCopy ? "mcp-content:claude-code/claude" : "picker",
+      sync: named?.sync ?? "full",
+      notes: holders,
+      refs: [],
+      shares_object_with: onlyCopy ? [] : ["demo-shared"],
+      drops_object: onlyCopy,
+      needs_confirmation: onlyCopy,
+      superseded_by: [],
+      reason: "見本",
+    });
+  },
+  filePurgeCommit: (id: string): Promise<Purged> =>
+    delay({
+      id,
+      display_name: demoFile(id)?.name ?? "見本.bin",
+      dropped_object: id === "demo-orphan-2",
+      object_error: null,
+      sync_error: null,
+    }),
   fileFetch: () => delay<Availability>("local"),
   // ブラウザからは OS のアプリへ渡せない(この経路は Tauri でしか通らない)
   fileOpen: () => delay(null),

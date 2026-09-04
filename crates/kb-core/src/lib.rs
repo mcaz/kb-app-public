@@ -39,6 +39,8 @@ pub mod mcp;
 pub mod migrate;
 pub mod note_id;
 pub mod note_store;
+pub mod purge;
+pub mod reason;
 pub mod registry;
 pub mod resolve;
 pub mod retrieval;

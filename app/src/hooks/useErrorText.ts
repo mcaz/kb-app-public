@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { isKbError } from "@/lib/api";
 
-import type { BackupFailureKind, CoreErrorKind } from "@/lib/bindings";
+import type { BackupFailureKind, CoreErrorKind, Refusal } from "@/lib/bindings";
 
 function backupErrorKey(kind: BackupFailureKind) {
   switch (kind) {
@@ -60,6 +60,21 @@ export function useBackupErrorText(): (kind: BackupFailureKind | null, fallback:
   );
 }
 
+/** 取り除けなかった理由は、そのまま「次に何をすればよいか」になる。 */
+function purgeRefusalKey(refusal: Refusal) {
+  switch (refusal.reason) {
+    case "not_in_ledger":
+      return "errors.purgeNotInLedger";
+    case "unknown_token":
+    case "expired":
+    case "wrong_target":
+    case "changed_since_plan":
+      return "errors.purgeRetry";
+    case "needs_confirmation":
+      return "errors.purgeNeedsConfirmation";
+  }
+}
+
 function coreErrorKey(kind: CoreErrorKind) {
   switch (kind) {
     case "vault_unavailable":
@@ -106,6 +121,8 @@ export function useErrorText(): (e: unknown) => string {
           return t("errors.fileClientRepoLocked");
         case "file_needs_confirm":
           return t("errors.fileNeedsConfirm");
+        case "file_purge_refused":
+          return t(purgeRefusalKey(d.refusal));
         case "file_malformed":
           return t("errors.fileMalformed");
         case "file_not_here":

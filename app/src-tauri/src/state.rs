@@ -47,6 +47,9 @@ struct VaultCtx {
 #[derive(Default)]
 pub struct AppState {
     ctx: Mutex<Option<VaultCtx>>,
+    /// purge の下見で固定した対象。**プロセス内だけ**に置く。
+    /// 再起動で消えて構わない(消えたら下見からやり直すだけ)。
+    purges: Mutex<kb_core::purge::PendingPurges>,
 }
 
 impl AppState {
@@ -66,6 +69,15 @@ impl AppState {
         let mut guard = self.ctx.lock().map_err(|_| poisoned())?;
         let ctx = ensure(&mut guard)?;
         f(&ctx.vault)
+    }
+
+    /// purge の下見と実行。台帳一式に加えて、対象を固定した token 置き場を渡す。
+    pub fn with_purges<T>(
+        &self,
+        f: impl FnOnce(&Vault, &Stores, &Ledger, &mut kb_core::purge::PendingPurges) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let mut purges = self.purges.lock().map_err(|_| poisoned())?;
+        self.with_artifacts(|vault, stores, ledger, _| f(vault, stores, ledger, &mut purges))
     }
 
     /// ファイル(Artifact)を扱う。台帳・実体の置き場・保管庫 ID を揃えて渡す。

@@ -12,14 +12,17 @@ import { useNote } from "@/lib/queries";
 export interface NotePreviewProps {
   noteId: string | null;
   /** 一覧と同時に置けない幅では、この面だけを出して戻る導線を足す。 */
-  compact: boolean;
+  /** 一覧と同時に置けない幅で、この面だけを出すとき true。 */
+  compact?: boolean;
   emptyLabel: string;
-  backLabel: string;
+  /** `compact` のときだけ使う戻る導線。 */
+  backLabel?: string;
   /** 開く操作の名前。ラベルを隠す場合もアクセシブル名として使う。 */
   openLabel: string;
   /** false でアイコンだけの開くボタンにする。 */
   showOpenLabel?: boolean;
-  onBack: () => void;
+  /** `compact` のときだけ使う。 */
+  onBack?: () => void;
   onOpen: (id: string) => void;
   /** 本文中のリンクを辿る先。既定は onOpen と同じ。 */
   onOpenLink?: (id: string) => void;
@@ -28,7 +31,7 @@ export interface NotePreviewProps {
 /** 一覧の隣に置く読み取り専用の本文面。検索と関連の2つの Modal が共有する。 */
 export function NotePreview({
   noteId,
-  compact,
+  compact = false,
   emptyLabel,
   backLabel,
   openLabel,
@@ -60,7 +63,7 @@ export function NotePreview({
   return (
     <article className="flex h-full min-w-0 flex-col overflow-hidden">
       <div className="border-line flex flex-none items-center gap-2 border-b px-4 py-2.5">
-        {compact && (
+        {compact && onBack && (
           <Button variant="quiet" size="sm" onClick={onBack}>
             <ArrowLeft className="size-4" />
             {backLabel}

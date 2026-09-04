@@ -74,6 +74,15 @@ export const commands = {
 } | null, AppError>(__TAURI_INVOKE("file_add_from_clipboard", { noteId })),
 	/**  このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。 */
 	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
+	/**  purge の下見。**まだ消さない。** 実体を道連れにするか、確認が要るかを返す。 */
+	filePurgePlan: (id: string, reason: string) => typedError<PurgePlan, AppError>(__TAURI_INVOKE("file_purge_plan", { id, reason })),
+	/**
+	 *  下見どおりなら取り除く。
+	 * 
+	 *  `confirmed` は**画面が本人へ訊いたときだけ** true。原本の無い実体(MCP 添付)を
+	 *  消すときに要る。履歴からは消えないので、画面は「完全に削除」と書かない。
+	 */
+	filePurgeCommit: (id: string, token: string, confirmed: boolean) => typedError<Purged, AppError>(__TAURI_INVOKE("file_purge_commit", { id, token, confirmed })),
 	/**  手元に無い実体を取り寄せる。戻り値は取り寄せた後の状態(都度算出)。 */
 	fileFetch: (id: string) => typedError<Availability, AppError>(__TAURI_INVOKE("file_fetch", { id })),
 	/**
@@ -159,6 +168,11 @@ export type AppError =
 { code: "file_client_repo_locked" } | 
 /**  持ち出しを広げる変更なので、確認を経ていない限り通さない(決定10)。 */
 { code: "file_needs_confirm" } | 
+/**
+ *  ファイルを取り除けなかった。**利用者が次にできることがある**拒否だけを
+ *  ここへ運ぶ。git・ディスクの失敗は `CoreFailed` として扱う。
+ */
+{ code: "file_purge_refused"; refusal: Refusal } | 
 /**  識別子・参照名の形が不正。 */
 { code: "file_malformed"; field: string } | 
 /**  手元に無い(または方針で閉じている)ので開けない。 */
@@ -188,6 +202,15 @@ export type AppError =
 { code: "core_failed"; kind: CoreErrorKind } | 
 /**  Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。 */
 { code: "unexpected"; message: string };
+
+/**
+ *  Artifact record の不透明な identity(ULID)。
+ * 
+ *  `content_hash` とは**別物**。同じ bytes でも来歴や信頼境界が違えば別の record を持てる
+ *  (正本の却下案「`artifact_id = content_hash`」)。時刻が先頭に来るので、
+ *  文字列のまま並べれば作成順になる。
+ */
+export type ArtifactId = string;
 
 export type Authority = {
 	namespace: NoteNamespace,
@@ -327,9 +350,20 @@ export type FileCard = {
 	notes: FileNote[],
 };
 
+/**
+ *  横断一覧のカードと、プレビューの参照ノート一覧が使う。
+ * 
+ *  題名だけでは「どのノートだったか」を思い出せないので、関連 Modal の行と
+ *  同じ材料(抜粋・タグ・更新)まで返す。索引の1行から取れるので追加の I/O は無い。
+ */
 export type FileNote = {
 	id: string,
 	title: string,
+	/**  description が無ければ本文の先頭。改行は畳んで1行に見せる */
+	snippet: string,
+	tags: string[],
+	/**  RFC3339。索引に無ければ None */
+	updated: string | null,
 };
 
 /**
@@ -551,6 +585,72 @@ export type PreviewFile = {
 	path: string,
 	text: string | null,
 };
+
+/**  purge の下見。**まだ何も消していない。** */
+export type PurgePlan = {
+	/**  `commit` へ渡す短命 token。 */
+	token: string,
+	id: ArtifactId,
+	display_name: string,
+	origin: string,
+	/**
+	 *  持ち出し区分。**取り除ける範囲がこれで変わる** — `full` は同期済みの
+	 *  履歴に残り、`local_only` はそもそもこの端末から出ていない。
+	 */
+	sync: SyncPolicy,
+	/**  まだ結び付いているノート。空なら孤児。 */
+	notes: string[],
+	/**
+	 *  一緒に外れる参照名。**残すほうが宙に浮く** — 本文の
+	 *  `kb-artifact-ref:` は、どちらにせよこのファイルへは辿り着けなくなる。
+	 */
+	refs: string[],
+	/**  同じ実体を指す他の台帳。1件でもあれば実体は残す。 */
+	shares_object_with: ArtifactId[],
+	/**  実体が消え、かつ原本が無い来歴 → `confirmed` 無しでは通さない。 */
+	needs_confirmation: boolean,
+	/**  この台帳を `supersedes` している版。purge すると参照が宙に浮く。 */
+	superseded_by: ArtifactId[],
+};
+
+/**  purge の結果。 */
+export type Purged = {
+	id: ArtifactId,
+	display_name: string,
+	/**  実体も消したか(他が参照していれば false)。 */
+	dropped_object: boolean,
+	/**
+	 *  実体を消せなかった理由。**台帳からは既に外れている。**
+	 * 
+	 *  台帳を先に消すのは、実体だけ先に消えて台帳が残る(開けない行が残る)の
+	 *  を避けるため。つまりここへ来た時点で取り除く操作自体は成立していて、
+	 *  失敗にすると「一覧から消えたのにエラー」という嘘になる。残るのは
+	 *  ディスクを取り戻せなかったことだけなので、結果に添えて伝える。
+	 */
+	object_error: string | null,
+	/**  同期の失敗は purge 自体の失敗にしない(派生 — 契約4)。 */
+	sync_error: string | null,
+};
+
+/**
+ *  purge を通さなかった理由。**利用者が次にできることがある**ものだけを型にする。
+ * 
+ *  想定外の失敗(git・ディスク)はここへ入れない。境界で `storage` として扱い、
+ *  診断はログへ落とす。`ArtifactError` と同じ形(ADR-0002 決定10)。
+ */
+export type Refusal = 
+/**  台帳に無い(既に取り除かれた・一覧が古い)。 */
+{ reason: "not_in_ledger" } | 
+/**  token を知らない(使用済み・別の窓が使った)。 */
+{ reason: "unknown_token" } | 
+/**  token の期限が切れた。 */
+{ reason: "expired" } | 
+/**  token が別の対象のもの。 */
+{ reason: "wrong_target" } | 
+/**  下見のあとに版か実体が変わった。 */
+{ reason: "changed_since_plan" } | 
+/**  原本が無いので、画面の確認を経ないと通さない。 */
+{ reason: "needs_confirmation" };
 
 export type RelationKind = "derived_from" | "supports" | "updates" | "contradicts" | "supersedes" | "mentions";
 

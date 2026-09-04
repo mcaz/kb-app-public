@@ -102,6 +102,26 @@ pub fn availability(vault: &Vault, stores: &Stores, m: &Manifest) -> Availabilit
     }
 }
 
+/// 実体をこの端末から取り除く。[`availability`] の書き込み側の対。
+///
+/// **どこにあるかは locator が決める**という同じ規則で捌く。呼ぶ側が区分で
+/// 分岐すると、読む側(`availability`)とずれたときに気付けない。
+///
+/// **履歴からは消えない。** `full` の実体は LFS へコミット済みで、fresh clone
+/// すれば取得できる(ADR kb-app/artifact-deletion)。
+///
+/// 参照が残っていないことは呼ぶ側が確かめる。
+pub fn drop_object(vault: &Vault, stores: &Stores, m: &Manifest) -> Result<bool> {
+    match &m.locator {
+        Locator::Managed { .. } => match m.policy.sync {
+            SyncPolicy::Full => crate::lfs::forget(vault, &m.hash).map(|()| true),
+            other => stores.remove(other, &m.hash),
+        },
+        // 旧添付と参照だけのものは、この保管庫が実体を所有していない
+        Locator::LegacyGit { .. } | Locator::Linked { .. } => Ok(false),
+    }
+}
+
 /// 保管庫1つ分の置き場。境界ごとのディレクトリを束ねるだけで、跨ぐ操作を持たない。
 #[derive(Debug, Clone)]
 pub struct Stores {
@@ -135,13 +155,29 @@ impl Stores {
     }
 
     /// content-addressed な置き場所。先頭2文字で掘るのは1階層に溜めすぎないため。
-    fn object_path(&self, sync: SyncPolicy, hash: &ContentHash) -> PathBuf {
+    pub(crate) fn object_path(&self, sync: SyncPolicy, hash: &ContentHash) -> PathBuf {
         let h = hash.as_str();
         let (head, rest) = h.split_at(2);
         self.boundary_dir(sync)
             .join("objects")
             .join(head)
             .join(rest)
+    }
+
+    /// 実体をこの境界から取り除く。無ければ何もしない(2度目の purge でも落ちない)。
+    ///
+    /// **参照が残っていないことは呼ぶ側が確かめる。** ここは1件消すだけで、
+    /// 同じ実体を指す他の台帳がいるかは見ない([`crate::purge`] が見る)。
+    pub fn remove(&self, sync: SyncPolicy, hash: &ContentHash) -> Result<bool> {
+        let path = self.object_path(sync, hash);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => {
+                Err(anyhow::Error::from(error)
+                    .context(format!("実体を消せない: {}", path.display())))
+            }
+        }
     }
 
     /// **その境界に**あるか。境界を跨いで訊く手段は用意しない。

@@ -3,6 +3,8 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
+import { PurgeDialog } from "@/components/molecules/PurgeDialog";
+import { usePurgeFlow } from "@/hooks/usePurgeFlow";
 import {
   Select,
   SelectContent,
@@ -15,6 +17,7 @@ import { useFiles } from "@/lib/queries";
 
 import { FileCard } from "./FileCard";
 import { FilePreviewDialog } from "./FilePreviewDialog";
+import { OrphanSection } from "./OrphanSection";
 import { filterFiles, formatBytes, summarizeFiles, type FileKind } from "./fileKind";
 
 const FILE_KINDS = ["pdf", "image", "document", "other"] as const;
@@ -23,11 +26,17 @@ const FILE_KINDS = ["pdf", "image", "document", "other"] as const;
 export function FilesPage() {
   const { t, i18n } = useTranslation("files");
   const { data, isPending } = useFiles();
+  const purge = usePurgeFlow();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<FileKind | "all">("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const files = useMemo(() => filterFiles(data?.files ?? [], query, kind), [data, query, kind]);
   const summary = useMemo(() => summarizeFiles(data?.files ?? []), [data]);
+  // 孤児は一覧の部分集合。台帳を引き直さない(定義が2つに割れる)
+  const orphans = useMemo(
+    () => (data?.files ?? []).filter((file) => file.notes.length === 0),
+    [data],
+  );
   const selected = data?.files.find((file) => file.id === selectedId) ?? null;
 
   return (
@@ -109,11 +118,25 @@ export function FilesPage() {
         ) : (
           <div className="grid grid-cols-3 gap-4 max-[980px]:grid-cols-2 max-[560px]:grid-cols-1">
             {files.map((file) => (
-              <FileCard key={file.id} file={file} onOpen={() => setSelectedId(file.id)} />
+              <FileCard
+                key={file.id}
+                file={file}
+                busy={purge.busy}
+                onOpen={() => setSelectedId(file.id)}
+                onPurge={() => void purge.planPurge(file.id)}
+              />
             ))}
           </div>
         )}
+
+        <OrphanSection
+          files={orphans}
+          busy={purge.busy}
+          onPurge={(id) => void purge.planPurge(id)}
+        />
       </div>
+
+      <PurgeDialog flow={purge} />
 
       <FilePreviewDialog
         file={selected}

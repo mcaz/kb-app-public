@@ -32,6 +32,9 @@ pub enum AppError {
     FileClientRepoLocked,
     /// 持ち出しを広げる変更なので、確認を経ていない限り通さない(決定10)。
     FileNeedsConfirm,
+    /// ファイルを取り除けなかった。**利用者が次にできることがある**拒否だけを
+    /// ここへ運ぶ。git・ディスクの失敗は `CoreFailed` として扱う。
+    FilePurgeRefused { refusal: kb_core::purge::Refusal },
     /// 識別子・参照名の形が不正。
     FileMalformed { field: String },
     /// 手元に無い(または方針で閉じている)ので開けない。
@@ -78,6 +81,7 @@ impl std::fmt::Display for AppError {
             }
             Self::FileClientRepoLocked => write!(f, "仕事のリポジトリ由来なので変更できない"),
             Self::FileNeedsConfirm => write!(f, "持ち出しを広げる変更には明示確認が要る"),
+            Self::FilePurgeRefused { refusal } => write!(f, "取り除けない: {refusal}"),
             Self::FileMalformed { field } => write!(f, "形式が不正: {field}"),
             Self::FileNotHere => write!(f, "この端末にファイルが無い"),
             Self::ClipboardImageTooLarge => write!(f, "クリップボードの画像が大きすぎる"),
@@ -154,6 +158,21 @@ impl AppError {
         CoreError::invalid_input(error).into()
     }
 
+    /// purge の失敗を分類する。
+    ///
+    /// 拒否は型で画面へ運び、それ以外(git・ディスク)は `storage` にまとめる。
+    /// **診断は捨てずに stderr へ落とす** — ここを黙って潰していたせいで、
+    /// 実機の失敗が「入力の形式が不正」としか見えなかった。
+    pub fn purge(error: anyhow::Error) -> Self {
+        if let Some(refusal) = error.downcast_ref::<kb_core::purge::Refusal>() {
+            return Self::FilePurgeRefused {
+                refusal: refusal.clone(),
+            };
+        }
+        eprintln!("kb-app: ファイルを取り除けなかった: {error:#}");
+        Self::storage(error)
+    }
+
     pub fn note_not_found(id: impl Into<String>) -> Self {
         CoreError::note_not_found(id).into()
     }
@@ -184,6 +203,23 @@ pub type AppResult<T> = Result<T, AppError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_purge_refusal_keeps_its_reason_and_a_git_failure_does_not() {
+        let refused = AppError::purge(anyhow::Error::new(kb_core::purge::Refusal::Expired));
+        match refused {
+            AppError::FilePurgeRefused { refusal } => {
+                assert_eq!(refusal, kb_core::purge::Refusal::Expired);
+            }
+            other => panic!("拒否が潰れた: {other}"),
+        }
+
+        // 想定外の失敗は「入力が不正」ではない。次の一手が違う
+        match AppError::purge(anyhow::anyhow!("git commit: nothing to commit")) {
+            AppError::CoreFailed { kind } => assert_eq!(kind, CoreErrorKind::Storage),
+            other => panic!("別のエラーへ変換された: {other}"),
+        }
+    }
 
     #[test]
     fn backup_reason_reaches_the_serialized_app_error() {

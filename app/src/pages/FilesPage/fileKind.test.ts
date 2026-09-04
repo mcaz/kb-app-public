@@ -17,7 +17,7 @@ const file = (overrides: Partial<FileCard> = {}): FileCard => ({
   client_repo: false,
   can_fetch: false,
   added_at: "2026-08-18T00:00:00Z",
-  notes: [{ id: "notes/design", title: "画面設計" }],
+  notes: [{ id: "notes/design", title: "画面設計", snippet: "", tags: [], updated: null }],
   ...overrides,
 });
 

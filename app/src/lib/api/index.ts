@@ -20,6 +20,8 @@ import type {
   NoteListPage,
   NoteView,
   PreviewFile,
+  PurgePlan,
+  Purged,
   SearchOutcome,
   Settings,
   SetupState,
@@ -143,6 +145,17 @@ export const api = {
     IN_TAURI
       ? unwrap(commands.fileDetach(noteId, id, expectedVersion))
       : (await demo()).fileDetach(),
+  /** purge の下見。まだ消さない。 */
+  filePurgePlan: async (id: string, reason: string): Promise<PurgePlan> =>
+    IN_TAURI ? unwrap(commands.filePurgePlan(id, reason)) : (await demo()).filePurgePlan(id),
+  /**
+   * 下見どおりに取り除く。**呼べるのは確認ダイアログの先だけ**なので、コアへ渡す
+   * `confirmed` はここで立てる(画面の外へ出さない)。
+   */
+  filePurgeCommit: async (id: string, token: string): Promise<Purged> =>
+    IN_TAURI
+      ? unwrap(commands.filePurgeCommit(id, token, true))
+      : (await demo()).filePurgeCommit(id),
   fileFetch: async (id: string): Promise<Availability> =>
     IN_TAURI ? unwrap(commands.fileFetch(id)) : (await demo()).fileFetch(),
   /** 中身はコアの resolver 経由でしか出てこない(画面はパスを受け取らない)。 */

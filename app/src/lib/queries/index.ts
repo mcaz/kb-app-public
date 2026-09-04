@@ -225,15 +225,18 @@ export const useFilePreview = (id: string | null) =>
  */
 function useFileMutation<TArgs, TData>(
   fn: (args: TArgs) => Promise<TData>,
-  noteId: (args: TArgs) => string,
+  /** ノートの外から呼ぶ操作(ファイル一覧からの purge 等)では undefined。 */
+  noteId: (args: TArgs) => string | undefined,
 ) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: fn,
     onSuccess: async (_data, args) => {
+      const note = noteId(args);
       await Promise.all([
-        qc.invalidateQueries({ queryKey: queryKeys.noteFiles(noteId(args)) }),
+        ...(note ? [qc.invalidateQueries({ queryKey: queryKeys.noteFiles(note) })] : []),
         qc.invalidateQueries({ queryKey: queryKeys.files }),
+        // ノート一覧の file_count もこの操作で変わる
         qc.invalidateQueries({ queryKey: queryKeys.noteLists }),
       ]);
     },
@@ -257,6 +260,18 @@ export const useFileDetach = () =>
   useFileMutation(
     (a: { noteId: string; id: string; expectedVersion: number }) =>
       api.fileDetach(a.noteId, a.id, a.expectedVersion),
+    (a) => a.noteId,
+  );
+
+/** 下見は読み取りだけ。何も変わらないので無効化しない。 */
+export const useFilePurgePlan = () =>
+  useMutation({
+    mutationFn: (a: { id: string; reason: string }) => api.filePurgePlan(a.id, a.reason),
+  });
+
+export const useFilePurgeCommit = () =>
+  useFileMutation(
+    (a: { id: string; token: string; noteId?: string }) => api.filePurgeCommit(a.id, a.token),
     (a) => a.noteId,
   );
 

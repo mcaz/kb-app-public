@@ -27,8 +27,28 @@
   "download": "ダウンロード",
   "downloaded": "ファイルを保存しました",
   "openExternal": "別アプリで開く",
-  "openNote": "元のノート",
   "previewLoading": "プレビューを準備中…",
   "previewUnavailable": "この形式はアプリ内で表示できません",
-  "previewDescription": "{{name}}の内容"
+  "previewDescription": "{{name}}の内容",
+  "orphans": {
+    "label": "どのノートからも外れたファイル",
+    "title": "外れたファイル",
+    "help": "ノートから外しただけでは実体が残ります。使わないものはここで取り除けます。"
+  },
+  "purge": "取り除く",
+  "references": {
+    "none": "どのノートからも外れています",
+    "many": "{{count}}件のノートから参照",
+    "pickNote": "左の一覧からノートを選ぶと本文が出ます",
+    "openAsMain": "このノートを開く"
+  },
+  "panes": {
+    "file": "ファイル",
+    "notes": "参照ノート"
+  },
+  "details": {
+    "kind": "種類",
+    "size": "大きさ",
+    "added": "追加"
+  }
 }
