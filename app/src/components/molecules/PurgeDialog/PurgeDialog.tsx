@@ -41,7 +41,11 @@ export function PurgeDialog({ flow }: PurgeDialogProps) {
       <DialogContent className="min-w-[320px]">
         <DialogHeader>
           <DialogTitle>{t("file.purgeTitle", { name: plan.display_name })}</DialogTitle>
-          <DialogDescription>{t("file.purgeScope")}</DialogDescription>
+          {/* 取り除ける範囲は区分で変わる。full を local_only と同じ言い方に
+              すると「消えた」と誤解させ、逆だと要らない不安を与える */}
+          <DialogDescription>
+            {t(plan.sync === "full" ? "file.purgeScopeSynced" : "file.purgeScopeLocal")}
+          </DialogDescription>
         </DialogHeader>
 
         <ul className="text-muted flex list-disc flex-col gap-1 pl-4 text-[12px]">

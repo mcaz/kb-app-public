@@ -593,6 +593,11 @@ export type PurgePlan = {
 	id: ArtifactId,
 	display_name: string,
 	origin: string,
+	/**
+	 *  持ち出し区分。**取り除ける範囲がこれで変わる** — `full` は同期済みの
+	 *  履歴に残り、`local_only` はそもそもこの端末から出ていない。
+	 */
+	sync: SyncPolicy,
 	/**  まだ結び付いているノート。空なら孤児。 */
 	notes: string[],
 	/**

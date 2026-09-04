@@ -600,6 +600,7 @@ export const demoApi = {
       hash: "0".repeat(64),
       size: named?.size ?? 0,
       origin: onlyCopy ? "mcp-content:claude-code/claude" : "picker",
+      sync: named?.sync ?? "full",
       notes: holders,
       refs: [],
       shares_object_with: onlyCopy ? [] : ["demo-shared"],

@@ -17,6 +17,7 @@ const plan = (over: Partial<PurgePlan> = {}): PurgePlan => ({
   id: "01M0EW60589ZHSZ0HJ6S1VWMYQ",
   display_name: "壊れた.xls",
   origin: "picker",
+  sync: "full",
   notes: [],
   refs: [],
   shares_object_with: [],
@@ -44,9 +45,15 @@ describe("PurgeDialog", () => {
   });
 
   /** 履歴には残るので、回収できる範囲だけを言う(ADR kb-app/artifact-deletion)。 */
-  it("取り除ける範囲を必ず示す", () => {
+  it("同期するファイルは履歴に残ることを示す", () => {
     render(<PurgeDialog flow={flow(plan())} />);
-    expect(screen.getByText("file.purgeScope")).toBeInTheDocument();
+    expect(screen.getByText("file.purgeScopeSynced")).toBeInTheDocument();
+  });
+
+  /** この端末から出ていないものに「他の端末に残る」と言わない。 */
+  it("同期しないファイルはこの端末で完結すると示す", () => {
+    render(<PurgeDialog flow={flow(plan({ sync: "local_only" }))} />);
+    expect(screen.getByText("file.purgeScopeLocal")).toBeInTheDocument();
   });
 
   it("実体を道連れにしないときは共有している件数を出す", () => {

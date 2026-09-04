@@ -25,7 +25,7 @@ use anyhow::{Result, bail};
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 
-use crate::artifact::{ArtifactId, ContentHash, Manifest};
+use crate::artifact::{ArtifactId, ContentHash, Manifest, SyncPolicy};
 use crate::ledger::Ledger;
 use crate::store::Stores;
 use crate::vault::Vault;
@@ -105,6 +105,9 @@ pub struct PurgePlan {
     pub id: ArtifactId,
     pub display_name: String,
     pub origin: String,
+    /// 持ち出し区分。**取り除ける範囲がこれで変わる** — `full` は同期済みの
+    /// 履歴に残り、`local_only` はそもそもこの端末から出ていない。
+    pub sync: SyncPolicy,
     /// まだ結び付いているノート。空なら孤児。
     pub notes: Vec<String>,
     /// 一緒に外れる参照名。**残すほうが宙に浮く** — 本文の
@@ -230,6 +233,7 @@ impl PendingPurges {
             id: manifest.id.clone(),
             display_name: manifest.display_name.clone(),
             origin: manifest.created.origin.clone(),
+            sync: manifest.policy.sync,
             notes: manifest.notes.clone(),
             refs: ledger
                 .refs_for(id)
@@ -297,7 +301,7 @@ impl PendingPurges {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::{Created, Locator, Policy, Role, SyncPolicy};
+    use crate::artifact::{Created, Locator, Policy, Role};
     use std::path::PathBuf;
     use std::str::FromStr;
     use tempfile::{TempDir, tempdir};
