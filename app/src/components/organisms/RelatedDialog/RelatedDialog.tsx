@@ -11,15 +11,14 @@ import {
   TWO_PANE_DIALOG,
   DialogDescription,
   DialogTitle,
+  twoPaneTabVariants,
 } from "@/components/atoms/ui/dialog";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
-import { NoteResultRow } from "@/components/molecules/NoteResultRow";
+import { NoteResultRow, noteResultItemVariants } from "@/components/molecules/NoteResultRow";
 import { NotePreview } from "@/components/organisms/NotePreview";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useHomeState, useNote } from "@/lib/queries";
 import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/lib/searchDialog";
-
-import { relatedItemVariants, relatedTabVariants } from "./variants";
 
 export interface RelatedDialogProps {
   noteId: string | null;
@@ -188,7 +187,7 @@ export function RelatedDialog({
                       type="button"
                       aria-pressed={tab === entry.tone}
                       onClick={() => setTab(entry.tone)}
-                      className={relatedTabVariants({
+                      className={twoPaneTabVariants({
                         tone: entry.tone,
                         active: tab === entry.tone,
                       })}
@@ -213,7 +212,7 @@ export function RelatedDialog({
                         value={entry.key}
                         onMouseMove={() => setSelectedKey(entry.key)}
                         onSelect={() => select(entry)}
-                        className={relatedItemVariants()}
+                        className={noteResultItemVariants()}
                       >
                         <NoteResultRow
                           title={entry.title}

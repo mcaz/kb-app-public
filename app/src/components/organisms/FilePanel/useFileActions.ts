@@ -79,10 +79,7 @@ export function useFileActions(noteId: string) {
   return {
     addPicked,
     detachFile,
-    planPurge: (file: FileRow) => purge.planPurge(file.id),
-    confirmPurge: purge.confirmPurge,
-    purgeTarget: purge.target,
-    clearPurge: purge.clear,
+    purge,
     fetchFile,
     openFile,
     openLegacyFile,

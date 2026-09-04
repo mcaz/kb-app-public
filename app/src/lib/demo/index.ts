@@ -223,6 +223,13 @@ const orphanFiles: FileRow[] = [
   },
 ];
 
+/** id からファイルを引く。孤児と、ノートに付いているものの両方から探す。 */
+const demoFile = (id: string): FileRow | undefined =>
+  orphanFiles.find((file) => file.id === id) ??
+  Object.values(files)
+    .flat()
+    .find((file) => file.id === id);
+
 const files: Record<string, FileRow[]> = {
   "notes/引っ越し手続きメモ": [
     {
@@ -580,17 +587,12 @@ export const demoApi = {
   // ブラウザでは DOM の paste 経路が動くのでフォールバックは不要
   fileAddFromClipboard: () => delay<Added | null>(null),
   fileDetach: () => delay(null),
-  filesOrphans: (): Promise<FileRow[]> => delay(orphanFiles),
   filePurgePlan: (id: string): Promise<PurgePlan> => {
     const onlyCopy = id === "demo-orphan-2";
     const holders = Object.entries(files)
       .filter(([, rows]) => rows.some((f) => f.id === id))
       .map(([noteId]) => noteId);
-    const named =
-      orphanFiles.find((f) => f.id === id) ??
-      Object.values(files)
-        .flat()
-        .find((f) => f.id === id);
+    const named = demoFile(id);
     return delay({
       token: "demo",
       id,
@@ -609,12 +611,7 @@ export const demoApi = {
   filePurgeCommit: (id: string): Promise<Purged> =>
     delay({
       id,
-      display_name:
-        orphanFiles.find((f) => f.id === id)?.name ??
-        Object.values(files)
-          .flat()
-          .find((f) => f.id === id)?.name ??
-        "見本.bin",
+      display_name: demoFile(id)?.name ?? "見本.bin",
       dropped_object: id === "demo-orphan-2",
       sync_error: null,
     }),

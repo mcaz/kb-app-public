@@ -1,4 +1,5 @@
 import * as React from "react";
+import { tv } from "tailwind-variants";
 import { XIcon } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 
@@ -137,8 +138,27 @@ function DialogDescription({
 const TWO_PANE_DIALOG =
   "h-[80vh] max-h-[760px] w-[calc(100%-1rem)] max-w-[1180px] gap-0 overflow-hidden p-0 sm:max-w-[1180px]";
 
+/**
+ * 二面 Modal の面タブ。左の一覧が何を並べているかを切り替える。
+ *
+ * 面の色(つながり=緑 / 近いノート=琥珀)はここだけが持つ。寸法と同じく、
+ * Modal ごとに書き写すと片方だけ古くなる。
+ */
+const twoPaneTabVariants = tv({
+  base: "flex cursor-pointer items-center gap-1.5 rounded-t-md border-b-2 border-transparent bg-transparent px-3 py-1.5 text-xs",
+  variants: {
+    tone: { linked: "", similar: "" },
+    active: { true: "font-semibold", false: "text-muted hover:text-ink" },
+  },
+  compoundVariants: [
+    { tone: "linked", active: true, class: "border-grow bg-grow-soft text-grow" },
+    { tone: "similar", active: true, class: "border-prop bg-prop-soft text-prop" },
+  ],
+});
+
 export {
   TWO_PANE_DIALOG,
+  twoPaneTabVariants,
   Dialog,
   DialogClose,
   DialogContent,

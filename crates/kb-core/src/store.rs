@@ -102,6 +102,26 @@ pub fn availability(vault: &Vault, stores: &Stores, m: &Manifest) -> Availabilit
     }
 }
 
+/// 実体をこの端末から取り除く。[`availability`] の書き込み側の対。
+///
+/// **どこにあるかは locator が決める**という同じ規則で捌く。呼ぶ側が区分で
+/// 分岐すると、読む側(`availability`)とずれたときに気付けない。
+///
+/// **履歴からは消えない。** `full` の実体は LFS へコミット済みで、fresh clone
+/// すれば取得できる(ADR kb-app/artifact-deletion)。
+///
+/// 参照が残っていないことは呼ぶ側が確かめる。
+pub fn drop_object(vault: &Vault, stores: &Stores, m: &Manifest) -> Result<bool> {
+    match &m.locator {
+        Locator::Managed { .. } => match m.policy.sync {
+            SyncPolicy::Full => crate::lfs::forget(vault, &m.hash).map(|()| true),
+            other => stores.remove(other, &m.hash),
+        },
+        // 旧添付と参照だけのものは、この保管庫が実体を所有していない
+        Locator::LegacyGit { .. } | Locator::Linked { .. } => Ok(false),
+    }
+}
+
 /// 保管庫1つ分の置き場。境界ごとのディレクトリを束ねるだけで、跨ぐ操作を持たない。
 #[derive(Debug, Clone)]
 pub struct Stores {

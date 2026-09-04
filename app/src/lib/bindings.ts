@@ -74,11 +74,6 @@ export const commands = {
 } | null, AppError>(__TAURI_INVOKE("file_add_from_clipboard", { noteId })),
 	/**  このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。 */
 	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
-	/**
-	 *  どのノートからも外れたファイル。**外しただけでは実体が残る**ので、
-	 *  ここで拾えないと置き場に溜まり続ける(ADR kb-app/artifact-deletion)。
-	 */
-	filesOrphans: () => typedError<FileRow[], AppError>(__TAURI_INVOKE("files_orphans")),
 	/**  purge の下見。**まだ消さない。** 実体を道連れにするか、確認が要るかを返す。 */
 	filePurgePlan: (id: string, reason: string) => typedError<PurgePlan, AppError>(__TAURI_INVOKE("file_purge_plan", { id, reason })),
 	/**
@@ -262,14 +257,6 @@ export type ConnectState = {
 	sync_error_kind: BackupFailureKind | null,
 	smart_search: SmartSearchState,
 };
-
-/**
- *  raw bytes の SHA-256(小文字 hex)。
- * 
- *  **Git LFS の OID と同じ値**になるよう SHA-256 に固定している(ADR-0003 決定2)。
- *  別の値を採ると、転送側と CAS 側で検証を二重に持つことになる。
- */
-export type ContentHash = string;
 
 /**  画面が次の行動を訳し分けるための安定した分類。 */
 export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
@@ -600,20 +587,15 @@ export type PurgePlan = {
 	token: string,
 	id: ArtifactId,
 	display_name: string,
-	hash: ContentHash,
-	size: number,
 	origin: string,
 	/**  まだ結び付いているノート。空なら孤児。 */
 	notes: string[],
 	/**  同じ実体を指す他の台帳。1件でもあれば実体は残す。 */
 	shares_object_with: ArtifactId[],
-	/**  この purge で実体も消えるか。 */
-	drops_object: boolean,
 	/**  実体が消え、かつ原本が無い来歴 → `confirmed` 無しでは通さない。 */
 	needs_confirmation: boolean,
 	/**  この台帳を `supersedes` している版。purge すると参照が宙に浮く。 */
 	superseded_by: ArtifactId[],
-	reason: string,
 };
 
 /**  purge の結果。 */

@@ -14,9 +14,10 @@ import {
   DialogHeader,
   DialogTitle,
   TWO_PANE_DIALOG,
+  twoPaneTabVariants,
 } from "@/components/atoms/ui/dialog";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
-import { NoteResultRow } from "@/components/molecules/NoteResultRow";
+import { NoteResultRow, noteResultItemVariants } from "@/components/molecules/NoteResultRow";
 import { NotePreview } from "@/components/organisms/NotePreview";
 import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
@@ -26,7 +27,6 @@ import { useSession } from "@/lib/stores/session";
 
 import { fileKind } from "./fileKind";
 import { FileThumbnail } from "./FileThumbnail";
-import { filePaneTabVariants, relatedItemVariants } from "./variants";
 
 import type { FileCard } from "@/lib/api";
 
@@ -186,7 +186,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                     type="button"
                     aria-pressed={pane === "file"}
                     onClick={() => setPane("file")}
-                    className={filePaneTabVariants({ active: pane === "file" })}
+                    className={twoPaneTabVariants({ tone: "linked", active: pane === "file" })}
                   >
                     <Icon as={Paperclip} size="sm" />
                     {t("panes.file")}
@@ -195,7 +195,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                     type="button"
                     aria-pressed={pane === "notes"}
                     onClick={() => setPane("notes")}
-                    className={filePaneTabVariants({ active: pane === "notes" })}
+                    className={twoPaneTabVariants({ tone: "linked", active: pane === "notes" })}
                   >
                     <Icon as={NotebookText} size="sm" />
                     {t("panes.notes")}
@@ -263,7 +263,7 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                         value={note.id}
                         onMouseMove={() => setSelectedNote(note.id)}
                         onSelect={() => openNote(note.id)}
-                        className={relatedItemVariants()}
+                        className={noteResultItemVariants()}
                       >
                         <NoteResultRow
                           title={note.title}
@@ -285,15 +285,11 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                 ) : (
                   <NotePreview
                     noteId={selectedNote}
-                    // 狭い幅でも2段に積んで両方見せるので、戻る導線は要らない
-                    compact={false}
                     emptyLabel={
                       file.notes.length === 0 ? t("references.none") : t("references.pickNote")
                     }
-                    backLabel={t("references.backToList")}
                     openLabel={t("references.openAsMain")}
                     showOpenLabel={false}
-                    onBack={() => setPane("file")}
                     onOpen={openNote}
                     onOpenLink={openNote}
                   />

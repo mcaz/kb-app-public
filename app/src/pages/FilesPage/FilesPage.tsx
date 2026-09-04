@@ -32,6 +32,11 @@ export function FilesPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const files = useMemo(() => filterFiles(data?.files ?? [], query, kind), [data, query, kind]);
   const summary = useMemo(() => summarizeFiles(data?.files ?? []), [data]);
+  // 孤児は一覧の部分集合。台帳を引き直さない(定義が2つに割れる)
+  const orphans = useMemo(
+    () => (data?.files ?? []).filter((file) => file.notes.length === 0),
+    [data],
+  );
   const selected = data?.files.find((file) => file.id === selectedId) ?? null;
 
   return (
@@ -124,17 +129,14 @@ export function FilesPage() {
           </div>
         )}
 
-        <OrphanSection busy={purge.busy} onPurge={(id) => void purge.planPurge(id)} />
+        <OrphanSection
+          files={orphans}
+          busy={purge.busy}
+          onPurge={(id) => void purge.planPurge(id)}
+        />
       </div>
 
-      <PurgeDialog
-        plan={purge.target}
-        busy={purge.busy}
-        onConfirm={() => void purge.confirmPurge()}
-        onOpenChange={(open) => {
-          if (!open) purge.clear();
-        }}
-      />
+      <PurgeDialog flow={purge} />
 
       <FilePreviewDialog
         file={selected}

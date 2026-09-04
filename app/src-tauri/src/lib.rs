@@ -57,7 +57,6 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             files::file_add,
             files::file_add_from_clipboard,
             files::file_detach,
-            files::files_orphans,
             files::file_purge_plan,
             files::file_purge_commit,
             files::file_fetch,

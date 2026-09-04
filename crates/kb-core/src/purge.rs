@@ -33,13 +33,22 @@ use crate::vault::Vault;
 /// 対象を固定しておける時間。ノート削除と揃える。
 pub const PURGE_TOKEN_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// MCP の `attach` で入った実体は**原本が存在しない**(Base64 を会話から受け取る)。
-/// UI 取り込み(`fs::copy`)は利用者のディスクに原本が残るので、扱いを分ける。
-const MCP_ORIGIN_PREFIX: &str = "mcp-content:";
+/// 原本がこの端末に残らない取り込み経路。
+///
+/// - `mcp-content:*` — MCP の `attach`。Base64 を会話から受け取るので原本は無い
+/// - `clipboard` — 画像を一時 file へ書いて取り込み、直後に消す(原本は残らない)
+///
+/// path から取り込む経路(`picker` 等)は `fs::copy` なので利用者のディスクに原本が残る。
+///
+/// **本来は取り込みの時点で型に持たせるべき情報**で、ここは表示用文字列からの
+/// 復元になっている。取り込み経路を増やすときはこの一覧も見ること。
+const ORIGINS_WITHOUT_ORIGINAL: [&str; 2] = ["mcp-content:", "clipboard"];
 
 /// 実体が消えるとき、来歴によっては確認が要る。
 fn is_only_copy(origin: &str) -> bool {
-    origin.starts_with(MCP_ORIGIN_PREFIX)
+    ORIGINS_WITHOUT_ORIGINAL
+        .iter()
+        .any(|prefix| origin.starts_with(prefix))
 }
 
 /// purge の下見。**まだ何も消していない。**
@@ -50,20 +59,15 @@ pub struct PurgePlan {
     pub token: String,
     pub id: ArtifactId,
     pub display_name: String,
-    pub hash: ContentHash,
-    pub size: u64,
     pub origin: String,
     /// まだ結び付いているノート。空なら孤児。
     pub notes: Vec<String>,
     /// 同じ実体を指す他の台帳。1件でもあれば実体は残す。
     pub shares_object_with: Vec<ArtifactId>,
-    /// この purge で実体も消えるか。
-    pub drops_object: bool,
     /// 実体が消え、かつ原本が無い来歴 → `confirmed` 無しでは通さない。
     pub needs_confirmation: bool,
     /// この台帳を `supersedes` している版。purge すると参照が宙に浮く。
     pub superseded_by: Vec<ArtifactId>,
-    pub reason: String,
 }
 
 /// purge の結果。
@@ -117,18 +121,16 @@ struct Pending {
 }
 
 impl PendingPurges {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// 下見して token を発行する。**何も消さない。**
     pub fn prepare(&mut self, ledger: &Ledger, id: &ArtifactId, reason: &str) -> Result<PurgePlan> {
-        let reason = reason.trim();
-        if reason.is_empty() || reason.chars().count() > 500 || reason.contains(['\n', '\r']) {
-            bail!("purge の理由は1〜500文字の一行で指定する");
-        }
-        let manifest = ledger
-            .get(id)?
+        let reason = crate::reason::validate(reason, "purge の理由")?;
+        // 台帳は1度だけ読む。対象・同じ実体を指すもの・差し替え元にしているものを
+        // 同じ一覧から取る
+        let all = ledger.list();
+        let manifest = all
+            .iter()
+            .find(|m| m.id == *id)
+            .cloned()
             .ok_or_else(|| anyhow::anyhow!("台帳に無い: {id}"))?;
 
         // 参照名が指しているものは消さない。dangling ref を作らない
@@ -139,20 +141,20 @@ impl PendingPurges {
             );
         }
 
-        let others = ledger.list();
-        let shares_object_with: Vec<ArtifactId> = others
+        let shares_object_with: Vec<ArtifactId> = all
             .iter()
             .filter(|m| m.id != *id && m.hash == manifest.hash)
             .map(|m| m.id.clone())
             .collect();
-        let superseded_by: Vec<ArtifactId> = others
+        let superseded_by: Vec<ArtifactId> = all
             .iter()
             .filter(|m| m.supersedes.as_ref() == Some(id))
             .map(|m| m.id.clone())
             .collect();
 
-        let drops_object = shares_object_with.is_empty();
-        let needs_confirmation = drops_object && is_only_copy(&manifest.created.origin);
+        // 実体が消えるのは、他のどの台帳もこの hash を指していないとき
+        let needs_confirmation =
+            shares_object_with.is_empty() && is_only_copy(&manifest.created.origin);
 
         self.pending
             .retain(|_, pending| pending.expires_at > Instant::now());
@@ -180,15 +182,11 @@ impl PendingPurges {
             token,
             id: manifest.id.clone(),
             display_name: manifest.display_name.clone(),
-            hash: manifest.hash.clone(),
-            size: manifest.created.size,
             origin: manifest.created.origin.clone(),
             notes: manifest.notes.clone(),
             shares_object_with,
-            drops_object,
             needs_confirmation,
             superseded_by,
-            reason: reason.to_string(),
         })
     }
 
@@ -231,14 +229,11 @@ impl PendingPurges {
             .any(|m| m.id != *id && m.hash == manifest.hash);
 
         let outcome = ws.ledger.purge(ws.vault, &manifest, &pending.reason, at)?;
-        let mut dropped_object = false;
-        if !still_shared {
-            ws.stores.remove(manifest.policy.sync, &manifest.hash)?;
-            if manifest.policy.sync == crate::artifact::SyncPolicy::Full {
-                crate::lfs::forget(ws.vault, &manifest.hash)?;
-            }
-            dropped_object = true;
-        }
+        let dropped_object = if still_shared {
+            false
+        } else {
+            crate::store::drop_object(ws.vault, ws.stores, &manifest)?
+        };
 
         Ok(Purged {
             id: manifest.id,
@@ -321,10 +316,12 @@ mod tests {
     const B: &str = "01M0EW60589ZHSZ0HJ6S1VWMYR";
 
     #[test]
-    fn mcp_attached_content_is_treated_as_the_only_copy() {
+    fn origins_without_an_original_need_confirmation() {
+        // 会話から受け取ったものと、一時 file を消して取り込むものは原本が残らない
         assert!(is_only_copy("mcp-content:claude-code/claude"));
+        assert!(is_only_copy("clipboard"));
+        // path から複製するものは利用者のディスクに原本が残る
         assert!(!is_only_copy("picker"));
-        assert!(!is_only_copy("clipboard"));
         assert!(!is_only_copy("migration"));
     }
 
@@ -342,7 +339,7 @@ mod tests {
     fn reason_must_be_a_single_short_line() {
         let e = env();
         let m = put(&e, A, b"x", "picker", &[]);
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         assert!(p.prepare(&e.ledger, &m.id, "  ").is_err());
         assert!(p.prepare(&e.ledger, &m.id, "壊れている\n二行目").is_err());
         assert!(p.prepare(&e.ledger, &m.id, &"あ".repeat(501)).is_err());
@@ -358,9 +355,9 @@ mod tests {
         let m = put(&e, A, b"broken", "picker", &[]);
         assert!(e.stores.has(SyncPolicy::LocalOnly, &m.hash));
 
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         let plan = p.prepare(&e.ledger, &m.id, "壊れている").unwrap();
-        assert!(plan.drops_object);
+        assert!(plan.shares_object_with.is_empty(), "実体を道連れにする");
         assert!(!plan.needs_confirmation, "UI 取り込みは原本が残る");
 
         let out = p
@@ -379,9 +376,9 @@ mod tests {
         let b = put(&e, B, b"same bytes", "picker", &["notes/keep"]);
         assert_eq!(a.hash, b.hash, "content-addressed なので同じ実体を指す");
 
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         let plan = p.prepare(&e.ledger, &a.id, "重複").unwrap();
-        assert!(!plan.drops_object);
+
         assert_eq!(plan.shares_object_with, vec![b.id.clone()]);
 
         let out = p
@@ -400,7 +397,7 @@ mod tests {
     fn the_only_copy_needs_confirmation() {
         let e = env();
         let m = put(&e, A, b"only", "mcp-content:claude-code/claude", &[]);
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         let plan = p.prepare(&e.ledger, &m.id, "壊れている").unwrap();
         assert!(plan.needs_confirmation);
 
@@ -423,7 +420,7 @@ mod tests {
         let e = env();
         let a = put(&e, A, b"a", "picker", &[]);
         let b = put(&e, B, b"b", "picker", &[]);
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         let plan = p.prepare(&e.ledger, &a.id, "理由").unwrap();
 
         // 別の対象へは使えない
@@ -444,7 +441,7 @@ mod tests {
     fn a_changed_target_is_refused() {
         let e = env();
         let m = put(&e, A, b"before", "picker", &[]);
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         let plan = p.prepare(&e.ledger, &m.id, "理由").unwrap();
 
         let mut moved = e.ledger.get(&m.id).unwrap().unwrap();
@@ -471,7 +468,7 @@ mod tests {
                 &crate::artifact::ArtifactRef::new("ws-a", name.clone(), m.id.clone()),
             )
             .unwrap();
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         assert!(p.prepare(&e.ledger, &m.id, "理由").is_err());
     }
 
@@ -480,7 +477,7 @@ mod tests {
     fn a_tombstone_records_what_was_removed_and_why() {
         let e = env();
         let m = put(&e, A, b"gone", "picker", &[]);
-        let mut p = PendingPurges::new();
+        let mut p = PendingPurges::default();
         let plan = p
             .prepare(&e.ledger, &m.id, "壊れているので取り除く")
             .unwrap();

@@ -12,10 +12,13 @@ import {
 import type { PurgePlan } from "@/lib/api";
 
 export interface PurgeDialogProps {
-  plan: PurgePlan | null;
-  busy?: boolean;
-  onConfirm: () => void;
-  onOpenChange: (open: boolean) => void;
+  /** [`usePurgeFlow`] の戻り値をそのまま渡す。結線を画面ごとに書き写さない。 */
+  flow: {
+    target: PurgePlan | null;
+    busy: boolean;
+    confirmPurge: () => void | Promise<void>;
+    clear: () => void;
+  };
 }
 
 /**
@@ -23,12 +26,18 @@ export interface PurgeDialogProps {
  * fresh clone すれば取得できる(ADR kb-app/artifact-deletion)。
  * 画面が回収を約束できるのは、この端末のディスクと以降の同期だけ。
  */
-export function PurgeDialog({ plan, busy = false, onConfirm, onOpenChange }: PurgeDialogProps) {
+export function PurgeDialog({ flow }: PurgeDialogProps) {
   const { t } = useTranslation("notes");
+  const plan = flow.target;
   if (!plan) return null;
 
   return (
-    <Dialog open onOpenChange={onOpenChange}>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) flow.clear();
+      }}
+    >
       <DialogContent className="min-w-[320px]">
         <DialogHeader>
           <DialogTitle>{t("file.purgeTitle", { name: plan.display_name })}</DialogTitle>
@@ -49,10 +58,10 @@ export function PurgeDialog({ plan, busy = false, onConfirm, onOpenChange }: Pur
         </ul>
 
         <div className="flex justify-end gap-2">
-          <Button variant="quiet" size="sm" disabled={busy} onClick={() => onOpenChange(false)}>
+          <Button variant="quiet" size="sm" disabled={flow.busy} onClick={() => flow.clear()}>
             {t("file.purgeCancel")}
           </Button>
-          <Button size="sm" disabled={busy} onClick={onConfirm}>
+          <Button size="sm" disabled={flow.busy} onClick={() => void flow.confirmPurge()}>
             {t("file.purgeConfirm")}
           </Button>
         </div>

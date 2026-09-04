@@ -18,23 +18,3 @@ export const fileThumbVariants = tv({
   },
   defaultVariants: { state: "local" },
 });
-
-/**
- * プレビュー Modal の面タブ。関連 Modal(`relatedTabVariants`)と同じ形にして、
- * 「左にタブ・右に詳細」という読み方を画面間で揃える。
- */
-export const filePaneTabVariants = tv({
-  base: "flex cursor-pointer items-center gap-1.5 rounded-t-md border-b-2 border-transparent bg-transparent px-3 py-1.5 text-xs",
-  variants: {
-    active: {
-      true: "border-grow bg-grow-soft text-grow font-semibold",
-      false: "text-muted hover:text-ink",
-    },
-  },
-  defaultVariants: { active: false },
-});
-
-/** 参照ノートの行。関連 Modal の結果行と同じ形(選択は cmdk の data-selected)。 */
-export const relatedItemVariants = tv({
-  base: "flex cursor-pointer flex-col items-stretch gap-1 border border-transparent px-3 py-2.5 data-[selected=true]:border-line",
-});

@@ -26,18 +26,8 @@ export interface FilePanelProps {
 export function FilePanel({ noteId }: FilePanelProps) {
   const { t } = useTranslation("notes");
   const { data } = useNoteFiles(noteId);
-  const {
-    addPicked,
-    detachFile,
-    planPurge,
-    confirmPurge,
-    purgeTarget,
-    clearPurge,
-    fetchFile,
-    openFile,
-    openLegacyFile,
-    busy,
-  } = useFileActions(noteId);
+  const { addPicked, detachFile, purge, fetchFile, openFile, openLegacyFile, busy } =
+    useFileActions(noteId);
 
   const files = data?.files ?? [];
   const legacy = data?.legacy ?? [];
@@ -58,7 +48,7 @@ export function FilePanel({ noteId }: FilePanelProps) {
             file={file}
             busy={busy}
             onDetach={() => void detachFile(file)}
-            onPurge={() => void planPurge(file)}
+            onPurge={() => void purge.planPurge(file.id)}
             onReplace={() => void addPicked(file.id)}
             onFetch={() => void fetchFile(file)}
             onOpen={() => void openFile(file)}
@@ -85,14 +75,7 @@ export function FilePanel({ noteId }: FilePanelProps) {
         ))}
       </ul>
 
-      <PurgeDialog
-        plan={purgeTarget}
-        busy={busy}
-        onConfirm={() => void confirmPurge()}
-        onOpenChange={(open) => {
-          if (!open) clearPurge();
-        }}
-      />
+      <PurgeDialog flow={purge} />
     </section>
   );
 }

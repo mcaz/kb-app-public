@@ -1,4 +1,4 @@
-import { FileText, Link2 } from "lucide-react";
+import { FileText, Link2, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
@@ -77,9 +77,18 @@ export function FileRow({
         <Button variant="quiet" size="sm" disabled={busy} onClick={onDetach}>
           {t("file.detach")}
         </Button>
-        {/* 実体まで消す。押した先で範囲を明示して確認する(履歴からは消えない) */}
-        <Button variant="quiet" size="sm" disabled={busy} onClick={onPurge}>
-          {t("file.purge")}
+        {/* 実体まで消す。ごみ箱の記号だけで足りるので文字は出さない。
+            押した先で範囲を明示して確認する(履歴からは消えない) */}
+        <Button
+          variant="quiet"
+          size="icon"
+          aria-label={t("file.purge")}
+          title={t("file.purge")}
+          className="text-danger hover:text-danger"
+          disabled={busy}
+          onClick={onPurge}
+        >
+          <Trash2 className="size-4" />
         </Button>
       </span>
     </li>

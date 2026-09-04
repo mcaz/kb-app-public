@@ -155,21 +155,7 @@ impl Ledger {
 
     /// 消した記録の一覧(新しい順)。整理の結果を後から辿るため。
     pub fn tombstones(&self) -> Vec<Tombstone> {
-        let mut out = Vec::new();
-        for sync in [SyncPolicy::Full, SyncPolicy::LocalOnly] {
-            let dir = self.base(sync).join("purged");
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let Ok(text) = fs::read_to_string(entry.path()) else {
-                    continue;
-                };
-                if let Ok(t) = serde_json::from_str::<Tombstone>(&text) {
-                    out.push(t);
-                }
-            }
-        }
+        let mut out: Vec<Tombstone> = self.read_all("purged");
         out.sort_by(|a, b| b.at.cmp(&a.at).then(b.id.cmp(&a.id)));
         out
     }
@@ -195,23 +181,28 @@ impl Ledger {
 
     /// 台帳の一覧(同期される側と sidecar の両方)。
     pub fn list(&self) -> Vec<Manifest> {
+        let mut out = self.read_all("manifests");
+        out.sort_by(|a: &Manifest, b: &Manifest| a.id.cmp(&b.id));
+        out
+    }
+
+    /// 両側の JSON を読む。**壊れた1件で一覧全体を落とさない**
+    /// (劣化は呼び出し側が出す — 契約4)。
+    fn read_all<T: serde::de::DeserializeOwned>(&self, sub: &str) -> Vec<T> {
         let mut out = Vec::new();
         for sync in [SyncPolicy::Full, SyncPolicy::LocalOnly] {
-            let dir = self.base(sync).join("manifests");
-            let Ok(entries) = fs::read_dir(&dir) else {
+            let Ok(entries) = fs::read_dir(self.base(sync).join(sub)) else {
                 continue;
             };
             for entry in entries.flatten() {
                 let Ok(text) = fs::read_to_string(entry.path()) else {
                     continue;
                 };
-                // 壊れた1件で一覧全体を落とさない(劣化は呼び出し側が出す — 契約4)
-                if let Ok(m) = serde_json::from_str::<Manifest>(&text) {
-                    out.push(m);
+                if let Ok(value) = serde_json::from_str::<T>(&text) {
+                    out.push(value);
                 }
             }
         }
-        out.sort_by(|a, b| a.id.cmp(&b.id));
         out
     }
 

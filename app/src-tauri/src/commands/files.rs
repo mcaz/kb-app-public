@@ -202,13 +202,15 @@ pub fn files_list(state: State<'_, AppState>) -> AppResult<FilesPage> {
                     .notes
                     .iter()
                     .map(|id| {
-                        conn.query_row(
+                        // 同じ文を毎回 prepare し直さない(カード数 × 参照ノート数だけ走る)
+                        conn.prepare_cached(
                             "SELECT coalesce(title, id),
                                     coalesce(description, substr(body, 1, 120)),
                                     tags, generated_at
                              FROM notes WHERE id = ?1",
-                            [id],
-                            |record| {
+                        )
+                        .and_then(|mut statement| {
+                            statement.query_row([id], |record| {
                                 Ok(FileNote {
                                     id: id.clone(),
                                     title: record.get::<_, String>(0)?,
@@ -224,8 +226,8 @@ pub fn files_list(state: State<'_, AppState>) -> AppResult<FilesPage> {
                                         .collect(),
                                     updated: record.get::<_, Option<String>>(3)?,
                                 })
-                            },
-                        )
+                            })
+                        })
                         // 索引に無いノート(まだ取り込まれていない等)でも行は出す
                         .unwrap_or_else(|_| FileNote {
                             id: id.clone(),
@@ -604,19 +606,6 @@ pub fn file_detach(
             &format!("{note_id} から外した"),
         );
         ledger.put(vault, &manifest).map_err(AppError::storage)
-    })
-}
-
-/// どのノートからも外れたファイル。**外しただけでは実体が残る**ので、
-/// ここで拾えないと置き場に溜まり続ける(ADR kb-app/artifact-deletion)。
-#[tauri::command]
-#[specta::specta]
-pub fn files_orphans(state: State<'_, AppState>) -> AppResult<Vec<FileRow>> {
-    state.with_artifacts(|vault, stores, ledger, _| {
-        Ok(kb_core::purge::orphans(ledger)
-            .iter()
-            .map(|m| row(vault, stores, m))
-            .collect())
     })
 }
 

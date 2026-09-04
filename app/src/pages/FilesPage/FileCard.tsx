@@ -1,11 +1,11 @@
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
-import { Button } from "@/components/atoms/ui/button";
 import { formatDateTime, formatSize } from "@/lib/format";
 
 import { FILE_ICONS, fileKind } from "./fileKind";
 import { FileThumbnail } from "./FileThumbnail";
+import { PurgeButton } from "./PurgeButton";
 import { fileCardVariants } from "./variants";
 
 import type { FileCard as FileCardData } from "@/lib/api";
@@ -61,9 +61,7 @@ export function FileCard({ file, onOpen, onPurge, busy = false }: FileCardProps)
       </button>
 
       <div className="flex justify-end px-2 pb-2">
-        <Button variant="quiet" size="sm" disabled={busy} onClick={onPurge}>
-          {t("purge")}
-        </Button>
+        <PurgeButton disabled={busy} onClick={onPurge} />
       </div>
     </div>
   );

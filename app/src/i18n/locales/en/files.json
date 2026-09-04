@@ -33,16 +33,13 @@
   "orphans": {
     "label": "Files no note points at",
     "title": "Detached files",
-    "help": "Removing a file from a note leaves the data behind. Clear out what you no longer need here.",
-    "purge": "Remove"
+    "help": "Removing a file from a note leaves the data behind. Clear out what you no longer need here."
   },
   "purge": "Remove",
   "references": {
     "none": "No note points at this",
     "many": "Referenced by {{count}} notes",
-    "head": "Notes holding this file",
     "pickNote": "Pick a note on the left to read it here",
-    "backToList": "Back to the list",
     "openAsMain": "Open this note"
   },
   "panes": {

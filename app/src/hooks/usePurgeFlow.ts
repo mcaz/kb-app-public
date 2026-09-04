@@ -34,12 +34,7 @@ export function usePurgeFlow(noteId?: string) {
   const confirmPurge = async () => {
     if (!target) return;
     try {
-      const out = await commit.mutateAsync({
-        id: target.id,
-        token: target.token,
-        confirmed: true,
-        noteId,
-      });
+      const out = await commit.mutateAsync({ id: target.id, token: target.token, noteId });
       setTarget(null);
       toast(out.dropped_object ? t("file.purged") : t("file.purgedKeptObject"));
       if (out.sync_error) toast(t("file.purgeSyncFailed", { error: out.sync_error }));
