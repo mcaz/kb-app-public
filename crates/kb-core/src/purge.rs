@@ -619,6 +619,9 @@ mod tests {
             .commit(e.ws(), &m.id, &plan.token, true, "2026-09-04T01:00:00Z")
             .unwrap();
 
+        // 同じ vault を使う他の端末からも消えるのは、この削除が commit される
+        // からで、そこが「どの端末でも同じ環境」の前提を保つ
+        assert!(out.sync_error.is_none(), "取り除きが commit されていない");
         assert!(out.dropped_object, "LFS の実体が残っている");
         assert!(!crate::lfs::has(&e.vault, &m.hash));
         assert!(e.ledger.get(&m.id).unwrap().is_none());
