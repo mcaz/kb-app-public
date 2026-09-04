@@ -27,7 +27,6 @@
   "download": "Download",
   "downloaded": "File saved",
   "openExternal": "Open in another app",
-  "openNote": "Source note",
   "previewLoading": "Preparing preview…",
   "previewUnavailable": "This file type can’t be previewed in the app",
   "previewDescription": "Contents of {{name}}",
@@ -40,6 +39,7 @@
   "purge": "Remove",
   "references": {
     "none": "No note points at this",
-    "many": "Referenced by {{count}} notes"
+    "many": "Referenced by {{count}} notes",
+    "head": "Notes holding this file"
   }
 }

@@ -27,7 +27,6 @@
   "download": "ダウンロード",
   "downloaded": "ファイルを保存しました",
   "openExternal": "別アプリで開く",
-  "openNote": "元のノート",
   "previewLoading": "プレビューを準備中…",
   "previewUnavailable": "この形式はアプリ内で表示できません",
   "previewDescription": "{{name}}の内容",
@@ -40,6 +39,7 @@
   "purge": "取り除く",
   "references": {
     "none": "どのノートからも外れています",
-    "many": "{{count}}件のノートから参照"
+    "many": "{{count}}件のノートから参照",
+    "head": "参照ノート"
   }
 }

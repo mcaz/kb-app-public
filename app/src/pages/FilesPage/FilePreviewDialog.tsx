@@ -1,11 +1,12 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Download, FileQuestion } from "lucide-react";
+import { Download, FileQuestion, NotebookText } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
 import { Icon } from "@/components/atoms/Icon";
 import { Button } from "@/components/atoms/ui/button";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
+import { RelatedList } from "@/components/molecules/RelatedList";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +16,7 @@ import {
 } from "@/components/atoms/ui/dialog";
 import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
+import { formatSize } from "@/lib/format";
 import { useFileDownload, useFileFetch, useFileOpen, useFilePreview } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
 
@@ -37,18 +39,23 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
   const external = useFileOpen();
   const download = useFileDownload();
   const fetch = useFileFetch();
-  const source = file?.notes[0];
   const kind = file ? fileKind(file) : "other";
   const isMarkdown = file ? /\.(md|markdown)$/iu.test(file.name) : false;
   const isHtml = file
     ? file.media_type.toLowerCase() === "text/html" || /\.html?$/iu.test(file.name)
     : false;
   const src = preview.data?.path ? convertFileSrc(preview.data.path) : null;
+  // 参照は下の一覧が持つ。ここで繰り返すと0件のとき同じ文が2度出る
+  const meta = !file
+    ? ""
+    : file.availability === "local"
+      ? `${t(`filter.${kind}`)} · ${formatSize(file.size)}`
+      : t(`filter.${kind}`);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="h-[min(780px,calc(100%-2rem))] max-w-[min(980px,calc(100%-2rem))] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
+        className="h-[min(780px,calc(100%-2rem))] max-w-[min(980px,calc(100%-2rem))] grid-rows-[auto_auto_minmax(0,1fr)] gap-0 overflow-hidden p-0"
         showCloseButton
       >
         {file && (
@@ -57,22 +64,8 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
               <div className="flex min-w-0 items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <DialogTitle className="truncate text-[15px]">{file.name}</DialogTitle>
-                  <DialogDescription className="truncate text-xs">
-                    {source?.title ?? t("noNote")}
-                  </DialogDescription>
+                  <DialogDescription className="truncate text-xs">{meta}</DialogDescription>
                 </div>
-                {source && (
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    onClick={() => {
-                      onOpenChange(false);
-                      goToNote(source.id);
-                    }}
-                  >
-                    {t("openNote")}
-                  </Button>
-                )}
                 {file.availability === "local" && (
                   <>
                     <Button
@@ -102,6 +95,23 @@ export function FilePreviewDialog({ file, open, onOpenChange }: FilePreviewDialo
                 )}
               </div>
             </DialogHeader>
+
+            {/* 1つのファイルを複数のノートが持てる。先頭1件だけを辿れる作りでは
+                2件目以降へ行けないので、関連一覧と同じ形で全部並べる */}
+            <div className="border-line flex max-h-[136px] flex-col gap-1 overflow-y-auto border-b px-5 py-3">
+              <RelatedList
+                head={t("references.head")}
+                headIcon={NotebookText}
+                entries={file.notes.map((note) => ({ id: note.id, title: note.title }))}
+                emptyLabel={t("references.none")}
+                tone="linked"
+                openId={null}
+                onOpen={(id) => {
+                  onOpenChange(false);
+                  goToNote(id);
+                }}
+              />
+            </div>
 
             <div className="bg-panel flex min-h-0 items-center justify-center overflow-auto p-5">
               {file.availability === "missing" ? (
