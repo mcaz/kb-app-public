@@ -40,6 +40,18 @@
   "references": {
     "none": "No note points at this",
     "many": "Referenced by {{count}} notes",
-    "head": "Notes holding this file"
+    "head": "Notes holding this file",
+    "pickNote": "Pick a note on the left to read it here",
+    "backToList": "Back to the list",
+    "openAsMain": "Open this note"
+  },
+  "panes": {
+    "file": "File",
+    "notes": "Notes"
+  },
+  "details": {
+    "kind": "Kind",
+    "size": "Size",
+    "added": "Added"
   }
 }

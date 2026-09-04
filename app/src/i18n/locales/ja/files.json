@@ -40,6 +40,18 @@
   "references": {
     "none": "どのノートからも外れています",
     "many": "{{count}}件のノートから参照",
-    "head": "参照ノート"
+    "head": "参照ノート",
+    "pickNote": "左の一覧からノートを選ぶと本文が出ます",
+    "backToList": "一覧へ戻る",
+    "openAsMain": "このノートを開く"
+  },
+  "panes": {
+    "file": "ファイル",
+    "notes": "参照ノート"
+  },
+  "details": {
+    "kind": "種類",
+    "size": "大きさ",
+    "added": "追加"
   }
 }
