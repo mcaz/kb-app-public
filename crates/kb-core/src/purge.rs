@@ -51,6 +51,59 @@ fn is_only_copy(origin: &str) -> bool {
         .any(|prefix| origin.starts_with(prefix))
 }
 
+/// purge を通さなかった理由。**利用者が次にできることがある**ものだけを型にする。
+///
+/// 想定外の失敗(git・ディスク)はここへ入れない。境界で `storage` として扱い、
+/// 診断はログへ落とす。`ArtifactError` と同じ形(ADR-0002 決定10)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum Refusal {
+    /// 台帳に無い(既に取り除かれた・一覧が古い)。
+    NotInLedger,
+    /// 参照名が指している。先に参照を外す。
+    PointedAtByRef { name: String },
+    /// token を知らない(使用済み・別の窓が使った)。
+    UnknownToken,
+    /// token の期限が切れた。
+    Expired,
+    /// token が別の対象のもの。
+    WrongTarget,
+    /// 下見のあとに版か実体が変わった。
+    ChangedSincePlan,
+    /// 原本が無いので、画面の確認を経ないと通さない。
+    NeedsConfirmation,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotInLedger => write!(f, "台帳に無い"),
+            Self::PointedAtByRef { name } => {
+                write!(
+                    f,
+                    "参照名 {name} が指しているので purge できない。先に参照を外す"
+                )
+            }
+            Self::UnknownToken => write!(f, "purge token が無効または使用済み。下見からやり直す"),
+            Self::Expired => write!(f, "purge token の期限が切れた。下見からやり直す"),
+            Self::WrongTarget => write!(f, "purge 対象が下見時と一致しない。下見からやり直す"),
+            Self::ChangedSincePlan => {
+                write!(
+                    f,
+                    "purge 対象が下見のあとで変わった。内容を確認してからやり直す"
+                )
+            }
+            Self::NeedsConfirmation => write!(
+                f,
+                "この実体は原本が無く、purge すると復元できない。画面で確認を取ってからやり直す"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
 /// purge の下見。**まだ何も消していない。**
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -131,14 +184,13 @@ impl PendingPurges {
             .iter()
             .find(|m| m.id == *id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("台帳に無い: {id}"))?;
+            .ok_or(Refusal::NotInLedger)?;
 
         // 参照名が指しているものは消さない。dangling ref を作らない
         if let Some(r) = ledger.ref_for(id) {
-            bail!(
-                "参照名 {} が指しているので purge できない。先に参照を外す",
-                r.name
-            );
+            bail!(Refusal::PointedAtByRef {
+                name: r.name.to_string(),
+            });
         }
 
         let shares_object_with: Vec<ArtifactId> = all
@@ -199,26 +251,20 @@ impl PendingPurges {
         confirmed: bool,
         at: &str,
     ) -> Result<Purged> {
-        let pending = self
-            .pending
-            .remove(token)
-            .ok_or_else(|| anyhow::anyhow!("purge token が無効または使用済み。下見からやり直す"))?;
+        let pending = self.pending.remove(token).ok_or(Refusal::UnknownToken)?;
         if pending.expires_at <= Instant::now() {
-            bail!("purge token の期限が切れた。下見からやり直す");
+            bail!(Refusal::Expired);
         }
         if pending.id != *id {
-            bail!("purge 対象が下見時と一致しない。下見からやり直す");
+            bail!(Refusal::WrongTarget);
         }
         if pending.needs_confirmation && !confirmed {
-            bail!("この実体は原本が無く、purge すると復元できない。画面で確認を取ってからやり直す");
+            bail!(Refusal::NeedsConfirmation);
         }
 
-        let manifest = ws
-            .ledger
-            .get(id)?
-            .ok_or_else(|| anyhow::anyhow!("台帳に無い: {id}"))?;
+        let manifest = ws.ledger.get(id)?.ok_or(Refusal::NotInLedger)?;
         if manifest.version != pending.version || manifest.hash != pending.hash {
-            bail!("purge 対象が下見のあとで変わった。内容を確認してからやり直す");
+            bail!(Refusal::ChangedSincePlan);
         }
 
         // 下見のあとに別の台帳が同じ実体を指し始めていないか、直前にもう一度見る
@@ -308,6 +354,31 @@ mod tests {
             Role::File,
         );
         m.notes = notes.iter().map(|n| n.to_string()).collect();
+        e.ledger.put(&e.vault, &m).unwrap();
+        m
+    }
+
+    /// LFS 側(full)へ置く。実体は保管庫の外へ入り、作業ツリーには pointer が残る。
+    fn put_full(e: &Env, id: &str, bytes: &[u8], origin: &str) -> Manifest {
+        crate::connect::ensure_vault_config(&e.vault).unwrap();
+        let src = e.vault.root.parent().unwrap().join("src.bin");
+        std::fs::write(&src, bytes).unwrap();
+        let (hash, size) = crate::lfs::import(&e.vault, &src).unwrap();
+        let m = Manifest::new(
+            ArtifactId::from_str(id).unwrap(),
+            hash.clone(),
+            Created {
+                media_type: "application/octet-stream".into(),
+                size,
+                at: "2026-09-04T00:00:00Z".into(),
+                origin: origin.into(),
+                by: "test".into(),
+            },
+            "f.bin".into(),
+            Locator::Managed { hash },
+            Policy::default_managed(),
+            Role::File,
+        );
         e.ledger.put(&e.vault, &m).unwrap();
         m
     }
@@ -488,5 +559,26 @@ mod tests {
         assert_eq!(tomb[0].id, m.id);
         assert_eq!(tomb[0].reason, "壊れているので取り除く");
         assert_eq!(tomb[0].at, "2026-09-04T01:00:00Z");
+    }
+
+    #[test]
+    fn purging_a_full_artifact_drops_the_lfs_object() {
+        if !crate::external_tools::git_lfs_available() {
+            eprintln!("git-lfs が無いので飛ばす");
+            return;
+        }
+        let e = env();
+        let m = put_full(&e, A, &vec![7u8; 300_000], "mcp-content:test");
+        assert!(crate::lfs::has(&e.vault, &m.hash));
+
+        let mut p = PendingPurges::default();
+        let plan = p.prepare(&e.ledger, &m.id, "壊れていた").unwrap();
+        let out = p
+            .commit(e.ws(), &m.id, &plan.token, true, "2026-09-04T01:00:00Z")
+            .unwrap();
+
+        assert!(out.dropped_object, "LFS の実体が残っている");
+        assert!(!crate::lfs::has(&e.vault, &m.hash));
+        assert!(e.ledger.get(&m.id).unwrap().is_none());
     }
 }

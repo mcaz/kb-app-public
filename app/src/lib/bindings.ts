@@ -168,6 +168,11 @@ export type AppError =
 { code: "file_client_repo_locked" } | 
 /**  持ち出しを広げる変更なので、確認を経ていない限り通さない(決定10)。 */
 { code: "file_needs_confirm" } | 
+/**
+ *  ファイルを取り除けなかった。**利用者が次にできることがある**拒否だけを
+ *  ここへ運ぶ。git・ディスクの失敗は `CoreFailed` として扱う。
+ */
+{ code: "file_purge_refused"; refusal: Refusal } | 
 /**  識別子・参照名の形が不正。 */
 { code: "file_malformed"; field: string } | 
 /**  手元に無い(または方針で閉じている)ので開けない。 */
@@ -607,6 +612,28 @@ export type Purged = {
 	/**  同期の失敗は purge 自体の失敗にしない(派生 — 契約4)。 */
 	sync_error: string | null,
 };
+
+/**
+ *  purge を通さなかった理由。**利用者が次にできることがある**ものだけを型にする。
+ * 
+ *  想定外の失敗(git・ディスク)はここへ入れない。境界で `storage` として扱い、
+ *  診断はログへ落とす。`ArtifactError` と同じ形(ADR-0002 決定10)。
+ */
+export type Refusal = 
+/**  台帳に無い(既に取り除かれた・一覧が古い)。 */
+{ reason: "not_in_ledger" } | 
+/**  参照名が指している。先に参照を外す。 */
+{ reason: "pointed_at_by_ref"; name: string } | 
+/**  token を知らない(使用済み・別の窓が使った)。 */
+{ reason: "unknown_token" } | 
+/**  token の期限が切れた。 */
+{ reason: "expired" } | 
+/**  token が別の対象のもの。 */
+{ reason: "wrong_target" } | 
+/**  下見のあとに版か実体が変わった。 */
+{ reason: "changed_since_plan" } | 
+/**  原本が無いので、画面の確認を経ないと通さない。 */
+{ reason: "needs_confirmation" };
 
 export type RelationKind = "derived_from" | "supports" | "updates" | "contradicts" | "supersedes" | "mentions";
 

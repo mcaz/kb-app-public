@@ -621,7 +621,7 @@ pub fn file_purge_plan(
     state.with_purges(|_, _, ledger, purges| {
         purges
             .prepare(ledger, &id, &reason)
-            .map_err(AppError::invalid_input)
+            .map_err(AppError::purge)
     })
 }
 
@@ -651,7 +651,7 @@ pub fn file_purge_commit(
                 confirmed,
                 &kb_core::frontmatter::now_iso(),
             )
-            .map_err(AppError::invalid_input)
+            .map_err(AppError::purge)
     })
 }
 
