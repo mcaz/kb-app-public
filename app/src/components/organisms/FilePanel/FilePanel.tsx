@@ -6,6 +6,8 @@ import { StatusPill } from "@/components/atoms/StatusPill";
 import { formatSize } from "@/lib/format";
 import { useNoteFiles } from "@/lib/queries";
 
+import { PurgeDialog } from "@/components/molecules/PurgeDialog";
+
 import { FileRow } from "./FileRow";
 import { useFileActions } from "./useFileActions";
 import { fileRowVariants } from "./variants";
@@ -17,14 +19,25 @@ export interface FilePanelProps {
 /**
  * ノート内のファイル欄(旧 AttachmentBar)。
  *
- * 「削除」という語は使わない — 実体を消す仕組みが無いので、消えると言えば嘘になる
- * (ADR-0003 決定7)。行の操作は「このノートから外す」までにしてある。
+ * 行の操作は「このノートから外す」(実体は残る)と「取り除く」(実体も消す)の2つ。
+ * 後者でも**履歴からは消えない** — `full` の実体は LFS にコミット済みで、fresh clone
+ * すれば取得できる。画面は回収できる範囲だけを言う(ADR kb-app/artifact-deletion)。
  */
 export function FilePanel({ noteId }: FilePanelProps) {
   const { t } = useTranslation("notes");
   const { data } = useNoteFiles(noteId);
-  const { addPicked, detachFile, fetchFile, openFile, openLegacyFile, busy } =
-    useFileActions(noteId);
+  const {
+    addPicked,
+    detachFile,
+    planPurge,
+    confirmPurge,
+    purgeTarget,
+    clearPurge,
+    fetchFile,
+    openFile,
+    openLegacyFile,
+    busy,
+  } = useFileActions(noteId);
 
   const files = data?.files ?? [];
   const legacy = data?.legacy ?? [];
@@ -45,6 +58,7 @@ export function FilePanel({ noteId }: FilePanelProps) {
             file={file}
             busy={busy}
             onDetach={() => void detachFile(file)}
+            onPurge={() => void planPurge(file)}
             onReplace={() => void addPicked(file.id)}
             onFetch={() => void fetchFile(file)}
             onOpen={() => void openFile(file)}
@@ -70,6 +84,15 @@ export function FilePanel({ noteId }: FilePanelProps) {
           </li>
         ))}
       </ul>
+
+      <PurgeDialog
+        plan={purgeTarget}
+        busy={busy}
+        onConfirm={() => void confirmPurge()}
+        onOpenChange={(open) => {
+          if (!open) clearPurge();
+        }}
+      />
     </section>
   );
 }

@@ -13,6 +13,7 @@ import type { FileRow as FileRowData } from "@/lib/api";
 export interface FileRowProps {
   file: FileRowData;
   onDetach: () => void;
+  onPurge: () => void;
   onReplace: () => void;
   onFetch: () => void;
   onOpen: () => void;
@@ -23,6 +24,7 @@ export interface FileRowProps {
 export function FileRow({
   file,
   onDetach,
+  onPurge,
   onReplace,
   onFetch,
   onOpen,
@@ -74,6 +76,10 @@ export function FileRow({
         </Button>
         <Button variant="quiet" size="sm" disabled={busy} onClick={onDetach}>
           {t("file.detach")}
+        </Button>
+        {/* 実体まで消す。押した先で範囲を明示して確認する(履歴からは消えない) */}
+        <Button variant="quiet" size="sm" disabled={busy} onClick={onPurge}>
+          {t("file.purge")}
         </Button>
       </span>
     </li>

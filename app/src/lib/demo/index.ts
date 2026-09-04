@@ -21,6 +21,8 @@ import type {
   NoteSummary,
   NoteView,
   PreviewFile,
+  PurgePlan,
+  Purged,
   SearchOutcome,
   Settings,
   SetupState,
@@ -514,6 +516,24 @@ export const demoApi = {
   // ブラウザでは DOM の paste 経路が動くのでフォールバックは不要
   fileAddFromClipboard: () => delay<Added | null>(null),
   fileDetach: () => delay(null),
+  filesOrphans: (): Promise<FileRow[]> => delay([]),
+  filePurgePlan: (): Promise<PurgePlan> =>
+    delay({
+      token: "demo",
+      id: "demo",
+      display_name: "見本.bin",
+      hash: "0".repeat(64),
+      size: 0,
+      origin: "picker",
+      notes: [],
+      shares_object_with: [],
+      drops_object: true,
+      needs_confirmation: false,
+      superseded_by: [],
+      reason: "見本",
+    }),
+  filePurgeCommit: (): Promise<Purged> =>
+    delay({ id: "demo", display_name: "見本.bin", dropped_object: true, sync_error: null }),
   fileFetch: () => delay<Availability>("local"),
   // ブラウザからは OS のアプリへ渡せない(この経路は Tauri でしか通らない)
   fileOpen: () => delay(null),

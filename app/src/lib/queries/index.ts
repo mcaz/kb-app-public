@@ -260,6 +260,31 @@ export const useFileDetach = () =>
     (a) => a.noteId,
   );
 
+/** 孤児の一覧。purge のあとに変わるので、成功したら無効化する。 */
+export const useFilesOrphans = () =>
+  useQuery({ queryKey: [...queryKeys.files, "orphans"], queryFn: () => api.filesOrphans() });
+
+/** 下見は読み取りだけ。何も変わらないので無効化しない。 */
+export const useFilePurgePlan = () =>
+  useMutation({
+    mutationFn: (a: { id: string; reason: string }) => api.filePurgePlan(a.id, a.reason),
+  });
+
+export const useFilePurgeCommit = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (a: { id: string; token: string; confirmed: boolean; noteId?: string }) =>
+      api.filePurgeCommit(a.id, a.token, a.confirmed),
+    onSuccess: async (_data, args) => {
+      const updates = [qc.invalidateQueries({ queryKey: queryKeys.files })];
+      if (args.noteId) {
+        updates.push(qc.invalidateQueries({ queryKey: queryKeys.noteFiles(args.noteId) }));
+      }
+      await Promise.all(updates);
+    },
+  });
+};
+
 /** 開くだけ。台帳も画面の一覧も変わらないので、無効化しない。 */
 export const useFileOpen = () => useMutation({ mutationFn: (id: string) => api.fileOpen(id) });
 

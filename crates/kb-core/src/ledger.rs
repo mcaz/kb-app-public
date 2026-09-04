@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::artifact::{ArtifactId, ArtifactRef, Manifest, RefName, SyncPolicy};
+use crate::artifact::{ArtifactId, ArtifactRef, ContentHash, Manifest, RefName, SyncPolicy};
 use crate::vault::Vault;
 
 /// 保管庫の中の台帳置き場。`.kb/` は索引 DB 用に ignore 済みなので別名。
@@ -111,6 +111,71 @@ impl Ledger {
         }
 
         Ok(self.commit_if_tracked(vault, &[dest, stale], "vault: ファイルの台帳を更新"))
+    }
+
+    /// 台帳を消し、**消した記録を残す**。実体には触れない(呼ぶ側が [`crate::purge`])。
+    ///
+    /// 記録が残らない削除を作らない、という決定(ADR kb-app/artifact-deletion)の実体。
+    /// `full` なら墓標も commit されるので履歴から辿れる。sidecar は Git に載らないため
+    /// 墓標ファイルだけが記録になる。
+    pub fn purge(
+        &self,
+        vault: &Vault,
+        manifest: &Manifest,
+        reason: &str,
+        at: &str,
+    ) -> Result<CommitOutcome> {
+        let sync = manifest.policy.sync;
+        let tomb = self.tombstone_path(sync, &manifest.id);
+        write_json(
+            &tomb,
+            &Tombstone {
+                id: manifest.id.clone(),
+                display_name: manifest.display_name.clone(),
+                hash: manifest.hash.clone(),
+                size: manifest.created.size,
+                origin: manifest.created.origin.clone(),
+                notes: manifest.notes.clone(),
+                reason: reason.to_string(),
+                at: at.to_string(),
+            },
+        )?;
+        // 両側を見る。区分を跨いで引っ越した直後でも取り残さない
+        let mut removed = Vec::new();
+        for s in [SyncPolicy::Full, SyncPolicy::LocalOnly] {
+            let path = self.manifest_path(s, &manifest.id);
+            if path.is_file() {
+                fs::remove_file(&path)?;
+                removed.push(path);
+            }
+        }
+        removed.push(tomb);
+        Ok(self.commit_if_tracked(vault, &removed, "vault: ファイルを取り除く"))
+    }
+
+    /// 消した記録の一覧(新しい順)。整理の結果を後から辿るため。
+    pub fn tombstones(&self) -> Vec<Tombstone> {
+        let mut out = Vec::new();
+        for sync in [SyncPolicy::Full, SyncPolicy::LocalOnly] {
+            let dir = self.base(sync).join("purged");
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let Ok(text) = fs::read_to_string(entry.path()) else {
+                    continue;
+                };
+                if let Ok(t) = serde_json::from_str::<Tombstone>(&text) {
+                    out.push(t);
+                }
+            }
+        }
+        out.sort_by(|a, b| b.at.cmp(&a.at).then(b.id.cmp(&a.id)));
+        out
+    }
+
+    fn tombstone_path(&self, sync: SyncPolicy, id: &ArtifactId) -> PathBuf {
+        self.base(sync).join("purged").join(format!("{id}.json"))
     }
 
     /// 台帳を読む。同期される側 → sidecar の順に探す。
@@ -303,6 +368,22 @@ impl Ledger {
             sync_error: vault.commit(&refs, message).err().map(|e| e.to_string()),
         }
     }
+}
+
+/// purge の墓標。**台帳を消しても「何を、なぜ消したか」は残す。**
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct Tombstone {
+    pub id: ArtifactId,
+    pub display_name: String,
+    pub hash: ContentHash,
+    pub size: u64,
+    pub origin: String,
+    /// 消した時点で結び付いていたノート(通常は空 — 孤児を消すため)
+    pub notes: Vec<String>,
+    pub reason: String,
+    /// RFC3339
+    pub at: String,
 }
 
 fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {

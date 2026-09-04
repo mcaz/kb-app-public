@@ -10,6 +10,7 @@ import type {
   Availability,
   ConnectState,
   Favorite,
+  FileRow,
   FilesPage,
   GraphData,
   GitHubAuthState,
@@ -20,6 +21,8 @@ import type {
   NoteListPage,
   NoteView,
   PreviewFile,
+  PurgePlan,
+  Purged,
   SearchOutcome,
   Settings,
   SetupState,
@@ -143,6 +146,17 @@ export const api = {
     IN_TAURI
       ? unwrap(commands.fileDetach(noteId, id, expectedVersion))
       : (await demo()).fileDetach(),
+  /** どのノートからも外れたファイル。外しただけでは実体が残るので拾えるようにする。 */
+  filesOrphans: async (): Promise<FileRow[]> =>
+    IN_TAURI ? unwrap(commands.filesOrphans()) : (await demo()).filesOrphans(),
+  /** purge の下見。まだ消さない。 */
+  filePurgePlan: async (id: string, reason: string): Promise<PurgePlan> =>
+    IN_TAURI ? unwrap(commands.filePurgePlan(id, reason)) : (await demo()).filePurgePlan(),
+  /** 下見どおりに取り除く。`confirmed` は画面が本人へ訊いたときだけ true。 */
+  filePurgeCommit: async (id: string, token: string, confirmed: boolean): Promise<Purged> =>
+    IN_TAURI
+      ? unwrap(commands.filePurgeCommit(id, token, confirmed))
+      : (await demo()).filePurgeCommit(),
   fileFetch: async (id: string): Promise<Availability> =>
     IN_TAURI ? unwrap(commands.fileFetch(id)) : (await demo()).fileFetch(),
   /** 中身はコアの resolver 経由でしか出てこない(画面はパスを受け取らない)。 */

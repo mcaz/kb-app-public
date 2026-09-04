@@ -104,6 +104,18 @@
     "forcedLocalOnly": "This file lives in a work repository, so it is kept unsynced",
     "addFailed": "Could not add the file: {{error}}",
     "needNote": "Open a note before dropping files",
-    "pasteFailed": "Paste failed: {{error}}"
+    "pasteFailed": "Paste failed: {{error}}",
+    "purge": "Remove",
+    "purgeTitle": "Remove “{{name}}”",
+    "purgeScope": "Removes it from this device and from future syncs. It stays in history that has already been synced, so other devices can still retrieve it.",
+    "purgeShared": "{{count}} other file(s) share the same content, so the data itself stays",
+    "purgeSuperseded": "A newer version points at this one as the version it replaced",
+    "purgeOnlyCopy": "This came from a conversation and has no original file. Removing it cannot be undone",
+    "purgeReason": "removed from the app",
+    "purgeCancel": "Cancel",
+    "purgeConfirm": "Remove",
+    "purged": "Removed (it stays in history)",
+    "purgedKeptObject": "Removed from the ledger. The data stays because another file shares the same content",
+    "purgeSyncFailed": "Removed, but syncing failed: {{error}}"
   }
 }

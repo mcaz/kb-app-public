@@ -144,6 +144,22 @@ impl Stores {
             .join(rest)
     }
 
+    /// 実体をこの境界から取り除く。無ければ何もしない(2度目の purge でも落ちない)。
+    ///
+    /// **参照が残っていないことは呼ぶ側が確かめる。** ここは1件消すだけで、
+    /// 同じ実体を指す他の台帳がいるかは見ない([`crate::purge`] が見る)。
+    pub fn remove(&self, sync: SyncPolicy, hash: &ContentHash) -> Result<bool> {
+        let path = self.object_path(sync, hash);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => {
+                Err(anyhow::Error::from(error)
+                    .context(format!("実体を消せない: {}", path.display())))
+            }
+        }
+    }
+
     /// **その境界に**あるか。境界を跨いで訊く手段は用意しない。
     pub fn has(&self, sync: SyncPolicy, hash: &ContentHash) -> bool {
         self.object_path(sync, hash).is_file()

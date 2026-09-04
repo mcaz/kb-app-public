@@ -364,6 +364,24 @@ fn discard_object(vault: &Vault, hash: &ContentHash) -> Result<()> {
     }
 }
 
+/// 作業ツリーの pointer と、この端末の LFS 置き場からこの実体を取り除く。
+///
+/// **履歴からは消えない。** object は既にコミット済みで、fresh clone すれば取得
+/// できる。回収できるのはこの端末のディスクと、以降の commit に載る pointer だけ。
+/// 呼ぶ側は「完全に削除」と表示してはいけない(ADR kb-app/artifact-deletion)。
+pub fn forget(vault: &Vault, hash: &ContentHash) -> Result<()> {
+    let rel = rel(hash);
+    if tracked_path(vault, hash).is_file() {
+        let out = git(vault, &["rm", "--quiet", "--force", "--", &rel])?;
+        if !out.status.success() {
+            // index から既に外れている場合もある。作業ツリーだけ落として先へ進む
+            let _ = fs::remove_file(tracked_path(vault, hash));
+        }
+        commit_via_cli(vault, "vault: ファイルの実体を取り除く")?;
+    }
+    discard_object(vault, hash)
+}
+
 /// 実体を読む。無ければ `None`(呼び出し側が「この端末にない」として扱う)。
 pub fn read(vault: &Vault, hash: &ContentHash) -> Result<Option<fs::File>> {
     let path = object_path(vault, hash)?;

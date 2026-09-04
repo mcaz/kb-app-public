@@ -30,5 +30,11 @@
   "openNote": "Source note",
   "previewLoading": "Preparing preview…",
   "previewUnavailable": "This file type can’t be previewed in the app",
-  "previewDescription": "Contents of {{name}}"
+  "previewDescription": "Contents of {{name}}",
+  "orphans": {
+    "label": "Files no note points at",
+    "title": "Detached files",
+    "help": "Removing a file from a note leaves the data behind. Clear out what you no longer need here.",
+    "purge": "Remove"
+  }
 }

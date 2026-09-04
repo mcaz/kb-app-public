@@ -15,6 +15,7 @@ import { useFiles } from "@/lib/queries";
 
 import { FileCard } from "./FileCard";
 import { FilePreviewDialog } from "./FilePreviewDialog";
+import { OrphanSection } from "./OrphanSection";
 import { filterFiles, formatBytes, summarizeFiles, type FileKind } from "./fileKind";
 
 const FILE_KINDS = ["pdf", "image", "document", "other"] as const;
@@ -113,6 +114,8 @@ export function FilesPage() {
             ))}
           </div>
         )}
+
+        <OrphanSection />
       </div>
 
       <FilePreviewDialog

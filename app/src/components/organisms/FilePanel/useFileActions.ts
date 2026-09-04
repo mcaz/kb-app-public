@@ -3,6 +3,7 @@ import { toast } from "sonner";
 
 import { useErrorText } from "@/hooks/useErrorText";
 import { api } from "@/lib/api";
+import { usePurgeFlow } from "@/hooks/usePurgeFlow";
 import { useFileAdd, useFileDetach, useFileFetch, useFileOpen, useLegacyOpen } from "@/lib/queries";
 
 import type { Added, FileRow } from "@/lib/api";
@@ -18,6 +19,7 @@ export function useFileActions(noteId: string) {
   const fetch = useFileFetch();
   const open = useFileOpen();
   const openLegacy = useLegacyOpen();
+  const purge = usePurgeFlow(noteId);
 
   /** 拒否ではない知らせ(大きさの警告・区分の固定)は取り込めた後に出す。 */
   const notice = (added: Added) => {
@@ -77,9 +79,13 @@ export function useFileActions(noteId: string) {
   return {
     addPicked,
     detachFile,
+    planPurge: (file: FileRow) => purge.planPurge(file.id),
+    confirmPurge: purge.confirmPurge,
+    purgeTarget: purge.target,
+    clearPurge: purge.clear,
     fetchFile,
     openFile,
     openLegacyFile,
-    busy: add.isPending || detach.isPending || fetch.isPending,
+    busy: add.isPending || detach.isPending || fetch.isPending || purge.busy,
   };
 }

@@ -30,5 +30,11 @@
   "openNote": "元のノート",
   "previewLoading": "プレビューを準備中…",
   "previewUnavailable": "この形式はアプリ内で表示できません",
-  "previewDescription": "{{name}}の内容"
+  "previewDescription": "{{name}}の内容",
+  "orphans": {
+    "label": "どのノートからも外れたファイル",
+    "title": "外れたファイル",
+    "help": "ノートから外しただけでは実体が残ります。使わないものはここで取り除けます。",
+    "purge": "取り除く"
+  }
 }

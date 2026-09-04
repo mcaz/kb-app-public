@@ -74,6 +74,20 @@ export const commands = {
 } | null, AppError>(__TAURI_INVOKE("file_add_from_clipboard", { noteId })),
 	/**  このノートから外す。**実体は消えない**(GC を持たない MVP で「削除」と言わない)。 */
 	fileDetach: (noteId: string, id: string, expectedVersion: number) => typedError<null, AppError>(__TAURI_INVOKE("file_detach", { noteId, id, expectedVersion })),
+	/**
+	 *  どのノートからも外れたファイル。**外しただけでは実体が残る**ので、
+	 *  ここで拾えないと置き場に溜まり続ける(ADR kb-app/artifact-deletion)。
+	 */
+	filesOrphans: () => typedError<FileRow[], AppError>(__TAURI_INVOKE("files_orphans")),
+	/**  purge の下見。**まだ消さない。** 実体を道連れにするか、確認が要るかを返す。 */
+	filePurgePlan: (id: string, reason: string) => typedError<PurgePlan, AppError>(__TAURI_INVOKE("file_purge_plan", { id, reason })),
+	/**
+	 *  下見どおりなら取り除く。
+	 * 
+	 *  `confirmed` は**画面が本人へ訊いたときだけ** true。原本の無い実体(MCP 添付)を
+	 *  消すときに要る。履歴からは消えないので、画面は「完全に削除」と書かない。
+	 */
+	filePurgeCommit: (id: string, token: string, confirmed: boolean) => typedError<Purged, AppError>(__TAURI_INVOKE("file_purge_commit", { id, token, confirmed })),
 	/**  手元に無い実体を取り寄せる。戻り値は取り寄せた後の状態(都度算出)。 */
 	fileFetch: (id: string) => typedError<Availability, AppError>(__TAURI_INVOKE("file_fetch", { id })),
 	/**
@@ -189,6 +203,15 @@ export type AppError =
 /**  Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。 */
 { code: "unexpected"; message: string };
 
+/**
+ *  Artifact record の不透明な identity(ULID)。
+ * 
+ *  `content_hash` とは**別物**。同じ bytes でも来歴や信頼境界が違えば別の record を持てる
+ *  (正本の却下案「`artifact_id = content_hash`」)。時刻が先頭に来るので、
+ *  文字列のまま並べれば作成順になる。
+ */
+export type ArtifactId = string;
+
 export type Authority = {
 	namespace: NoteNamespace,
 	role: AuthorityRole,
@@ -239,6 +262,14 @@ export type ConnectState = {
 	sync_error_kind: BackupFailureKind | null,
 	smart_search: SmartSearchState,
 };
+
+/**
+ *  raw bytes の SHA-256(小文字 hex)。
+ * 
+ *  **Git LFS の OID と同じ値**になるよう SHA-256 に固定している(ADR-0003 決定2)。
+ *  別の値を採ると、転送側と CAS 側で検証を二重に持つことになる。
+ */
+export type ContentHash = string;
 
 /**  画面が次の行動を訳し分けるための安定した分類。 */
 export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
@@ -550,6 +581,38 @@ export type NoteView = {
 export type PreviewFile = {
 	path: string,
 	text: string | null,
+};
+
+/**  purge の下見。**まだ何も消していない。** */
+export type PurgePlan = {
+	/**  `commit` へ渡す短命 token。 */
+	token: string,
+	id: ArtifactId,
+	display_name: string,
+	hash: ContentHash,
+	size: number,
+	origin: string,
+	/**  まだ結び付いているノート。空なら孤児。 */
+	notes: string[],
+	/**  同じ実体を指す他の台帳。1件でもあれば実体は残す。 */
+	shares_object_with: ArtifactId[],
+	/**  この purge で実体も消えるか。 */
+	drops_object: boolean,
+	/**  実体が消え、かつ原本が無い来歴 → `confirmed` 無しでは通さない。 */
+	needs_confirmation: boolean,
+	/**  この台帳を `supersedes` している版。purge すると参照が宙に浮く。 */
+	superseded_by: ArtifactId[],
+	reason: string,
+};
+
+/**  purge の結果。 */
+export type Purged = {
+	id: ArtifactId,
+	display_name: string,
+	/**  実体も消したか(他が参照していれば false)。 */
+	dropped_object: boolean,
+	/**  同期の失敗は purge 自体の失敗にしない(派生 — 契約4)。 */
+	sync_error: string | null,
 };
 
 export type RelationKind = "derived_from" | "supports" | "updates" | "contradicts" | "supersedes" | "mentions";

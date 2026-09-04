@@ -577,6 +577,65 @@ pub fn file_detach(
     })
 }
 
+/// どのノートからも外れたファイル。**外しただけでは実体が残る**ので、
+/// ここで拾えないと置き場に溜まり続ける(ADR kb-app/artifact-deletion)。
+#[tauri::command]
+#[specta::specta]
+pub fn files_orphans(state: State<'_, AppState>) -> AppResult<Vec<FileRow>> {
+    state.with_artifacts(|vault, stores, ledger, _| {
+        Ok(kb_core::purge::orphans(ledger)
+            .iter()
+            .map(|m| row(vault, stores, m))
+            .collect())
+    })
+}
+
+/// purge の下見。**まだ消さない。** 実体を道連れにするか、確認が要るかを返す。
+#[tauri::command]
+#[specta::specta]
+pub fn file_purge_plan(
+    state: State<'_, AppState>,
+    id: String,
+    reason: String,
+) -> AppResult<kb_core::purge::PurgePlan> {
+    let id = artifact_id(&id)?;
+    state.with_purges(|_, _, ledger, purges| {
+        purges
+            .prepare(ledger, &id, &reason)
+            .map_err(AppError::invalid_input)
+    })
+}
+
+/// 下見どおりなら取り除く。
+///
+/// `confirmed` は**画面が本人へ訊いたときだけ** true。原本の無い実体(MCP 添付)を
+/// 消すときに要る。履歴からは消えないので、画面は「完全に削除」と書かない。
+#[tauri::command]
+#[specta::specta]
+pub fn file_purge_commit(
+    state: State<'_, AppState>,
+    id: String,
+    token: String,
+    confirmed: bool,
+) -> AppResult<kb_core::purge::Purged> {
+    let id = artifact_id(&id)?;
+    state.with_purges(|vault, stores, ledger, purges| {
+        purges
+            .commit(
+                kb_core::purge::Workspace {
+                    vault,
+                    stores,
+                    ledger,
+                },
+                &id,
+                &token,
+                confirmed,
+                &kb_core::frontmatter::now_iso(),
+            )
+            .map_err(AppError::invalid_input)
+    })
+}
+
 /// 手元に無い実体を取り寄せる。戻り値は取り寄せた後の状態(都度算出)。
 #[tauri::command]
 #[specta::specta]
