@@ -8,6 +8,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::write_rejection::WriteRejection;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -167,18 +168,22 @@ impl Authority {
         match (self.namespace, self.role) {
             (NoteNamespace::Records, AuthorityRole::Record) => {}
             (NoteNamespace::Records, _) => {
-                bail!("records namespaceのroleはrecordに固定する")
+                return Err(WriteRejection::AuthorityShape
+                    .validation("records namespaceのroleはrecordに固定する"));
             }
             (_, AuthorityRole::Record) => {
-                bail!("record roleはrecords namespaceにだけ使える")
+                return Err(WriteRejection::AuthorityShape
+                    .validation("record roleはrecords namespaceにだけ使える"));
             }
             _ => {}
         }
         if self.role == AuthorityRole::Proposal && self.status != AuthorityStatus::Active {
-            bail!("proposal roleのstatusはactiveに固定する")
+            return Err(WriteRejection::AuthorityShape
+                .validation("proposal roleのstatusはactiveに固定する"));
         }
         if self.status == AuthorityStatus::Superseded && self.role != AuthorityRole::Canonical {
-            bail!("superseded statusはcanonical roleにだけ使える")
+            return Err(WriteRejection::AuthorityShape
+                .validation("superseded statusはcanonical roleにだけ使える"));
         }
         Ok(())
     }
@@ -235,25 +240,27 @@ pub fn validate_envelope(
             let mut unique = BTreeSet::new();
             for relation in relations {
                 if relation.target == *uid {
-                    bail!("typed relationは自分自身を参照できない")
+                    return Err(WriteRejection::RelationIntegrity
+                        .validation("typed relationは自分自身を参照できない"));
                 }
                 if !unique.insert((relation.kind, relation.target.clone())) {
-                    bail!(
+                    return Err(WriteRejection::RelationIntegrity.validation(format!(
                         "typed relationが重複している: {} -> {}",
                         relation.kind.as_str(),
                         relation.target
-                    )
+                    )));
                 }
             }
             Ok(())
         }
-        _ => bail!("note_uidとauthorityは同時に設定する"),
+        _ => Err(WriteRejection::AuthorityShape.validation("note_uidとauthorityは同時に設定する")),
     }
 }
 
-fn validate_scope(scope: &str) -> Result<()> {
+pub(crate) fn validate_scope(scope: &str) -> Result<()> {
     if scope.is_empty() || scope.chars().count() > 160 || scope.trim() != scope {
-        bail!("authority scopeは1〜160文字で前後空白なしにする")
+        return Err(WriteRejection::AuthorityScope
+            .validation("authority scopeは1〜160文字で前後空白なしにする"));
     }
     for segment in scope.split('/') {
         let mut chars = segment.chars();
@@ -265,13 +272,16 @@ fn validate_scope(scope: &str) -> Result<()> {
                 .chars()
                 .all(|value| value.is_alphanumeric() || value == '-')
         {
-            bail!("authority scopeは英数字・Unicode文字・内部hyphenのslash区切りにする")
+            return Err(WriteRejection::AuthorityScope.validation(
+                "authority scopeは英数字・Unicode文字・内部hyphenのslash区切りにする",
+            ));
         }
         if segment
             .chars()
             .any(|value| value.is_ascii_uppercase() || value.is_control())
         {
-            bail!("authority scopeはASCII大文字や制御文字を含めない")
+            return Err(WriteRejection::AuthorityScope
+                .validation("authority scopeはASCII大文字や制御文字を含めない"));
         }
     }
     Ok(())

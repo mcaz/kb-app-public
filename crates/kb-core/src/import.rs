@@ -173,6 +173,7 @@ fn convert(
         note_uid: None,
         authority: None,
         relations: Vec::new(),
+        judgment: None,
         kind: get("type").unwrap_or_else(|| "Note".into()),
         title: get("title"),
         description: None,

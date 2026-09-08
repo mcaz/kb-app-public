@@ -1,4 +1,4 @@
-import { Brain, Palette, Plug, Settings } from "lucide-react";
+import { Brain, Palette, Plug, RefreshCw, Settings } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/atoms/ui/dialog";
 import { ConnectPage } from "@/pages/ConnectPage";
+import { DistillationSettingsPage } from "@/pages/DistillationSettingsPage";
 import { KnowledgeBaseSettingsPage } from "@/pages/KnowledgeBaseSettingsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
@@ -18,7 +19,7 @@ export interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type SettingsSection = "kb" | "connect" | "general";
+type SettingsSection = "kb" | "distillation" | "connect" | "general";
 
 /** KB利用・接続・端末設定を、アプリ本体の画面遷移を変えずにまとめて扱う。 */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
@@ -26,6 +27,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [section, setSection] = useState<SettingsSection>("kb");
   const items = [
     { id: "kb" as const, icon: Brain, label: t("settings.kbUsage") },
+    { id: "distillation" as const, icon: RefreshCw, label: t("settings.distillation.title") },
     { id: "connect" as const, icon: Plug, label: t("nav.connect") },
     { id: "general" as const, icon: Palette, label: t("settings.general") },
   ];
@@ -64,6 +66,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         <div className="flex min-h-0 min-w-0 overflow-hidden">
           {section === "kb" ? (
             <KnowledgeBaseSettingsPage />
+          ) : section === "distillation" ? (
+            <DistillationSettingsPage />
           ) : section === "connect" ? (
             <ConnectPage />
           ) : (

@@ -26,16 +26,18 @@ pub enum DerivedArtifact {
     FtsAnchor,
     NoteRelations,
     NoteVecs,
+    CadenceCache,
 }
 
 impl DerivedArtifact {
-    pub const ALL: [DerivedArtifact; 6] = [
+    pub const ALL: [DerivedArtifact; 7] = [
         DerivedArtifact::FtsMain,
         DerivedArtifact::FtsTri,
         DerivedArtifact::Links,
         DerivedArtifact::FtsAnchor,
         DerivedArtifact::NoteRelations,
         DerivedArtifact::NoteVecs,
+        DerivedArtifact::CadenceCache,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -46,6 +48,7 @@ impl DerivedArtifact {
             Self::FtsAnchor => "fts_anchor",
             Self::NoteRelations => "note_relations",
             Self::NoteVecs => "note_vecs",
+            Self::CadenceCache => "cadence_cache",
         }
     }
 
@@ -57,6 +60,7 @@ impl DerivedArtifact {
             Self::FtsAnchor => &FTS_ANCHOR,
             Self::NoteRelations => &NOTE_RELATIONS,
             Self::NoteVecs => &NOTE_VECS,
+            Self::CadenceCache => &crate::cadence_cache::SPEC,
         }
     }
 }
@@ -95,6 +99,7 @@ pub(crate) enum ObjectKind {
     Table,
     Index,
     VirtualTable,
+    Trigger,
 }
 
 /// 存在検証とDROP/CREATEの単位。`create_sql` はfresh DDLと修復の共通正本。
@@ -181,13 +186,15 @@ pub(crate) struct ArtifactSpec {
     dead_code,
     reason = "allowlistの正本。テスト(registry_cannot_own_durable_state_tables)が参照する"
 )]
-pub(crate) const DURABLE_STATE_TABLES: [&str; 6] = [
+pub(crate) const DURABLE_STATE_TABLES: [&str; 8] = [
     "meta",
     "notes",
     "note_exports",
     "distillation_runs",
     "action_receipts",
     "action_capability_uses",
+    "distillation_jobs",
+    "distillation_job_runs",
 ];
 
 // ---------------------------------------------------------------- registry
@@ -312,6 +319,10 @@ fn object_health(conn: &Connection, object: &SqliteObjectSpec) -> Result<Artifac
         ObjectKind::Table => kind == "table" && !normalized.contains("VIRTUAL TABLE"),
         ObjectKind::VirtualTable => kind == "table" && normalized.contains("VIRTUAL TABLE"),
         ObjectKind::Index => kind == "index",
+        ObjectKind::Trigger => {
+            kind == "trigger"
+                && sql.trim_end_matches(';') == object.create_sql.trim_end_matches(';')
+        }
     };
     if !matches_kind {
         return Ok(ArtifactHealth::Broken {
@@ -321,7 +332,10 @@ fn object_health(conn: &Connection, object: &SqliteObjectSpec) -> Result<Artifac
     Ok(ArtifactHealth::Ready)
 }
 
-fn objects_health(conn: &Connection, objects: &[SqliteObjectSpec]) -> Result<ArtifactHealth> {
+pub(crate) fn objects_health(
+    conn: &Connection,
+    objects: &[SqliteObjectSpec],
+) -> Result<ArtifactHealth> {
     for object in objects {
         if let ArtifactHealth::Broken { detail } = object_health(conn, object)? {
             return Ok(ArtifactHealth::Broken { detail });
@@ -819,23 +833,35 @@ pub(crate) fn force_rebuild(
     conn: &Connection,
     artifact: DerivedArtifact,
 ) -> Result<RebuildOutcome> {
-    let spec = artifact.spec();
     let transaction = conn.unchecked_transaction()?;
+    let outcome = force_rebuild_in_transaction(vault, &transaction, artifact)?;
+    transaction.commit()?;
+    Ok(outcome)
+}
+
+/// 復旧全体を1つのtransactionに含め、途中の索引だけを確定させない。
+pub(crate) fn force_rebuild_in_transaction(
+    vault: &Vault,
+    conn: &Connection,
+    artifact: DerivedArtifact,
+) -> Result<RebuildOutcome> {
+    anyhow::ensure!(!conn.is_autocommit(), "索引の一括復旧にはtransactionが必要");
+    let spec = artifact.spec();
     for object in spec.objects {
         let drop_sql = match object.kind {
             ObjectKind::Table | ObjectKind::VirtualTable => {
                 format!("DROP TABLE IF EXISTS {}", object.name)
             }
             ObjectKind::Index => format!("DROP INDEX IF EXISTS {}", object.name),
+            ObjectKind::Trigger => format!("DROP TRIGGER IF EXISTS {}", object.name),
         };
-        transaction.execute_batch(&drop_sql)?;
-        transaction.execute_batch(object.create_sql)?;
+        conn.execute_batch(&drop_sql)?;
+        conn.execute_batch(object.create_sql)?;
     }
-    let outcome = (spec.rebuild)(vault, &transaction)?;
+    let outcome = (spec.rebuild)(vault, conn)?;
     if spec.criticality == Criticality::GovernanceCritical {
-        crate::index::validate_authority_index(&transaction)?;
+        crate::index::validate_authority_index(conn)?;
     }
-    transaction.commit()?;
     Ok(outcome)
 }
 
@@ -1152,6 +1178,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "参照される決定",
                     body: "本文",
                     description: None,
@@ -1177,6 +1204,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "根拠を参照するノート",
                     body: "silver heron ballast の根拠。",
                     description: None,
@@ -1420,6 +1448,7 @@ mod tests {
             .agent_update_note(
                 &conn,
                 crate::vault::NoteUpdate {
+                    judgment: None,
                     id: &linked,
                     title: None,
                     body: Some("See [new green alias](/notes/kepler.md)."),
@@ -1533,7 +1562,13 @@ mod tests {
 
         // 次のopenは自己修復がdocument正本からnote_relationsを再構築し、markerを置く
         let outcome = open_db_with_outcome(&vault).unwrap();
-        assert_eq!(outcome.recovered, vec![DerivedArtifact::NoteRelations]);
+        assert_eq!(
+            outcome.recovered,
+            vec![
+                DerivedArtifact::NoteRelations,
+                DerivedArtifact::CadenceCache
+            ]
+        );
         assert!(outcome.write_blockers.is_empty());
 
         // open済み接続のwriteは通る(full再検証はopen時に済んでいる)
@@ -1587,6 +1622,7 @@ mod tests {
             .unwrap()
         };
         let update = |field: &'static str, value: &'static str| crate::vault::NoteUpdate {
+            judgment: None,
             id: &id,
             title: (field == "title").then_some(value),
             body: (field == "body").then_some(value),

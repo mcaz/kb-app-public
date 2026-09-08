@@ -30,20 +30,55 @@ pub fn claude_desktop_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("Claude").join("claude_desktop_config.json"))
 }
 
-pub fn desktop_status_at(config: &Path) -> DesktopStatus {
+fn desktop_server_entries(
+    exe: &Path,
+    vault_name: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    [
+        ("kb-app-read", "read"),
+        ("kb-app-write", "write"),
+        ("kb-app-maintenance", "maintenance"),
+    ]
+    .into_iter()
+    .map(|(name, surface)| {
+        (
+            name.to_string(),
+            serde_json::json!({
+                "command": exe.to_string_lossy(),
+                "args": [
+                    "--mcp", "--mcp-surface", surface, "--vault", vault_name,
+                    "--client", "claude-desktop/claude"
+                ],
+            }),
+        )
+    })
+    .collect()
+}
+
+pub fn desktop_status_at(config: &Path, exe: &Path, vault_name: &str) -> DesktopStatus {
     let Ok(text) = fs::read_to_string(config) else {
         return DesktopStatus::NotFound;
     };
-    match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(v)
-            if ["kb-app-read", "kb-app-write", "kb-app-maintenance"]
-                .iter()
-                .all(|name| v.get("mcpServers").and_then(|s| s.get(name)).is_some()) =>
-        {
-            DesktopStatus::Connected
-        }
-        Ok(_) => DesktopStatus::NotConnected,
-        Err(_) => DesktopStatus::NotConnected,
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return DesktopStatus::NotConnected;
+    };
+    let Some(servers) = value.get("mcpServers").and_then(|value| value.as_object()) else {
+        return DesktopStatus::NotConnected;
+    };
+    // キーだけ揃っていても旧バイナリや別Vaultへ接続し得るため、修復時と同じ期待値で検査する。
+    let connected = !servers.contains_key("kb-app")
+        && desktop_server_entries(exe, vault_name)
+            .iter()
+            .all(|(name, expected)| {
+                servers.get(name).is_some_and(|actual| {
+                    actual.get("command") == expected.get("command")
+                        && actual.get("args") == expected.get("args")
+                })
+            });
+    if connected {
+        DesktopStatus::Connected
+    } else {
+        DesktopStatus::NotConnected
     }
 }
 
@@ -65,22 +100,7 @@ pub fn connect_desktop_at(config: &Path, exe: &Path, vault_name: &str) -> Result
     let backup = config.with_file_name(format!("claude_desktop_config.json.bak-kbapp-{}", today()));
     fs::copy(config, &backup).context("バックアップ作成")?;
     servers.remove("kb-app");
-    for (name, surface) in [
-        ("kb-app-read", "read"),
-        ("kb-app-write", "write"),
-        ("kb-app-maintenance", "maintenance"),
-    ] {
-        servers.insert(
-            name.to_string(),
-            serde_json::json!({
-                "command": exe.to_string_lossy(),
-                "args": [
-                    "--mcp", "--mcp-surface", surface, "--vault", vault_name,
-                    "--client", "claude-desktop/claude"
-                ],
-            }),
-        );
-    }
+    servers.extend(desktop_server_entries(exe, vault_name));
     fs::write(config, serde_json::to_string_pretty(&v)?).context("設定の書き込み")?;
     Ok(())
 }
@@ -587,6 +607,50 @@ pub fn set_backup_remote(vault: &Vault, url: &str) -> Result<()> {
     }
 }
 
+/// 同期で保管庫の正体が変わった場合は、別保管庫の表示用Markdownを取り込まない。
+/// エラーは識別子を含めず、MCPが通常の通信劣化と区別できる型で保持する。
+#[derive(Debug)]
+pub(crate) enum WorkspaceSyncFailure {
+    Unverified,
+    Mismatch,
+}
+
+impl std::fmt::Display for WorkspaceSyncFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unverified => "同期対象のworkspace IDを確認できない [workspace_unverified]",
+            Self::Mismatch => {
+                "同期中にworkspace IDが変わったため取り込みを停止した [vault_mismatch]"
+            }
+        })
+    }
+}
+
+impl std::error::Error for WorkspaceSyncFailure {}
+
+fn sync_workspace_id(vault: &Vault) -> Result<String> {
+    crate::workspace::stored_workspace_id(vault)
+        .map_err(|_| WorkspaceSyncFailure::Unverified.into())
+}
+
+fn verify_workspace_snapshot(vault: &Vault, expected: &str) -> Result<()> {
+    let result = sync_workspace_id(vault).and_then(|actual| {
+        if actual != expected {
+            return Err(WorkspaceSyncFailure::Mismatch.into());
+        }
+        Ok(())
+    });
+    if let Err(error) = &result {
+        // auto_pushは保存済みの書込を失敗へ戻さないので、戻り値を捨てても診断を残す。
+        record_sync_error(
+            vault,
+            &error.to_string(),
+            Some(BackupFailureKind::WorkspaceMismatch),
+        );
+    }
+    result
+}
+
 /// いま push(随時 push の実体)。非 fast-forward なら pull --rebase して1回だけ再試行。
 pub fn push_now(vault: &Vault) -> Result<()> {
     let _lock = sync_lock(vault)?;
@@ -602,6 +666,7 @@ fn push_now_locked_with_gate(
     vault: &Vault,
     mut gate: impl FnMut(&Vault) -> Result<()>,
 ) -> Result<()> {
+    let workspace_id = sync_workspace_id(vault)?;
     check_upload_gate(vault, &mut gate)?;
     let _ = ensure_merge_config(vault);
     let out = git(vault, &["push", "-u", "origin", "HEAD"])?;
@@ -617,7 +682,10 @@ fn push_now_locked_with_gate(
     // --autostashでObsidian等の未確定編集まで暗黙importしない。競合解消のpullへ
     // 進むのは、表示用MarkdownがDB outboxの確定出力だけでcleanな場合に限る。
     ensure_note_exports_clean(vault)?;
-    let pull = git(vault, &["pull", "--rebase", "--autostash"])?;
+    let pull = git(vault, &["pull", "--rebase", "--autostash"]);
+    // 非FF再試行もpullを行う。auto_push経由でもID変更後のimportとretry pushを止める。
+    verify_workspace_snapshot(vault, &workspace_id)?;
+    let pull = pull?;
     if pull.status.success() {
         import_pulled_markdown(vault)?;
         // pull中にrepositoryのvisibilityや権限が変わり得る。retryも別uploadとして
@@ -858,17 +926,28 @@ fn pull_is_throttled(st: &SyncState, now: u64) -> bool {
 /// 戻り値: 劣化情報(pull時のDB open自己修復・修復失敗の劣化を含む。空 = 正常
 /// またはスキップ)。
 pub fn pull_if_stale(vault: &Vault) -> Vec<crate::degradation::Degradation> {
+    pull_if_stale_verified(vault).unwrap_or_else(|error| {
+        vec![crate::degradation::Degradation::RemoteSync {
+            detail: error.to_string(),
+        }]
+    })
+}
+
+/// MCPでは接続先の変更を通信劣化として継続せず、安全な終端応答へ伝播する。
+pub(crate) fn pull_if_stale_verified(
+    vault: &Vault,
+) -> Result<Vec<crate::degradation::Degradation>> {
     if !has_origin(vault) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let now = epoch_now();
     let current = sync_state(vault);
     if pull_is_throttled(&current, now) {
-        return current
+        return Ok(current
             .last_error
             .map(|detail| crate::degradation::Degradation::RemoteSync { detail })
             .into_iter()
-            .collect();
+            .collect());
     }
     // Keychain拒否のようにgit起動前で失敗しても、この時刻を残して次の画面queryや
     // MCP tool callが即座に同じ認証を要求しない。
@@ -884,6 +963,9 @@ pub fn pull_if_stale(vault: &Vault) -> Vec<crate::degradation::Degradation> {
                 &error.to_string(),
                 failure_kind(&error).or(Some(BackupFailureKind::GitPull)),
             );
+            if error.is::<WorkspaceSyncFailure>() {
+                return Err(error);
+            }
         }
     }
     degraded.extend(
@@ -891,21 +973,26 @@ pub fn pull_if_stale(vault: &Vault) -> Vec<crate::degradation::Degradation> {
             .last_error
             .map(|detail| crate::degradation::Degradation::RemoteSync { detail }),
     );
-    degraded
+    Ok(degraded)
 }
 
 /// いま pull(スロットリング無視)。成功後は index.md を再生成して自己修復
 /// (merge=ours で相手側が勝った場合や、他デバイス追加分の反映)。
 /// 戻り値: pull時のDB openが報告した劣化(自己修復notice・修復失敗)。
 pub fn pull_now(vault: &Vault) -> Result<Vec<crate::degradation::Degradation>> {
+    let workspace_id = sync_workspace_id(vault)?;
     let outcome = crate::index::open_db_with_outcome(vault)?;
     let conn = outcome.conn;
     let degraded = outcome.degraded;
     vault.flush_note_exports(&conn)?;
+    // outboxの出力に伴うauto_pushも、非FF時に内部でpullすることがある。
+    verify_workspace_snapshot(vault, &workspace_id)?;
     ensure_note_exports_clean(vault)?;
     let _lock = sync_lock(vault)?;
     let _ = ensure_merge_config(vault);
-    let out = git(vault, &["pull", "--rebase", "--autostash"])?;
+    let out = git(vault, &["pull", "--rebase", "--autostash"]);
+    verify_workspace_snapshot(vault, &workspace_id)?;
+    let out = out?;
     if out.status.success() {
         record_pull_success(vault);
         ensure_import_succeeded(crate::index::import_markdown_snapshot(vault, &conn)?)?;
@@ -1013,6 +1100,145 @@ mod tests {
             .unwrap()
     }
 
+    fn changed_workspace_remote() -> (tempfile::TempDir, Vault, PathBuf, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = dir.path().join("backup.git");
+        run_git(dir.path(), &["init", "--bare", bare.to_str().unwrap()]);
+        let a = Vault::create(dir.path().join("a")).unwrap();
+        a.propose_for_test(
+            "元のノート",
+            "元の本文",
+            None,
+            &["test".into()],
+            "test/client",
+        )
+        .unwrap();
+        set_backup_remote(&a, bare.to_str().unwrap()).unwrap();
+        let branch = git2::Repository::open(&a.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+        run_git(
+            &bare,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")],
+        );
+        run_git(dir.path(), &["clone", bare.to_str().unwrap(), "b"]);
+        let b = Vault::open(dir.path().join("b")).unwrap();
+        drop(crate::index::open_db(&b).unwrap());
+        let incoming = a
+            .propose_for_test(
+                "取り込まないノート",
+                "別workspaceの本文",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        fs::write(
+            a.root.join(crate::workspace::ID_FILE),
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV\n",
+        )
+        .unwrap();
+        a.commit(
+            &[crate::workspace::ID_FILE],
+            "test: remote workspace changed",
+        )
+        .unwrap();
+        run_git(&a.root, &["push", "origin", "HEAD"]);
+        (dir, b, bare, incoming)
+    }
+
+    fn assert_incoming_note_not_imported(vault: &Vault, incoming: &str) {
+        // 検査側はMarkdown復元を起こすopen_dbを使わず、既存DBだけを読む。
+        let conn = rusqlite::Connection::open_with_flags(
+            vault.index_db_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM notes WHERE id = ?",
+                [incoming],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!(
+            vault
+                .list_note_files()
+                .unwrap()
+                .iter()
+                .any(|(id, _)| id == incoming),
+            "git pull自体はfixtureのMarkdownを取得済み"
+        );
+    }
+
+    /// 2026-09-05: pull後の接続先照合がimportより遅いと、拒否応答前に別KBの本文がDBへ混入する。
+    #[test]
+    fn workspace_sync_pull_stops_before_import_and_propagates_typed_failure() {
+        let (_dir, vault, _bare, incoming) = changed_workspace_remote();
+        let error = pull_if_stale_verified(&vault).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<WorkspaceSyncFailure>(),
+            Some(WorkspaceSyncFailure::Mismatch)
+        ));
+        assert_incoming_note_not_imported(&vault, &incoming);
+        assert_eq!(sync_state(&vault).last_pull_epoch, 0);
+        assert!(!error.to_string().contains("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+    }
+
+    /// 2026-09-05: auto_pushの非FF再試行もpullを持つため、同じimport前の照合が必要。
+    #[test]
+    fn workspace_sync_push_retry_stops_before_import_and_second_upload() {
+        let (_dir, vault, bare, incoming) = changed_workspace_remote();
+        let branch = git2::Repository::open(&vault.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .shorthand()
+            .unwrap()
+            .to_string();
+        let before = remote_head(&bare, &branch);
+        fs::write(vault.root.join("local.txt"), "local-only").unwrap();
+        vault
+            .commit(&["local.txt"], "test: diverged local commit")
+            .unwrap();
+        let mut gate_calls = 0;
+        let _lock = sync_lock(&vault).unwrap();
+        let error = push_now_locked_with_gate(&vault, |_| {
+            gate_calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<WorkspaceSyncFailure>(),
+            Some(WorkspaceSyncFailure::Mismatch)
+        ));
+        assert_eq!(gate_calls, 1);
+        assert_eq!(remote_head(&bare, &branch), before);
+        assert_incoming_note_not_imported(&vault, &incoming);
+    }
+
+    #[test]
+    fn workspace_sync_invalid_starting_id_stops_before_opening_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        fs::write(vault.root.join(crate::workspace::ID_FILE), "broken").unwrap();
+        let error = pull_now(&vault).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<WorkspaceSyncFailure>(),
+            Some(WorkspaceSyncFailure::Unverified)
+        ));
+        assert!(!vault.index_db_path().exists());
+        assert_eq!(
+            fs::read_to_string(vault.root.join(crate::workspace::ID_FILE)).unwrap(),
+            "broken"
+        );
+    }
+
     #[test]
     fn failed_pull_attempt_is_throttled_without_a_success_timestamp() {
         let state = SyncState {
@@ -1118,16 +1344,27 @@ mod tests {
     fn desktop_connect_preserves_existing_servers() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("claude_desktop_config.json");
-        fs::write(&cfg, r#"{"mcpServers": {"vault": {"command": "x"}}}"#).unwrap();
-        assert_eq!(desktop_status_at(&cfg), DesktopStatus::NotConnected);
-        connect_desktop_at(&cfg, Path::new("/usr/bin/true"), "try").unwrap();
-        assert_eq!(desktop_status_at(&cfg), DesktopStatus::Connected);
+        let exe = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
+        let original = serde_json::json!({
+            "preferences": {"theme": "dark"},
+            "mcpServers": {
+                "vault": {"command": "x", "args": ["--other"], "env": {"EXAMPLE": "fixture"}}
+            }
+        });
+        fs::write(&cfg, serde_json::to_string_pretty(&original).unwrap()).unwrap();
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "try"),
+            DesktopStatus::NotConnected
+        );
+        connect_desktop_at(&cfg, exe, "try").unwrap();
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "try"),
+            DesktopStatus::Connected
+        );
         let v: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&cfg).unwrap()).unwrap();
-        assert!(
-            v["mcpServers"]["vault"].is_object(),
-            "既存サーバーが保持される"
-        );
+        assert_eq!(v["mcpServers"]["vault"], original["mcpServers"]["vault"]);
+        assert_eq!(v["preferences"], original["preferences"]);
         for (name, surface) in [
             ("kb-app-read", "read"),
             ("kb-app-write", "write"),
@@ -1135,21 +1372,118 @@ mod tests {
         ] {
             assert_eq!(v["mcpServers"][name]["args"][2], surface);
             assert_eq!(v["mcpServers"][name]["args"][4], "try");
+            assert_eq!(v["mcpServers"][name]["args"][6], "claude-desktop/claude");
+            assert_eq!(v["mcpServers"][name]["command"], exe.to_str().unwrap());
         }
         assert!(v["mcpServers"].get("kb-app").is_none());
-        // バックアップが残る
-        assert!(fs::read_dir(dir.path()).unwrap().count() >= 2);
+        let backup =
+            cfg.with_file_name(format!("claude_desktop_config.json.bak-kbapp-{}", today()));
+        let backed_up: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(backup).unwrap()).unwrap();
+        assert_eq!(backed_up, original);
     }
 
     #[test]
     fn legacy_single_server_is_not_reported_as_split_connection() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("claude_desktop_config.json");
+        let exe = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
         fs::write(&cfg, r#"{"mcpServers": {"kb-app": {"command": "old"}}}"#).unwrap();
 
-        assert_eq!(desktop_status_at(&cfg), DesktopStatus::NotConnected);
-        connect_desktop_at(&cfg, Path::new("/usr/bin/true"), "try").unwrap();
-        assert_eq!(desktop_status_at(&cfg), DesktopStatus::Connected);
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "try"),
+            DesktopStatus::NotConnected
+        );
+        connect_desktop_at(&cfg, exe, "try").unwrap();
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "try"),
+            DesktopStatus::Connected
+        );
+    }
+
+    /// 2026-09-05: 3キー存在だけの判定では旧実行ファイル・誤った引数でも修復ボタンが隠れた。
+    #[test]
+    fn desktop_status_rejects_stale_or_malformed_registrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("claude_desktop_config.json");
+        let exe = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
+        fs::write(&cfg, "{}").unwrap();
+        connect_desktop_at(&cfg, exe, "try").unwrap();
+        let correct: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&cfg).unwrap()).unwrap();
+
+        for name in ["kb-app-read", "kb-app-write", "kb-app-maintenance"] {
+            for (field, value) in [
+                ("", serde_json::Value::Null),
+                ("/command", serde_json::json!("/old/target/release/kb")),
+                ("/args/0", serde_json::json!("mcp")),
+                ("/args/2", serde_json::json!("all")),
+                ("/args/4", serde_json::json!("another-vault")),
+                ("/args/6", serde_json::json!("claude-code/claude")),
+            ] {
+                let mut stale = correct.clone();
+                *stale
+                    .pointer_mut(&format!("/mcpServers/{name}{field}"))
+                    .unwrap() = value;
+                fs::write(&cfg, serde_json::to_string(&stale).unwrap()).unwrap();
+                assert_eq!(
+                    desktop_status_at(&cfg, exe, "try"),
+                    DesktopStatus::NotConnected,
+                    "{name}{field}"
+                );
+                connect_desktop_at(&cfg, exe, "try").unwrap();
+                assert_eq!(
+                    desktop_status_at(&cfg, exe, "try"),
+                    DesktopStatus::Connected
+                );
+            }
+        }
+
+        let mut mixed = correct;
+        mixed["mcpServers"]["kb-app"] = serde_json::json!({"command": "old"});
+        fs::write(&cfg, serde_json::to_string(&mixed).unwrap()).unwrap();
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "try"),
+            DesktopStatus::NotConnected
+        );
+        connect_desktop_at(&cfg, exe, "try").unwrap();
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "try"),
+            DesktopStatus::Connected
+        );
+    }
+
+    #[test]
+    fn desktop_status_uses_the_current_executable_and_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("claude_desktop_config.json");
+        let exe = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
+        fs::write(&cfg, "{}").unwrap();
+        connect_desktop_at(&cfg, exe, "try").unwrap();
+
+        assert_eq!(
+            desktop_status_at(&cfg, Path::new("/other/kb-app"), "try"),
+            DesktopStatus::NotConnected
+        );
+        assert_eq!(
+            desktop_status_at(&cfg, exe, "another-vault"),
+            DesktopStatus::NotConnected
+        );
+    }
+
+    #[test]
+    fn desktop_status_handles_missing_or_invalid_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("claude_desktop_config.json");
+        let exe = Path::new("/Applications/kb-app.app/Contents/MacOS/kb-app");
+        assert_eq!(desktop_status_at(&cfg, exe, "try"), DesktopStatus::NotFound);
+        for invalid in ["{", "null", "{}", r#"{"mcpServers": null}"#] {
+            fs::write(&cfg, invalid).unwrap();
+            assert_eq!(
+                desktop_status_at(&cfg, exe, "try"),
+                DesktopStatus::NotConnected
+            );
+        }
     }
 
     #[test]

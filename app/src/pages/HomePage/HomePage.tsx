@@ -1,33 +1,43 @@
-import { Cloud, Link, NotebookText, Sparkles, Wrench } from "lucide-react";
-import { useState } from "react";
+import { ClipboardCheck, Cloud, Link, NotebookText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { Button } from "@/components/atoms/ui/button";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
-import { Pager } from "@/components/molecules/Pager";
-import { RecentNoteRow } from "@/components/molecules/RecentNoteRow";
 import { StatTile } from "@/components/molecules/StatTile";
+import { NoteCountTrendPanel } from "@/components/organisms/NoteCountTrendPanel";
+import { ObservationHealthPanel } from "@/components/organisms/ObservationHealthPanel";
+import { ObservationTrendPanel } from "@/components/organisms/ObservationTrendPanel";
 import { SinglePaneLayout } from "@/components/templates/SinglePaneLayout";
-import { paginate } from "@/lib/hits";
-import { useConnectState } from "@/lib/queries";
+import { useConnectState, useProposals } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
+
+import { homeRefreshVariants } from "./variants";
 
 import type { Degradation, HomeState } from "@/lib/api";
 
-const RECENT_PER_PAGE = 6;
-
-/** ホーム(健全性の要約・最近のノート)。 */
-export function HomePage({ home }: { home: HomeState | undefined }) {
-  const { t } = useTranslation(["home", "common"]);
+/** ノート探索は検索モーダルに任せ、ホームは健全性の要約を示す。 */
+export function HomePage({
+  home,
+  onOpenAllNotes,
+  refresh,
+}: {
+  home: HomeState | undefined;
+  onOpenAllNotes: () => void;
+  refresh: {
+    updatedAt: number;
+    isFetching: boolean;
+    isError: boolean;
+    detectionFailed: boolean;
+    retry: () => void;
+  };
+}) {
+  const { t, i18n } = useTranslation(["home", "common"]);
   const { data: connect } = useConnectState();
-  const openNote = useSession((s) => s.openNote);
-  const go = useSession((s) => s.go);
-  const clearTags = useSession((s) => s.clearTags);
-  const [recentPage, setRecentPage] = useState(0);
+  const proposals = useProposals();
+  const openProposal = useSession((s) => s.openProposal);
 
-  if (!home) return <SinglePaneLayout>{null}</SinglePaneLayout>;
-
-  const stats = home.stats;
-  const recent = paginate(home.notes, RECENT_PER_PAGE, recentPage);
+  const styles = homeRefreshVariants();
+  const proposalCount = proposals.isError ? undefined : proposals.data?.tickets.length;
 
   const backupValue = !connect
     ? "…"
@@ -38,8 +48,9 @@ export function HomePage({ home }: { home: HomeState | undefined }) {
         : t("tile.backupOk");
 
   const warnings: Degradation[] = [
-    ...home.degraded,
-    ...(connect?.sync_error && !home.degraded.some((item) => item.code === "remote_sync")
+    ...(home?.degraded ?? []),
+    ...(proposals.data?.degraded ?? []),
+    ...(connect?.sync_error && !home?.degraded.some((item) => item.code === "remote_sync")
       ? [{ code: "remote_sync" as const, detail: connect.sync_error }]
       : []),
   ];
@@ -47,58 +58,66 @@ export function HomePage({ home }: { home: HomeState | undefined }) {
   return (
     <SinglePaneLayout>
       <div className="px-6 py-5">
+        <div className={styles.row()}>
+          <span className={styles.timestamp()}>
+            {refresh.isFetching
+              ? t("refresh.loading")
+              : refresh.updatedAt > 0
+                ? t("refresh.lastRead", {
+                    time: new Date(refresh.updatedAt).toLocaleTimeString(i18n.resolvedLanguage),
+                  })
+                : t("refresh.notRead")}
+          </span>
+          <Button variant="quiet" size="sm" disabled={refresh.isFetching} onClick={refresh.retry}>
+            <RefreshCw className={styles.icon()} />
+            {t("refresh.retry")}
+          </Button>
+        </div>
+        {refresh.isError && (
+          <p role="alert" className={styles.error()}>
+            {t(home ? "refresh.stale" : "refresh.unavailable")}
+          </p>
+        )}
+        {refresh.detectionFailed && (
+          <p role="status" className={styles.error()}>
+            {t("refresh.detectionFailed")}
+          </p>
+        )}
         <DegradedBanner items={warnings} variant="card" />
 
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2.5">
-          <StatTile
-            value={stats.total - stats.deprecated}
-            label={t("tile.notes")}
-            icon={NotebookText}
-            onClick={() => {
-              clearTags();
-              go("notes");
-            }}
-          />
-          <StatTile
-            value={home.care.length}
-            label={t("tile.care")}
-            icon={Wrench}
-            amber={home.care.length > 0}
-          />
-          <StatTile value={stats.links} label={t("tile.links")} icon={Link} />
-          <StatTile
-            value={
-              stats.embed_enabled ? `${stats.embedded}/${stats.total}` : t("tile.smartSearchOff")
-            }
-            label={t("tile.smartSearch")}
-            icon={Sparkles}
-          />
-          <StatTile
-            value={backupValue}
-            label={t("tile.backup")}
-            icon={Cloud}
-            amber={Boolean(connect?.sync_error)}
-          />
-        </div>
+        {home && (
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2.5">
+            <StatTile
+              value={home.note_count}
+              label={t("tile.notes")}
+              icon={NotebookText}
+              onClick={onOpenAllNotes}
+            />
+            <StatTile
+              value={proposals.isError ? "—" : (proposalCount ?? "…")}
+              label={t("tile.proposals")}
+              icon={ClipboardCheck}
+              amber={(proposalCount ?? 0) > 0}
+              onClick={() => openProposal(null)}
+            />
+            <StatTile value={home.stats.links} label={t("tile.links")} icon={Link} />
+            <StatTile
+              value={backupValue}
+              label={t("tile.backup")}
+              icon={Cloud}
+              amber={Boolean(connect?.sync_error)}
+            />
+          </div>
+        )}
+        {proposals.isError && (
+          <p role="alert" className="text-danger mt-3 text-sm">
+            {t("tile.proposalsUnavailable")}
+          </p>
+        )}
 
-        <h2 className="text-muted mt-7 mb-3 text-xl font-medium tracking-[0.04em]">
-          {t("recent.head")}
-        </h2>
-        <div className="flex w-full flex-col gap-3">
-          {recent.items.map((hit) => (
-            <RecentNoteRow key={hit.id} hit={hit} onOpen={() => openNote(hit.id)} />
-          ))}
-          <Pager
-            page={recent.page}
-            pageCount={recent.pageCount}
-            from={recent.from}
-            to={recent.to}
-            total={recent.total}
-            onChange={setRecentPage}
-            labels={{ previous: "‹", next: "›" }}
-            align="start"
-          />
-        </div>
+        <NoteCountTrendPanel />
+        <ObservationTrendPanel />
+        <ObservationHealthPanel />
       </div>
     </SinglePaneLayout>
   );

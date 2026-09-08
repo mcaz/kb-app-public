@@ -13,6 +13,7 @@ import type {
   MaintenanceReport,
   NoteCategories,
   NoteCategory,
+  NoteBrowsePage_Serialize,
   NoteListPage,
   NoteSummary,
   NoteView,
@@ -31,6 +32,7 @@ import type {
  */
 export type Hit = Hit_Serialize;
 export type HomeState = HomeState_Serialize;
+export type NoteBrowsePage = NoteBrowsePage_Serialize;
 export type SearchOutcome = SearchOutcome_Serialize;
 export type Favorite = Favorite_Serialize;
 
@@ -57,6 +59,7 @@ export type {
 };
 export type {
   Added,
+  DistillationModelCatalog,
   Availability,
   FileRow,
   LegacyFile,
@@ -65,6 +68,34 @@ export type {
   Purged,
 } from "@/lib/bindings";
 export type { CareProposal, GraphNode, Stats } from "@/lib/bindings";
+export type { ObservationHealth, ObservationSurfaceHealth, SurfaceSummary } from "@/lib/bindings";
+export type { ObservationTrend, ObservationTrendDay, ObservationTrendFilter } from "@/lib/bindings";
+export type { NoteCountTrend, NoteCountTrendDay, NoteCountTrendStatus } from "@/lib/bindings";
+export type {
+  TicketView,
+  TicketStatus,
+  DecisionInput,
+  DecisionOutcome,
+  ProposalRevision,
+  ProposalReview,
+  ProposalDecision,
+} from "@/lib/bindings";
+export type { ProposalListData, ProposalDetailData, ProposalMutationData } from "@/lib/bindings";
+export type {
+  DistillationAiSettings,
+  DistillationAiProvider,
+  DistillationAiProviderStatus,
+  DistillationQueueView,
+  DistillationIssueView,
+  DistillationIssueError,
+  ImmediateDistillationScope,
+  ImmediateDistillationResult,
+  RuntimeDiagnosticsReport,
+  RuntimeRecoveryPlan,
+  RuntimeRecoveryRequest,
+  RuntimeRecoveryReceipt,
+  AppBootMode,
+} from "@/lib/bindings";
 
 /** 一覧の絞り込み条件(お気に入りとして保存できる単位)。 */
 export type Period = "all" | "7" | "30" | "90";

@@ -1,5 +1,5 @@
 //! OKF v0.2 準拠の frontmatter(docs/okf-conformance.md の詳細設計)。
-//! app 固有拡張は `origin` 1キーのみ。未知キーは `extra` に保持し、
+//! app 固有拡張はownership・authority・判断記録を保持する。未知キーは `extra` に保持し、
 //! round-trip で落とさない(OKF §4.1: consumers SHOULD preserve unknown keys)。
 
 use std::collections::BTreeMap;
@@ -58,6 +58,9 @@ pub struct Frontmatter {
     /// pathでなくnote_uidを端点にするtyped relation。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<NoteRelation>,
+    /// 出典付きの判断・行動記録。未設定の旧ノートへ本文から推測して補わない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judgment: Option<crate::judgment::Judgment>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_yaml::Value>,
 }
@@ -79,6 +82,7 @@ impl Frontmatter {
             note_uid: None,
             authority: None,
             relations: Vec::new(),
+            judgment: None,
             extra: BTreeMap::new(),
         }
     }
@@ -144,6 +148,12 @@ impl Note {
             self.front.authority.as_ref(),
             &self.front.relations,
         )?;
+        crate::judgment::validate(
+            self.front.judgment.as_ref(),
+            self.front.note_uid.as_ref(),
+            self.front.authority.as_ref(),
+            &self.front.relations,
+        )?;
         let yaml = serde_yaml::to_string(&self.front).context("frontmatter serialize")?;
         let body = self.body.trim_start_matches('\n').trim_end();
         Ok(format!("---\n{yaml}---\n\n{body}\n"))
@@ -169,6 +179,12 @@ impl Note {
             bail!("type が空(OKF 必須キー)");
         }
         crate::authority::validate_envelope(
+            front.note_uid.as_ref(),
+            front.authority.as_ref(),
+            &front.relations,
+        )?;
+        crate::judgment::validate(
+            front.judgment.as_ref(),
             front.note_uid.as_ref(),
             front.authority.as_ref(),
             &front.relations,
@@ -215,6 +231,24 @@ mod tests {
         assert!(out.contains("custom_key"));
         let again = Note::parse(&out).unwrap();
         assert_eq!(again.body.trim(), "body text");
+        assert!(again.front.judgment.is_none());
+        assert!(!out.contains("judgment:"));
+    }
+
+    #[test]
+    fn judgment_is_typed_and_cannot_hide_in_unknown_frontmatter() {
+        let src = "---\ntype: Note\ntitle: legacy\njudgment: {kind: decision, basis: user_decision}\n---\n\nbody\n";
+        assert!(Note::parse(src).is_err());
+        let note =
+            Note::parse("---\ntype: Note\ntitle: legacy\ncustom: keep\n---\n\nbody\n").unwrap();
+        assert!(note.front.judgment.is_none());
+        assert_eq!(
+            note.front
+                .extra
+                .get("custom")
+                .and_then(serde_yaml::Value::as_str),
+            Some("keep")
+        );
     }
 
     #[test]

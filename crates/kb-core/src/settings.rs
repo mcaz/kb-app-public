@@ -20,6 +20,7 @@ pub struct Settings {
     pub ai_kb_enabled: bool,
     pub claude_kb_enabled: bool,
     pub gpt_kb_enabled: bool,
+    pub harvest_status_line: bool,
     /// ログイン自動起動の既定を適用済みか。登録の正本はOS側のログイン項目で、
     /// ここは「一度でも既定を書いたか」だけを覚える(`autostart::initialize`)。
     pub launch_at_login_initialized: bool,
@@ -32,6 +33,7 @@ impl Default for Settings {
             ai_kb_enabled: true,
             claude_kb_enabled: true,
             gpt_kb_enabled: true,
+            harvest_status_line: true,
             // 既存利用者にも初回起動で1回だけ既定を適用する。
             launch_at_login_initialized: false,
         }
@@ -68,6 +70,10 @@ pub fn set_claude_kb_enabled(enabled: bool) -> Result<Settings> {
 
 pub fn set_gpt_kb_enabled(enabled: bool) -> Result<Settings> {
     update(|settings| settings.gpt_kb_enabled = enabled)
+}
+
+pub fn set_harvest_status_line(enabled: bool) -> Result<Settings> {
+    update(|settings| settings.harvest_status_line = enabled)
 }
 
 pub fn mark_launch_at_login_initialized() -> Result<Settings> {
@@ -145,6 +151,7 @@ mod tests {
                 ai_kb_enabled: false,
                 claude_kb_enabled: false,
                 gpt_kb_enabled: true,
+                harvest_status_line: true,
                 ..Settings::default()
             },
         )
@@ -156,6 +163,7 @@ mod tests {
                 ai_kb_enabled: false,
                 claude_kb_enabled: false,
                 gpt_kb_enabled: true,
+                harvest_status_line: true,
                 ..Settings::default()
             }
         );
@@ -187,6 +195,7 @@ mod tests {
                 ai_kb_enabled: false,
                 claude_kb_enabled: true,
                 gpt_kb_enabled: true,
+                harvest_status_line: true,
                 ..Settings::default()
             }
         );
@@ -214,6 +223,7 @@ mod tests {
             ai_kb_enabled: true,
             claude_kb_enabled: false,
             gpt_kb_enabled: true,
+            harvest_status_line: true,
             ..Settings::default()
         };
 

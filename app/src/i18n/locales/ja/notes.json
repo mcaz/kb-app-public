@@ -1,5 +1,7 @@
 {
   "search": {
+    "allNotes": "すべてのノート",
+    "loadedCount": "{{total}}件中 {{loaded}}件を表示",
     "placeholder": "ノートを検索",
     "open": "検索を開く",
     "dialogTitle": "ノートを検索",
@@ -80,7 +82,15 @@
     "opened": "Claude を開きました",
     "missing": "そのノートはまだありません",
     "careConfirm": "確認した",
-    "careDismissed": "了解、そのままにします"
+    "careDismissed": "了解、そのままにします",
+    "metadata": "メタデータ",
+    "titleLabel": "タイトル",
+    "descriptionLabel": "概要",
+    "tagsLabel": "タグ",
+    "createdLabel": "作成日時",
+    "updatedLabel": "更新日時",
+    "showSource": "ソースを表示",
+    "showPreview": "プレビューを表示"
   },
   "file": {
     "label": "ファイル:",

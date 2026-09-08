@@ -14,6 +14,7 @@ import {
   useSetAiKbEnabled,
   useSetClaudeKbEnabled,
   useSetGptKbEnabled,
+  useSetHarvestStatusLine,
   useSettings,
 } from "@/lib/queries";
 
@@ -84,6 +85,7 @@ export function KnowledgeBaseSettingsPage() {
   const setAiKbEnabled = useSetAiKbEnabled();
   const setClaudeKbEnabled = useSetClaudeKbEnabled();
   const setGptKbEnabled = useSetGptKbEnabled();
+  const setHarvestStatusLine = useSetHarvestStatusLine();
   const errorText = useErrorText();
   const enabled = settings?.ai_kb_enabled ?? false;
   const claudeEnabled = settings?.claude_kb_enabled ?? false;
@@ -95,7 +97,9 @@ export function KnowledgeBaseSettingsPage() {
   const guardDevelopment = guard?.codex === "development";
   const guardReady = guard?.ready ?? false;
   const guardActionPending = installGuard.isPending || enableDevelopmentMode.isPending;
-  const switchesDisabled = isPending || isGuardPending || isSaving || !guardReady;
+  // 接続の再設定が必要でも、稼働中の旧MCPをOFFにする操作は残す。
+  const switchesDisabled = isPending || isSaving;
+  const enableDisabled = isGuardPending || guardActionPending || !guardReady;
 
   return (
     <SinglePaneLayout>
@@ -223,7 +227,7 @@ export function KnowledgeBaseSettingsPage() {
               enabled ? t("settings.aiKbOnDescription") : t("settings.aiKbOffDescription")
             }
             checked={enabled}
-            disabled={switchesDisabled}
+            disabled={switchesDisabled || (!enabled && enableDisabled)}
             onCheckedChange={(checked) => {
               setAiKbEnabled.mutate(checked, {
                 onSuccess: () => toast(t(checked ? "settings.aiKbOnDone" : "settings.aiKbOffDone")),
@@ -247,7 +251,7 @@ export function KnowledgeBaseSettingsPage() {
                   : t("settings.claudeKbOffDescription")
             }
             checked={claudeEnabled}
-            disabled={switchesDisabled || !enabled}
+            disabled={switchesDisabled || (!claudeEnabled && (enableDisabled || !enabled))}
             onCheckedChange={(checked) => {
               setClaudeKbEnabled.mutate(checked, {
                 onSuccess: () =>
@@ -267,11 +271,26 @@ export function KnowledgeBaseSettingsPage() {
                   : t("settings.gptKbOffDescription")
             }
             checked={gptEnabled}
-            disabled={switchesDisabled || !enabled}
+            disabled={switchesDisabled || (!gptEnabled && (enableDisabled || !enabled))}
             onCheckedChange={(checked) => {
               setGptKbEnabled.mutate(checked, {
                 onSuccess: () =>
                   toast(t(checked ? "settings.gptKbOnDone" : "settings.gptKbOffDone")),
+                onError: (mutationError) => toast(errorText(mutationError)),
+              });
+            }}
+          />
+        </div>
+
+        <div className="border-line bg-panel mt-4 overflow-hidden rounded-xl border">
+          <SettingSwitchRow
+            id="setting-harvest-status"
+            label={t("settings.harvestStatusLine")}
+            description={t("settings.harvestStatusLineDescription")}
+            checked={settings?.harvest_status_line ?? false}
+            disabled={isPending || setHarvestStatusLine.isPending}
+            onCheckedChange={(checked) => {
+              setHarvestStatusLine.mutate(checked, {
                 onError: (mutationError) => toast(errorText(mutationError)),
               });
             }}

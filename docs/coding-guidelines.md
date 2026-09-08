@@ -58,8 +58,8 @@
 ## 2. 言語
 
 - **コメント・ドキュメント・コミットメッセージ・`docs/` は日本語。**
-  識別子・ファイル名・タグ・git のブランチ名は英語。`AGENTS.md` だけは英語
-  (AI クライアントが読む面のため)。
+  `AGENTS.md` も日本語とする。
+  識別子・ファイル名・タグ・git のブランチ名は英語。
 - **エラー文言は `code` / `kind` で訳し分ける。** `unexpected.message` もログ専用で、
   画面は locale の一般文言を表示する(§5)。
 
@@ -108,8 +108,10 @@ lint が落とすのは import の向きだけで、**責務の置き場所は�
   (`tags` / `search` / `vault`)、関数は動詞(`validate_shape` / `glossary`)。
 - **feature は用途で切り、下流に持ち込まない。** `specta` は GUI 向けの型生成専用で
   CLI には入れない(`crates/kb-core/Cargo.toml` のコメント参照)。
-- **長い処理は同期コマンド+イベント。** async コマンドは async ランタイムを止める
-  (ADR-0002 決定10。`embed_enable` が実例)。
+- **DBのロック待ちや長い同期処理はUIスレッドから逃がす。** 非async関数には
+  `#[tauri::command(async)]` を付け、Tauriのthreadpoolで実行する。async関数の中で
+  ブロッキング処理を呼ぶ場合は `tauri::async_runtime::spawn_blocking` を使う。
+  属性なしの同期コマンドは呼出しスレッドで実行され、進捗イベントもUIへ届かなくなる。
 
 ## 6. TypeScript / React
 

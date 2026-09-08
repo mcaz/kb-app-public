@@ -1,10 +1,82 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, type Favorite } from "@/lib/api";
+import { useLocalDayBoundaries } from "@/hooks/useLocalDayBoundaries";
+import {
+  api,
+  type Favorite,
+  type Period,
+  type SortKey,
+  type DecisionInput,
+  type ObservationTrend,
+  type ObservationTrendFilter,
+  type DistillationAiProvider,
+} from "@/lib/api";
 
-import { queryKeys } from "./keys";
+import { currentNoteMutationScope, queryKeys } from "./keys";
+import { liveQueryOptions } from "./refreshPolicy";
 
 export { queryKeys };
+
+/** 起動モードはプロセス固定。復旧画面から通常queryを開始しない。 */
+export const useAppBootMode = () =>
+  useQuery({
+    queryKey: queryKeys.appBootMode,
+    queryFn: api.appBootMode,
+    staleTime: Infinity,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+  });
+
+export const useRecoveryPlan = () => useMutation({ mutationFn: api.recoveryPlan, retry: false });
+
+export const useRecoveryApply = () => useMutation({ mutationFn: api.recoveryApply, retry: false });
+
+export const useRecoveryExit = () => useMutation({ mutationFn: api.recoveryExit, retry: false });
+
+export const useProposals = () =>
+  useQuery({
+    queryKey: queryKeys.proposalList,
+    queryFn: api.proposalList,
+    ...liveQueryOptions,
+  });
+
+export const useProposal = (note: string | null) =>
+  useQuery({
+    queryKey: queryKeys.proposal(note ?? ""),
+    queryFn: () => api.proposalGet(note ?? ""),
+    enabled: note !== null,
+    ...liveQueryOptions,
+  });
+
+export function useDecideProposal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      note,
+      expectedEtag,
+      input,
+    }: {
+      note: string;
+      expectedEtag: string;
+      input: DecisionInput;
+    }) => api.proposalDecide(note, expectedEtag, input),
+    onSuccess: (result) => {
+      qc.setQueryData(queryKeys.proposal(result.ticket.note_id), {
+        ticket: result.ticket,
+        degraded: result.degraded,
+      });
+    },
+    onSettled: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.proposals }),
+        qc.invalidateQueries({ queryKey: queryKeys.home }),
+        qc.invalidateQueries({ queryKey: queryKeys.notes }),
+      ]);
+    },
+  });
+}
 
 /**
  * サーバ由来の状態はすべてここ経由。旧実装が state に手書きしていたキャッシュ
@@ -14,7 +86,72 @@ export { queryKeys };
 export const useSetupState = () => useQuery({ queryKey: queryKeys.setup, queryFn: api.setupState });
 
 export const useSettings = () =>
-  useQuery({ queryKey: queryKeys.settings, queryFn: api.settingsGet });
+  useQuery({ queryKey: queryKeys.settings, queryFn: api.settingsGet, ...liveQueryOptions });
+
+export const useDistillationSettings = () =>
+  useQuery({
+    queryKey: queryKeys.distillationSettings,
+    queryFn: api.distillationSettingsGet,
+    ...liveQueryOptions,
+  });
+
+export const useDistillationProviders = () =>
+  useQuery({
+    queryKey: queryKeys.distillationProviders,
+    queryFn: api.distillationProviders,
+    ...liveQueryOptions,
+  });
+
+export const useDistillationModels = (provider: DistillationAiProvider | null) =>
+  useQuery({
+    queryKey: queryKeys.distillationModels(provider),
+    queryFn: () => {
+      if (provider === null) throw new Error("Model catalog requires a provider");
+      return api.distillationModels(provider);
+    },
+    enabled: provider !== null,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+
+export const useDistillationQueue = () =>
+  useQuery({
+    queryKey: queryKeys.distillationQueue,
+    queryFn: api.distillationQueueStatus,
+    ...liveQueryOptions,
+  });
+
+export function useSetDistillationSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.distillationSettingsSet,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.distillationSettings, settings);
+      void qc.invalidateQueries({ queryKey: queryKeys.distillationQueue });
+    },
+  });
+}
+
+export function useRetryDistillation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.distillationRetryFailed,
+    onSuccess: (status) => {
+      qc.setQueryData(queryKeys.distillationQueue, status);
+    },
+  });
+}
+
+export function useRequestDistillationNow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.distillationRequestNow,
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: queryKeys.distillationQueue });
+    },
+  });
+}
 
 export const useAiGuardStatus = () =>
   useQuery({ queryKey: queryKeys.aiGuard, queryFn: api.settingsAiGuardStatus });
@@ -59,6 +196,8 @@ export function useSetAiKbEnabled() {
     mutationFn: api.settingsSetAiKbEnabled,
     onSuccess: (settings) => {
       qc.setQueryData(queryKeys.settings, settings);
+      void qc.invalidateQueries({ queryKey: queryKeys.observationHealth });
+      void qc.invalidateQueries({ queryKey: queryKeys.distillationQueue });
     },
   });
 }
@@ -67,6 +206,18 @@ export function useSetClaudeKbEnabled() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.settingsSetClaudeKbEnabled,
+    onSuccess: (settings) => {
+      qc.setQueryData(queryKeys.settings, settings);
+      void qc.invalidateQueries({ queryKey: queryKeys.observationHealth });
+      void qc.invalidateQueries({ queryKey: queryKeys.distillationQueue });
+    },
+  });
+}
+
+export function useSetHarvestStatusLine() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.settingsSetHarvestStatusLine,
     onSuccess: (settings) => {
       qc.setQueryData(queryKeys.settings, settings);
     },
@@ -79,12 +230,67 @@ export function useSetGptKbEnabled() {
     mutationFn: api.settingsSetGptKbEnabled,
     onSuccess: (settings) => {
       qc.setQueryData(queryKeys.settings, settings);
+      void qc.invalidateQueries({ queryKey: queryKeys.observationHealth });
+      void qc.invalidateQueries({ queryKey: queryKeys.distillationQueue });
     },
   });
 }
 
 export const useHomeState = (enabled = true) =>
-  useQuery({ queryKey: queryKeys.home, queryFn: api.homeState, enabled });
+  useQuery({ queryKey: queryKeys.home, queryFn: api.homeState, enabled, ...liveQueryOptions });
+
+/** 変更トークンだけを短周期で読み、本文や一覧は変更があったときに再取得する。 */
+export const useNoteRevision = (enabled: boolean) =>
+  useQuery({
+    queryKey: queryKeys.noteRevision,
+    queryFn: api.noteRevision,
+    enabled,
+    staleTime: 0,
+    retry: false,
+    refetchInterval: 1_000,
+    // nativeのfocusでenabledを切る。Webviewのvisibilityが遅れても表示中は止めない。
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: false,
+    networkMode: "always",
+  });
+
+/** 台帳だけを再取得する。Home以外では購読せず、Vault保守や一覧更新へ波及させない。 */
+export const useObservationHealth = () =>
+  useQuery({
+    queryKey: queryKeys.observationHealth,
+    queryFn: api.homeObservationHealth,
+    ...liveQueryOptions,
+  });
+
+/** 日別集計は端末の暦日を使う。既存の直近14日合計の期間定義は変えない。 */
+export function useObservationTrend(filter: ObservationTrendFilter) {
+  const dayBoundariesMs = useLocalDayBoundaries();
+  const { data: settings } = useSettings();
+  const disabled =
+    settings?.ai_kb_enabled === false ||
+    (settings?.claude_kb_enabled === false && settings?.gpt_kb_enabled === false);
+  return useQuery({
+    // OFF後に非表示だった接続元へ戻っても、ON時の成功キャッシュを再表示しない。
+    queryKey: queryKeys.observationTrend(dayBoundariesMs, filter, disabled),
+    queryFn: (): Promise<ObservationTrend> =>
+      disabled
+        ? Promise.resolve({ status: "disabled", days: [] })
+        : api.homeObservationTrend(dayBoundariesMs, filter),
+    ...liveQueryOptions,
+  });
+}
+
+/** 観測日に固定された履歴を読むため、端末の今日を暦日の文字列で渡す。 */
+export function useNoteCountTrend() {
+  const boundaries = useLocalDayBoundaries();
+  const today = new Date(boundaries[13]!);
+  const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  return useQuery({
+    queryKey: queryKeys.noteCountTrend(localToday),
+    queryFn: () => api.homeNoteCountTrend(localToday),
+    ...liveQueryOptions,
+  });
+}
 
 /** Git pullやMarkdown export等はこのqueryだけがバックグラウンドで起動する。 */
 export const useMaintenanceRefresh = (enabled = true) =>
@@ -93,19 +299,29 @@ export const useMaintenanceRefresh = (enabled = true) =>
     queryFn: api.maintenanceRefresh,
     enabled,
     staleTime: 60_000,
-    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: false,
+    networkMode: "always",
   });
 
 export const useTagOverview = () =>
-  useQuery({ queryKey: queryKeys.tagOverview, queryFn: api.tagOverview });
+  useQuery({ queryKey: queryKeys.tagOverview, queryFn: api.tagOverview, ...liveQueryOptions });
 
 export const useFavorites = () =>
   useQuery({ queryKey: queryKeys.favorites, queryFn: api.favoritesList });
 
-export const useGraphData = () => useQuery({ queryKey: queryKeys.graph, queryFn: api.graphData });
+export const useGraphData = () =>
+  useQuery({ queryKey: queryKeys.graph, queryFn: api.graphData, ...liveQueryOptions });
 
 export const useConnectState = () =>
   useQuery({ queryKey: queryKeys.connect, queryFn: api.connectState });
+
+/** 復旧前の証拠なので、自動実行・キャッシュの無効化・再試行は行わない。 */
+export const useInspectRuntimeStorage = () =>
+  useMutation({ mutationFn: api.inspectRuntimeStorage, retry: false });
+
+export const usePlanRuntimeRecovery = () =>
+  useMutation({ mutationFn: api.planRuntimeRecovery, retry: false });
 
 export const useGitHubAuthState = (enabled = true) =>
   useQuery({
@@ -122,10 +338,16 @@ export const useNote = (id: string | null) =>
     queryKey: queryKeys.note(id ?? ""),
     queryFn: () => api.noteGet(id!),
     enabled: id !== null,
+    ...liveQueryOptions,
   });
 
 export const useNoteCategories = (enabled = true) =>
-  useQuery({ queryKey: queryKeys.noteCategories, queryFn: api.noteCategories, enabled });
+  useQuery({
+    queryKey: queryKeys.noteCategories,
+    queryFn: api.noteCategories,
+    enabled,
+    ...liveQueryOptions,
+  });
 
 /** カテゴリを選んだ時だけ100件ずつ取得し、全ノートを初期表示へ載せない。 */
 export const useCategoryNotes = (category: string | null) =>
@@ -135,15 +357,28 @@ export const useCategoryNotes = (category: string | null) =>
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: category !== null,
+    ...liveQueryOptions,
   });
 
-/** 検索は空文字なら投げない(一覧はホームの recent を使う)。 */
-export const useNoteSearch = (query: string) =>
+/** 全件一覧の条件はページ分割前にDBへ渡し、未取得ページの一致も見落とさない。 */
+export const useNoteBrowse = (tags: string[], period: Period, sort: SortKey, enabled = true) =>
+  useInfiniteQuery({
+    queryKey: queryKeys.noteBrowse(tags, period, sort),
+    queryFn: ({ pageParam }) => api.noteBrowse(tags, period, sort, pageParam, 100),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled,
+    ...liveQueryOptions,
+  });
+
+/** 全文検索は空文字なら投げない。 */
+export const useNoteSearch = (query: string, enabled = true) =>
   useQuery({
     queryKey: queryKeys.search(query),
     queryFn: () => api.noteSearch(query),
-    enabled: query.trim().length > 0,
+    enabled: enabled && query.trim().length > 0,
     placeholderData: (previous) => previous,
+    ...liveQueryOptions,
   });
 
 export function useOnboard() {
@@ -205,12 +440,14 @@ export const useNoteFiles = (id: string | null) =>
     queryKey: queryKeys.noteFiles(id ?? ""),
     queryFn: () => api.noteFiles(id!),
     enabled: id !== null,
+    ...liveQueryOptions,
   });
 
 export const useFiles = () =>
   useQuery({
     queryKey: queryKeys.files,
     queryFn: api.filesList,
+    ...liveQueryOptions,
   });
 
 export const useFilePreview = (id: string | null) =>
@@ -385,4 +622,8 @@ export function useGitHubSignOut() {
 export const useGitHubOpenDevicePage = () => useMutation({ mutationFn: api.githubOpenDevicePage });
 
 export const useLaunchAi = () =>
-  useMutation({ mutationFn: (id: string | null) => api.launchAi(id) });
+  useMutation({
+    mutationFn: (id: string | null) => api.launchAi(id),
+    scope: currentNoteMutationScope,
+    networkMode: "always",
+  });

@@ -64,7 +64,9 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let handle = app.clone();
         window.on_window_event(move |event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
+            if let WindowEvent::CloseRequested { api, .. } = event
+                && handle.tray_by_id(TRAY_ID).is_some()
+            {
                 // 破棄すると次に開くとき起動待ちが戻る。窓は隠すだけにする。
                 api.prevent_close();
                 hide(&handle);
@@ -88,6 +90,19 @@ pub fn show<R: Runtime>(app: &AppHandle<R>) {
 fn hide<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.hide();
+    }
+}
+
+/// 最後のタブで閉じる操作を受けたときも、赤い閉じるボタンと同じ常駐規則に従う。
+pub fn hide_or_close<R: Runtime>(app: &AppHandle<R>) -> AppResult<()> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW)
+        .ok_or_else(|| AppError::unexpected("メインウィンドウが見つからない"))?;
+    if app.tray_by_id(TRAY_ID).is_some() {
+        window.hide().map_err(AppError::unexpected)
+    } else {
+        // tray不成立時は復帰手段がない。赤い閉じるボタン同様に窓を閉じる。
+        window.close().map_err(AppError::unexpected)
     }
 }
 

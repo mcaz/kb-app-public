@@ -76,6 +76,13 @@ pub enum Degradation {
     ContextRetrieval {
         detail: String,
     },
+    // 観測台帳の失敗は検索やノート書込の成功を取り消さない。
+    SessionLedger {
+        detail: String,
+    },
+    NoteCountHistory {
+        detail: String,
+    },
     SimilarNotes {
         detail: String,
     },
@@ -122,6 +129,8 @@ impl Degradation {
             Self::RescueSearch { .. } => "rescue_search",
             Self::RelatedNotes { .. } => "related_notes",
             Self::ContextRetrieval { .. } => "context_retrieval",
+            Self::SessionLedger { .. } => "session_ledger",
+            Self::NoteCountHistory { .. } => "note_count_history",
             Self::SimilarNotes { .. } => "similar_notes",
             Self::CurrentNoteContext { .. } => "current_note_context",
             Self::CareDetection { .. } => "care_detection",
@@ -184,6 +193,12 @@ impl std::fmt::Display for Degradation {
             Self::ContextRetrieval { detail } => {
                 write!(f, "関連本文の連鎖取得に失敗: {detail}")
             }
+            Self::SessionLedger { detail } => {
+                write!(f, "セッションの観測を記録できない: {detail}")
+            }
+            Self::NoteCountHistory { detail } => {
+                write!(f, "ノート数の履歴を記録できない: {detail}")
+            }
             Self::SimilarNotes { detail } => write!(f, "近いノートを取得できない: {detail}"),
             Self::CurrentNoteContext { detail } => {
                 write!(f, "現在のノートを記録できない: {detail}")
@@ -241,6 +256,8 @@ mod tests {
             Degradation::RescueSearch { detail: "x".into() },
             Degradation::RelatedNotes { detail: "x".into() },
             Degradation::ContextRetrieval { detail: "x".into() },
+            Degradation::SessionLedger { detail: "x".into() },
+            Degradation::NoteCountHistory { detail: "x".into() },
             Degradation::SimilarNotes { detail: "x".into() },
             Degradation::CurrentNoteContext { detail: "x".into() },
             Degradation::CareDetection { detail: "x".into() },

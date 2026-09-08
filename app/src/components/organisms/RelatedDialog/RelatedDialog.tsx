@@ -52,8 +52,8 @@ export function RelatedDialog({
   onOpenGraph,
 }: RelatedDialogProps) {
   const { t } = useTranslation(["notes", "common"]);
-  const { data: note } = useNote(noteId);
-  const { data: home } = useHomeState();
+  const { data: note } = useNote(open ? noteId : null);
+  const { data: home } = useHomeState(open);
   const compact = useMediaQuery("(max-width: 759px)");
   const [compactPane, setCompactPane] = useState<SearchPane>("results");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);

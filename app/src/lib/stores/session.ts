@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { Favorite, Period, SortKey } from "@/lib/api";
 
-export type View = "home" | "notes" | "files" | "graph";
+export type View = "home" | "notes" | "files" | "graph" | "proposals";
 export type BrowsePane = "list" | "note";
 
 interface NavigationState {
@@ -45,10 +45,13 @@ interface SessionStore extends WorkspaceContext {
   /** ナビの「ノート」= 検索条件と選択を解除した本文画面へ戻す。 */
   resetNotes: () => void;
   openNote: (id: string) => void;
+  openProposal: (id: string | null) => void;
   initializeCategory: (path: string) => void;
   selectCategory: (path: string) => void;
   openListedNote: (id: string) => void;
   showCategoryList: () => void;
+  resetSearch: () => void;
+  setSearchTags: (tags: string[]) => void;
   setQuery: (query: string) => void;
   addTag: (tag: string) => void;
   removeTag: (tag: string) => void;
@@ -185,6 +188,8 @@ export const useSession = create<SessionStore>()((set) => ({
       return tab && tab.id !== state.activeTabId ? activateTab(tab) : {};
     }),
   go: (view) => set((state) => updateActiveTab(state, navigate(state, { view }))),
+  openProposal: (id) =>
+    set((state) => updateActiveTab(state, navigate(state, { view: "proposals", selectedId: id }))),
   resetNotes: () =>
     set((state) =>
       updateActiveTab(state, {
@@ -234,6 +239,18 @@ export const useSession = create<SessionStore>()((set) => ({
     ),
   showCategoryList: () =>
     set((state) => updateActiveTab(state, navigate(state, { browsePane: "list", view: "notes" }))),
+  resetSearch: () =>
+    set((state) =>
+      updateActiveTab(state, {
+        query: "",
+        selectedTags: [],
+        period: "all",
+        sort: "updated",
+        activeFav: null,
+      }),
+    ),
+  setSearchTags: (tags) =>
+    set((state) => updateActiveTab(state, { selectedTags: [...new Set(tags)] })),
   setQuery: (query) => set((state) => updateActiveTab(state, { query })),
   addTag: (tag) =>
     set((state) =>
@@ -260,7 +277,6 @@ export const useSession = create<SessionStore>()((set) => ({
   applyFavorite: (fav) =>
     set((state) =>
       updateActiveTab(state, {
-        ...navigate(state, { view: "notes" }),
         selectedTags: [...fav.tags],
         query: fav.query ?? "",
         period: (fav.period as Period | null) ?? "all",

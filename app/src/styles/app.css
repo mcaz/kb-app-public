@@ -236,3 +236,46 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ノート詳細は本文を広く使い、検索・関連プレビューの既存の組版は保つ。 */
+@layer components {
+  .note-reading-body .markdown {
+    max-width: none;
+    font-size: 15px;
+    line-height: 1.9;
+    overflow-wrap: anywhere;
+  }
+  .note-reading-body .markdown h1,
+  .note-reading-body .markdown h2,
+  .note-reading-body .markdown h3 {
+    font-weight: 600;
+    line-height: 1.5;
+    margin: 1.8em 0 0.8em;
+  }
+  .note-reading-body .markdown h1 {
+    font-size: 26px;
+  }
+  .note-reading-body .markdown h2 {
+    font-size: 22px;
+  }
+  .note-reading-body .markdown h3 {
+    font-size: 18px;
+  }
+  .note-reading-body .markdown > :first-child {
+    margin-top: 0;
+  }
+  .note-reading-body .markdown p,
+  .note-reading-body .markdown ul,
+  .note-reading-body .markdown ol,
+  .note-reading-body .markdown blockquote {
+    margin: 1em 0;
+  }
+  .note-reading-body .markdown pre {
+    line-height: 1.7;
+  }
+  .note-reading-body .markdown table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}

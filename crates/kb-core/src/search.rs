@@ -9,6 +9,11 @@ use crate::degradation::Degradation;
 use crate::retrieval_profile::SearchPolicy;
 use crate::tokenize::match_expr;
 
+mod browse;
+pub use browse::{
+    NoteBrowsePage, NoteBrowsePeriod, NoteBrowseSort, browsable_note_count, browse_notes,
+};
+
 const DIVERSITY_MAX_NORMALIZED_CHARS: usize = 2_048;
 const DIVERSITY_MIN_SHINGLES: usize = 8;
 const DIVERSITY_SIMILARITY_PERCENT: usize = 85;
@@ -101,13 +106,45 @@ pub fn search_mode(conn: &Connection, query: &str, limit: usize, any: bool) -> S
 /// 配信 profile(retrieval_profile.rs)の `SearchPolicy` で経路と予算を決める本体。
 /// policy で経路を切るのは劣化ではないので degraded には載せない。
 pub fn search_with(conn: &Connection, query: &str, policy: &SearchPolicy) -> SearchOutcome {
+    search_excluding(conn, query, policy, None)
+}
+
+/// 保存した本人をcluster代表にすると、既存の重複候補まで隠れるため多様化の前に除く。
+pub(crate) fn search_for_note(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+    note: &str,
+) -> SearchOutcome {
+    let mut outcome = search_excluding(
+        conn,
+        query,
+        &SearchPolicy {
+            any_terms: true,
+            ..SearchPolicy::exact(limit + 1)
+        },
+        Some(note),
+    );
+    outcome.hits.truncate(limit);
+    outcome
+}
+
+fn search_excluding(
+    conn: &Connection,
+    query: &str,
+    policy: &SearchPolicy,
+    excluded: Option<&str>,
+) -> SearchOutcome {
     let limit = policy.limit;
     let mut hits: Vec<Hit> = Vec::new();
     let mut degraded = Vec::new();
     let intent = QueryIntent::from_query(query);
 
     // 主経路: lindera 分かち書き + bm25
-    match main_search(conn, query, policy) {
+    match match excluded {
+        Some(note) => main_search_excluding(conn, query, policy, Some(note)),
+        None => main_search(conn, query, policy),
+    } {
         Ok(main_hits) => hits.extend(main_hits),
         Err(error) => degraded.push(Degradation::MainSearch {
             detail: error.to_string(),
@@ -157,6 +194,7 @@ pub fn search_with(conn: &Connection, query: &str, policy: &SearchPolicy) -> Sea
 
     // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
     // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
+    hits.retain(|hit| Some(hit.id.as_str()) != excluded);
     rank_hits(&mut hits, query, intent);
     if policy.diversify {
         match diversify_hits(conn, &hits, limit) {
@@ -210,6 +248,15 @@ fn merge_anchor_hits(hits: &mut Vec<Hit>, anchor_hits: Vec<Hit>) {
 }
 
 fn main_search(conn: &Connection, query: &str, policy: &SearchPolicy) -> Result<Vec<Hit>> {
+    main_search_excluding(conn, query, policy, None)
+}
+
+fn main_search_excluding(
+    conn: &Connection,
+    query: &str,
+    policy: &SearchPolicy,
+    excluded: Option<&str>,
+) -> Result<Vec<Hit>> {
     let limit = policy.limit;
     let expr = if policy.any_terms {
         crate::tokenize::match_expr_any(query)
@@ -229,67 +276,70 @@ fn main_search(conn: &Connection, query: &str, policy: &SearchPolicy) -> Result<
                 n.note_uid, n.namespace, n.authority_role, n.authority_status, n.authority_scope,
                 n.description, n.body
          FROM fts_main f JOIN notes n ON n.id = f.id
-         WHERE fts_main MATCH ?1 AND n.status != 'deprecated'
+         WHERE fts_main MATCH ?1 AND n.status != 'deprecated' AND n.normal_reference_allowed = 1 AND (?3 IS NULL OR n.id != ?3)
          ORDER BY rank LIMIT ?2",
     )?;
-    let rows = stmt.query_map(rusqlite::params![expr, candidate_limit as i64], |r| {
-        let title = r.get::<_, Option<String>>(1)?;
-        let tags = r.get::<_, Option<String>>(5)?;
-        let namespace = r.get::<_, Option<String>>(9)?;
-        let authority_scope = r.get::<_, Option<String>>(12)?;
-        let description = r.get::<_, Option<String>>(13)?;
-        let body = r.get::<_, String>(14)?;
-        let authority_role = r.get::<_, Option<String>>(10)?;
-        let authority_status = r.get::<_, Option<String>>(11)?;
-        let field_score = field_score(
-            query,
-            &field_terms,
-            FieldValues {
-                title: title.as_deref(),
-                description: description.as_deref(),
-                tags: tags.as_deref(),
+    let rows = stmt.query_map(
+        rusqlite::params![expr, candidate_limit as i64, excluded],
+        |r| {
+            let title = r.get::<_, Option<String>>(1)?;
+            let tags = r.get::<_, Option<String>>(5)?;
+            let namespace = r.get::<_, Option<String>>(9)?;
+            let authority_scope = r.get::<_, Option<String>>(12)?;
+            let description = r.get::<_, Option<String>>(13)?;
+            let body = r.get::<_, String>(14)?;
+            let authority_role = r.get::<_, Option<String>>(10)?;
+            let authority_status = r.get::<_, Option<String>>(11)?;
+            let field_score = field_score(
+                query,
+                &field_terms,
+                FieldValues {
+                    title: title.as_deref(),
+                    description: description.as_deref(),
+                    tags: tags.as_deref(),
+                    namespace: namespace.as_deref(),
+                    scope: authority_scope.as_deref(),
+                    body: &body,
+                },
+            );
+            let intent_alignment = intent.alignment(AuthorityValues {
                 namespace: namespace.as_deref(),
-                scope: authority_scope.as_deref(),
-                body: &body,
-            },
-        );
-        let intent_alignment = intent.alignment(AuthorityValues {
-            namespace: namespace.as_deref(),
-            role: authority_role.as_deref(),
-            status: authority_status.as_deref(),
-        });
-        let diversity = DiversitySignature::new(
-            authority_scope.as_deref(),
-            authority_role.as_deref(),
-            authority_status.as_deref(),
-            &body,
-        );
-        Ok((
-            Hit {
-                id: r.get(0)?,
-                title,
-                status: r.get(2)?,
-                snippet: r.get(3)?,
-                via: "main",
-                distance: None,
-                origin: r.get(4)?,
-                tags: split_tags(tags),
-                created: r.get(6)?,
-                updated: r.get(7)?,
-                note_uid: r.get(8)?,
-                namespace,
-                authority_role,
-                authority_status,
-                authority_scope,
-            },
-            RankingScore {
-                exact_title: field_score.exact_title,
-                intent_alignment,
-                weighted_term_matches: field_score.weighted_term_matches,
-            },
-            diversity,
-        ))
-    })?;
+                role: authority_role.as_deref(),
+                status: authority_status.as_deref(),
+            });
+            let diversity = DiversitySignature::new(
+                authority_scope.as_deref(),
+                authority_role.as_deref(),
+                authority_status.as_deref(),
+                &body,
+            );
+            Ok((
+                Hit {
+                    id: r.get(0)?,
+                    title,
+                    status: r.get(2)?,
+                    snippet: r.get(3)?,
+                    via: "main",
+                    distance: None,
+                    origin: r.get(4)?,
+                    tags: split_tags(tags),
+                    created: r.get(6)?,
+                    updated: r.get(7)?,
+                    note_uid: r.get(8)?,
+                    namespace,
+                    authority_role,
+                    authority_status,
+                    authority_scope,
+                },
+                RankingScore {
+                    exact_title: field_score.exact_title,
+                    intent_alignment,
+                    weighted_term_matches: field_score.weighted_term_matches,
+                },
+                diversity,
+            ))
+        },
+    )?;
     let mut candidates = rows
         .collect::<std::result::Result<Vec<_>, _>>()?
         .into_iter()
@@ -438,7 +488,9 @@ fn anchor_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
                 note.created, note.generated_at, note.note_uid, note.namespace,
                 note.authority_role, note.authority_status, note.authority_scope
          FROM fts_anchor anchor JOIN notes note ON note.id = anchor.dst
-         WHERE fts_anchor MATCH ?1 AND note.status != 'deprecated'
+         JOIN notes source ON source.id = anchor.src
+         WHERE fts_anchor MATCH ?1 AND note.status != 'deprecated' AND note.normal_reference_allowed = 1
+           AND source.status != 'deprecated' AND source.normal_reference_allowed = 1
          ORDER BY rank LIMIT ?2",
     )?;
     let rows = statement.query_map(rusqlite::params![expr, limit as i64], |row| {
@@ -648,7 +700,7 @@ fn vec_search(conn: &Connection, query: &str, limit: usize) -> Result<Option<Vec
     let mut stmt = conn.prepare_cached(
         "SELECT title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at,
                 note_uid, namespace, authority_role, authority_status, authority_scope
-         FROM notes WHERE id = ?1 AND status != 'deprecated'",
+         FROM notes WHERE id = ?1 AND status != 'deprecated' AND normal_reference_allowed = 1",
     )?;
     for (id, dist) in neighbors {
         if dist > embed::RELATED_DISTANCE {
@@ -768,7 +820,7 @@ fn rescue_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Hit
     let sql = format!(
         "SELECT n.id, n.title, n.status, substr(n.body, 1, 80), n.origin, n.tags, n.created, n.generated_at,
                 n.note_uid, n.namespace, n.authority_role, n.authority_status, n.authority_scope FROM notes n
-         WHERE n.status != 'deprecated' AND {} LIMIT {}",
+         WHERE n.status != 'deprecated' AND n.normal_reference_allowed = 1 AND {} LIMIT {}",
         conds.join(" AND "),
         limit
     );
@@ -871,7 +923,9 @@ pub fn similar_notes(
     use crate::embed;
     let row: Option<(String, Vec<u8>)> = conn
         .query_row(
-            "SELECT stamp, embedding FROM note_vecs WHERE id = ?1 AND stamp IS NOT NULL",
+            "SELECT v.stamp, v.embedding FROM note_vecs v JOIN notes n ON n.id = v.id
+             WHERE v.id = ?1 AND v.stamp IS NOT NULL AND n.status != 'deprecated'
+               AND n.normal_reference_allowed = 1",
             rusqlite::params![id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -903,7 +957,7 @@ pub fn similar_notes(
     };
     let mut out = Vec::new();
     let mut stmt =
-        conn.prepare_cached("SELECT title FROM notes WHERE id = ?1 AND status != 'deprecated'")?;
+        conn.prepare_cached("SELECT title FROM notes WHERE id = ?1 AND status != 'deprecated' AND normal_reference_allowed = 1")?;
     for (nid, dist) in embed::knn(conn, &me, limit + linked.len() + 5)? {
         if out.len() >= limit {
             break;
@@ -922,7 +976,7 @@ pub fn similar_notes(
 pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Option<String>)>> {
     let Some(id) = id else { return Ok(Vec::new()) };
     let mut stmt = conn.prepare_cached(
-        "SELECT DISTINCT other, (SELECT title FROM notes WHERE id = other) FROM (
+        "SELECT DISTINCT other, visible.title FROM (
              SELECT dst AS other FROM links WHERE src = ?1
              UNION SELECT src AS other FROM links WHERE dst = ?1
              UNION
@@ -935,7 +989,11 @@ pub fn related_of(conn: &Connection, id: Option<&str>) -> Result<Vec<(String, Op
              JOIN note_relations relation ON relation.target_uid = target.note_uid
              JOIN notes source ON source.note_uid = relation.src_uid
              WHERE target.id = ?1
-         ) LIMIT 5",
+         ) JOIN notes visible ON visible.id = other
+         JOIN notes root ON root.id = ?1
+         WHERE visible.status != 'deprecated' AND visible.normal_reference_allowed = 1
+           AND root.status != 'deprecated' AND root.normal_reference_allowed = 1
+         LIMIT 5",
     )?;
     let rows = stmt.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -980,7 +1038,7 @@ pub struct NoteListPage {
 
 pub fn note_categories(conn: &Connection) -> Result<Vec<NoteCategory>> {
     let mut stmt =
-        conn.prepare_cached("SELECT id FROM notes WHERE status != 'deprecated' ORDER BY id")?;
+        conn.prepare_cached("SELECT id FROM notes WHERE status != 'deprecated' AND normal_reference_allowed = 1 ORDER BY id")?;
     let ids = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1019,14 +1077,14 @@ pub fn notes_in_category(
     let after = after.unwrap_or("");
     let (total, mut notes) = if category.is_empty() {
         let total = conn.query_row(
-            "SELECT count(*) FROM notes WHERE status != 'deprecated' AND instr(id, '/') = 0",
+            "SELECT count(*) FROM notes WHERE status != 'deprecated' AND normal_reference_allowed = 1 AND instr(id, '/') = 0",
             [],
             |r| r.get::<_, i64>(0),
         )? as usize;
         let mut stmt = conn.prepare_cached(
             "SELECT id, title, coalesce(description, substr(body,1,120)), tags, created, generated_at
              FROM notes
-             WHERE status != 'deprecated' AND instr(id, '/') = 0 AND id > ?1
+             WHERE status != 'deprecated' AND normal_reference_allowed = 1 AND instr(id, '/') = 0 AND id > ?1
              ORDER BY id LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![after, (limit + 1) as i64], note_summary)?;
@@ -1034,14 +1092,14 @@ pub fn notes_in_category(
     } else {
         let total = conn.query_row(
             "SELECT count(*) FROM notes
-             WHERE status != 'deprecated' AND substr(id, 1, length(?1) + 1) = ?1 || '/'",
+             WHERE status != 'deprecated' AND normal_reference_allowed = 1 AND substr(id, 1, length(?1) + 1) = ?1 || '/'",
             [category],
             |r| r.get::<_, i64>(0),
         )? as usize;
         let mut stmt = conn.prepare_cached(
             "SELECT id, title, coalesce(description, substr(body,1,120)), tags, created, generated_at
              FROM notes
-             WHERE status != 'deprecated'
+             WHERE status != 'deprecated' AND normal_reference_allowed = 1
                AND substr(id, 1, length(?1) + 1) = ?1 || '/'
                AND id > ?2
              ORDER BY id LIMIT ?3",
@@ -1091,22 +1149,22 @@ fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Resu
     let mut count_links = conn.prepare_cached(
         "SELECT count(*) FROM (
              SELECT l.dst AS other
-             FROM links l JOIN notes n ON n.id = l.dst AND n.status != 'deprecated'
+             FROM links l JOIN notes n ON n.id = l.dst AND n.status != 'deprecated' AND n.normal_reference_allowed = 1
              WHERE l.src = ?1
              UNION
              SELECT l.src AS other
-             FROM links l JOIN notes n ON n.id = l.src AND n.status != 'deprecated'
+             FROM links l JOIN notes n ON n.id = l.src AND n.status != 'deprecated' AND n.normal_reference_allowed = 1
              WHERE l.dst = ?1
              UNION
              SELECT target.id AS other FROM notes source
              JOIN note_relations relation ON relation.src_uid = source.note_uid
              JOIN notes target ON target.note_uid = relation.target_uid
-             WHERE source.id = ?1 AND target.status != 'deprecated'
+             WHERE source.id = ?1 AND target.status != 'deprecated' AND target.normal_reference_allowed = 1
              UNION
              SELECT source.id AS other FROM notes target
              JOIN note_relations relation ON relation.target_uid = target.note_uid
              JOIN notes source ON source.note_uid = relation.src_uid
-             WHERE target.id = ?1 AND source.status != 'deprecated'
+             WHERE target.id = ?1 AND source.status != 'deprecated' AND source.normal_reference_allowed = 1
          )",
     )?;
     for note in notes.iter_mut() {
@@ -1122,7 +1180,7 @@ fn populate_note_relations(conn: &Connection, notes: &mut [NoteSummary]) -> Resu
         let mut stmt = conn.prepare_cached(
             "SELECT v.id, v.stamp, v.embedding
              FROM note_vecs v JOIN notes n ON n.id = v.id
-             WHERE v.stamp IS NOT NULL AND n.status != 'deprecated'",
+             WHERE v.stamp IS NOT NULL AND n.status != 'deprecated' AND n.normal_reference_allowed = 1",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -1235,7 +1293,7 @@ pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<Hit>> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, title, status, coalesce(description, substr(body,1,80)), origin, tags, created, generated_at,
                 note_uid, namespace, authority_role, authority_status, authority_scope
-         FROM notes WHERE status != 'deprecated'
+         FROM notes WHERE status != 'deprecated' AND normal_reference_allowed = 1
          ORDER BY coalesce(generated_at, created, '') DESC LIMIT ?1",
     )?;
     let rows = stmt.query_map([limit as i64], |r| {
@@ -1371,6 +1429,233 @@ mod tests {
         assert_eq!(super::recent(&conn, 10).unwrap().len(), 3);
     }
 
+    /// 2026-09-06: 未採用票は低順位ではなく通常参照から除外し、改訂で再び閉じる。
+    #[test]
+    fn proposal_reference_visibility_tracks_the_current_revision_decision() {
+        use crate::proposal_workflow::{
+            self, DecisionInput, DecisionOutcome, ProposalInput, ReviewInput, ReviewRecommendation,
+        };
+        let (_dir, vault, conn) = setup();
+        let input = ProposalInput {
+            title: "quarantinesignal".into(),
+            problem: "検証前の案を既存の決定へ混ぜない".into(),
+            proposal: "通常検索から分離する".into(),
+            impact: "明示的なレビュー経路で参照する".into(),
+            acceptance: "採用した現行版だけ通常参照できる".into(),
+            tags: vec!["test".into()],
+            scope: "test/normal-reference".into(),
+        };
+        let review = || ReviewInput {
+            summary: "参照境界を確認した".into(),
+            benefits: "未採用の案を分離できる".into(),
+            risks: "既に渡した会話は消せない".into(),
+            alternatives: "順位だけ下げる".into(),
+            recommendation: ReviewRecommendation::Approve,
+        };
+        let decision = |outcome| DecisionInput {
+            outcome,
+            reason: String::new(),
+            next_action: "本人が境界を確認する".into(),
+        };
+        let assert_visibility = |id: &str, visible: bool| {
+            let outcome = super::search(&conn, "quarantinesignal", 1);
+            assert!(outcome.degraded.is_empty(), "{:?}", outcome.degraded);
+            assert_eq!(outcome.hits.iter().any(|hit| hit.id == id), visible);
+            assert_eq!(
+                super::recent(&conn, 20)
+                    .unwrap()
+                    .iter()
+                    .any(|hit| hit.id == id),
+                visible
+            );
+            let bundle = crate::retrieval::context_documents(
+                &conn,
+                &[id.into()],
+                crate::retrieval::RetrievalOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(bundle.documents.iter().any(|doc| doc.id == id), visible);
+            assert_eq!(bundle.candidates.iter().any(|doc| doc.id == id), visible);
+            assert!(proposal_workflow::get(&conn, id).is_ok());
+        };
+        let ticket = proposal_workflow::create(&vault, &conn, input.clone(), "codex")
+            .unwrap()
+            .ticket;
+        let id = ticket.note_id;
+        assert_visibility(&id, false);
+        let ticket =
+            proposal_workflow::review(&vault, &conn, &id, &ticket.etag, review(), "claude")
+                .unwrap()
+                .ticket;
+        assert_visibility(&id, false);
+        let ticket = proposal_workflow::decide(
+            &vault,
+            &conn,
+            &id,
+            &ticket.etag,
+            decision(DecisionOutcome::Hold),
+        )
+        .unwrap()
+        .ticket;
+        assert_visibility(&id, false);
+        let ticket = proposal_workflow::decide(
+            &vault,
+            &conn,
+            &id,
+            &ticket.etag,
+            decision(DecisionOutcome::Approve),
+        )
+        .unwrap()
+        .ticket;
+        assert_visibility(&id, true);
+        let ticket = proposal_workflow::revise(&vault, &conn, &id, &ticket.etag, input, "codex")
+            .unwrap()
+            .ticket;
+        assert_visibility(&id, false);
+        let ticket =
+            proposal_workflow::review(&vault, &conn, &id, &ticket.etag, review(), "claude")
+                .unwrap()
+                .ticket;
+        proposal_workflow::decide(
+            &vault,
+            &conn,
+            &id,
+            &ticket.etag,
+            decision(DecisionOutcome::Reject),
+        )
+        .unwrap();
+        assert_visibility(&id, false);
+    }
+
+    /// 2026-09-06: 本文検索だけを絞ると、リンク文言・近傍・recentから非表示票が漏れる。
+    #[test]
+    fn normal_reference_filters_all_search_paths_before_result_limits() {
+        let (_dir, _vault, conn) = setup();
+        for (id, visible, body) in [
+            ("boundary/public", 1, "quarantinesignal cycle"),
+            ("boundary/target", 1, "destination"),
+            ("boundary/hidden", 0, "quarantinesignal cycle"),
+        ] {
+            conn.execute(
+                "INSERT INTO notes(id,title,status,body,tags,normal_reference_allowed)
+                 VALUES (?1,?1,'stable',?2,'test',?3)",
+                rusqlite::params![id, body, visible],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO fts_main(id,text) VALUES (?1,?2)",
+                rusqlite::params![id, crate::tokenize::wakati(body)],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO fts_tri(id,text) VALUES (?1,?2)",
+                rusqlite::params![id, body],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO links VALUES ('boundary/hidden','boundary/target');
+             INSERT INTO links VALUES ('boundary/public','boundary/hidden');
+             INSERT INTO links VALUES ('boundary/public','boundary/target');
+             INSERT INTO fts_anchor(src,dst,text) VALUES
+                ('boundary/hidden','boundary/target','hidden source label'),
+                ('boundary/public','boundary/hidden','hidden destination label'),
+                ('boundary/public','boundary/target','public source label');",
+        )
+        .unwrap();
+        for query in ["quarantinesignal", "cycle", "cy"] {
+            let hits = super::rescue_search(&conn, query, 1).unwrap();
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].id, "boundary/public");
+        }
+        let hits = super::main_search(
+            &conn,
+            "quarantinesignal",
+            &crate::retrieval_profile::SearchPolicy::exact(1),
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "boundary/public");
+        assert!(
+            super::anchor_search(&conn, "hidden source label", 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            super::anchor_search(&conn, "hidden destination label", 1)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            super::anchor_search(&conn, "public source label", 1).unwrap()[0].id,
+            "boundary/target"
+        );
+        assert_eq!(
+            super::related_of(&conn, Some("boundary/public")).unwrap(),
+            vec![("boundary/target".into(), Some("boundary/target".into()))]
+        );
+        assert!(
+            super::related_of(&conn, Some("boundary/hidden"))
+                .unwrap()
+                .is_empty()
+        );
+        let page = super::notes_in_category(&conn, "boundary", None, 1).unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.notes[0].id, "boundary/public");
+        assert!(
+            !super::recent(&conn, 20)
+                .unwrap()
+                .iter()
+                .any(|hit| hit.id == "boundary/hidden")
+        );
+
+        // hiddenの近いベクトルが多数あっても、可視候補のKNN枠を埋め尽くさない。
+        for index in 0..12 {
+            let id = format!("boundary/hidden-{index}");
+            conn.execute(
+                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,'stable','','')",
+                [&id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO note_vecs(id,stamp,embedding) VALUES (?1,?2,?3)",
+                rusqlite::params![
+                    id,
+                    crate::embed::embedding_stamp("fixture"),
+                    crate::embed::to_blob(&[1.0, 0.0])
+                ],
+            )
+            .unwrap();
+        }
+        for (id, vector) in [
+            ("boundary/public", [1.0, 0.0]),
+            ("boundary/hidden", [1.0, 0.0]),
+            ("notes/認証設計メモ", [0.99, 0.01]),
+        ] {
+            conn.execute(
+                "INSERT INTO note_vecs(id,stamp,embedding) VALUES (?1,?2,?3)",
+                rusqlite::params![
+                    id,
+                    crate::embed::embedding_stamp("fixture"),
+                    crate::embed::to_blob(&vector)
+                ],
+            )
+            .unwrap();
+        }
+        let neighbors = crate::embed::knn(&conn, &[1.0, 0.0], 2).unwrap();
+        assert_eq!(neighbors.len(), 2);
+        assert!(neighbors.iter().all(|(id, _)| !id.contains("hidden")));
+        assert_eq!(
+            super::similar_notes(&conn, "boundary/public", 1).unwrap()[0].0,
+            "notes/認証設計メモ"
+        );
+        assert!(
+            super::similar_notes(&conn, "boundary/hidden", 1)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn active_canonical_ranks_before_records_and_proposals() {
         let dir = tempfile::tempdir().unwrap();
@@ -1381,6 +1666,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title,
                         body: "権威順位番兵アルタイル",
                         description: None,
@@ -1425,6 +1711,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: "重複正本",
                         body: "権威順位番兵アルタイル",
                         description: None,
@@ -1459,6 +1746,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "Nebula Launch Checklist",
                     body: "go or no-go procedure",
                     description: None,
@@ -1480,6 +1768,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: &format!("Nebula Canonical {suffix}"),
                         body: "nebula launch checklist nebula launch checklist nebula launch checklist",
                         description: None,
@@ -1545,6 +1834,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "Mercury Program Risk Facet",
                     body: "mercury budget review identifies the unique cashflow risk facet",
                     description: None,
@@ -1566,6 +1856,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: &format!("Mercury Program Digest {suffix}"),
                         body: "mercury budget review mercury budget review mercury budget review",
                         description: None,
@@ -1606,6 +1897,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "Orion Audit Record 2025",
                     body: "orion 当時 理由。The historical record explains the accepted exception.",
                     description: None,
@@ -1627,6 +1919,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: &format!("Orion Current Policy {suffix}"),
                         body: "orion 当時 理由 orion 当時 理由 orion 当時 理由",
                         description: None,
@@ -1686,6 +1979,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "Kepler Retention Procedure",
                     body: "Retained material is removed after the approved interval.",
                     description: None,
@@ -1706,6 +2000,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "Storage Map",
                     body: &format!("See [blue comet policy](/{target}.md)."),
                     description: None,
@@ -1727,6 +2022,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: &format!("Blue Comet Index {suffix}"),
                         body: "blue comet policy blue comet policy blue comet policy",
                         description: None,
@@ -1761,6 +2057,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "根拠記録",
                     body: "観測結果",
                     description: None,
@@ -1788,6 +2085,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: "参照切れ",
                         body: "保存してはいけない",
                         description: None,
@@ -1812,6 +2110,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "導出知識",
                     body: "結論",
                     description: None,
@@ -1856,6 +2155,7 @@ mod tests {
             .agent_update_note(
                 &conn,
                 NoteUpdate {
+                    judgment: None,
                     id: &source,
                     title: None,
                     body: None,
@@ -1883,7 +2183,7 @@ mod tests {
             ("research/旧版", "deprecated"),
         ] {
             conn.execute(
-                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,?2,'','')",
+                "INSERT INTO notes(id,title,status,body,tags,normal_reference_allowed) VALUES (?1,?1,?2,'','',1)",
                 rusqlite::params![id, status],
             )
             .unwrap();
@@ -1903,7 +2203,7 @@ mod tests {
         let (_d, _v, conn) = setup();
         for id in ["research/ai/検索", "research/概要"] {
             conn.execute(
-                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,'stable','','')",
+                "INSERT INTO notes(id,title,status,body,tags,normal_reference_allowed) VALUES (?1,?1,'stable','','',1)",
                 [id],
             )
             .unwrap();
@@ -1923,7 +2223,7 @@ mod tests {
         let (_d, _v, conn) = setup();
         for id in ["signals/a", "signals/b", "signals/c", "signals/d"] {
             conn.execute(
-                "INSERT INTO notes(id,title,status,body,tags) VALUES (?1,?1,'stable','','')",
+                "INSERT INTO notes(id,title,status,body,tags,normal_reference_allowed) VALUES (?1,?1,'stable','','',1)",
                 [id],
             )
             .unwrap();

@@ -1256,7 +1256,8 @@ mod tests {
                  origin TEXT, generated_by TEXT, generated_at TEXT,
                  mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT,
                  document TEXT NOT NULL DEFAULT '', namespace TEXT,
-                 authority_role TEXT, authority_status TEXT, authority_scope TEXT
+                 authority_role TEXT, authority_status TEXT, authority_scope TEXT,
+                 normal_reference_allowed INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
              CREATE INDEX links_dst ON links(dst);
@@ -1281,8 +1282,9 @@ mod tests {
     fn add_note(conn: &Connection, id: &str, searchable: &str) {
         let document = format!("---\ntitle: {id}\n---\n{searchable}");
         conn.execute(
-            "INSERT INTO notes(id, title, description, status, origin, body, tags, document)
-             VALUES (?1, ?1, '', 'stable', 'agent', ?2, 'kb-app', ?3)",
+            "INSERT INTO notes(id, title, description, status, origin, body, tags, document,
+                               normal_reference_allowed)
+             VALUES (?1, ?1, '', 'stable', 'agent', ?2, 'kb-app', ?3, 1)",
             rusqlite::params![id, searchable, document],
         )
         .unwrap();

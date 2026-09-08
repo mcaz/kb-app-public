@@ -1,6 +1,8 @@
 //! 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)と、AI の起動。
 
-use kb_core::registry::Registry;
+use kb_core::client_binding::{self, ClientBinding};
+use kb_core::client_surface::ClientSurface;
+use kb_core::connect::DesktopStatus;
 use kb_core::search::stats;
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -8,6 +10,8 @@ use tauri_specta::Event;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+
+use super::settings::{binding_matches, selected_client_binding};
 
 /// 生成される TS では "not_installed" | "downloading" | "enabled" の union になる
 /// (JSON 表現は従来の文字列のまま)。
@@ -63,9 +67,18 @@ impl From<kb_core::github_auth::DeviceAuthorization> for GitHubDeviceAuthorizati
 #[tauri::command(async)]
 #[specta::specta]
 pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
+    // bindingだけが不明でもバックアップや検索の状態は返し、再接続の導線を残す。
+    let binding = selected_client_binding(&state).ok();
+    let exe = std::env::current_exe()?;
     let desktop = kb_core::connect::claude_desktop_config_path()
-        .map(|p| kb_core::connect::desktop_status_at(&p))
-        .unwrap_or(kb_core::connect::DesktopStatus::NotFound);
+        .map(|p| {
+            let name = binding
+                .as_ref()
+                .map_or("", |binding| binding.vault_name.as_str());
+            let status = kb_core::connect::desktop_status_at(&p, &exe, name);
+            desktop_status_with_binding(status, binding.as_ref(), client_binding::load)
+        })
+        .unwrap_or(DesktopStatus::NotFound);
 
     state.with_db(|vault, conn, _| {
         let s = stats(conn).map_err(AppError::index)?;
@@ -88,6 +101,27 @@ pub fn connect_state(state: State<'_, AppState>) -> AppResult<ConnectState> {
             },
         })
     })
+}
+
+/// DB初期化に失敗している画面から使うため、通常のAppState接続を開かない。
+#[tauri::command(async)]
+#[specta::specta]
+pub fn inspect_runtime_storage() -> AppResult<kb_core::runtime_diagnostics::RuntimeDiagnosticsReport>
+{
+    let registry = kb_core::registry::Registry::load().map_err(AppError::configuration)?;
+    let root = registry.resolve(None).map_err(AppError::vault)?;
+    let vault = kb_core::vault::Vault::open(root).map_err(AppError::vault)?;
+    kb_core::runtime_diagnostics::inspect(&vault).map_err(AppError::index)
+}
+
+/// 復元元の照合も、失敗している通常接続や同期を開始せずに行う。
+#[tauri::command(async)]
+#[specta::specta]
+pub fn plan_runtime_recovery() -> AppResult<kb_core::runtime_recovery::RuntimeRecoveryPlan> {
+    let registry = kb_core::registry::Registry::load().map_err(AppError::configuration)?;
+    let root = registry.resolve(None).map_err(AppError::vault)?;
+    let vault = kb_core::vault::Vault::open(root).map_err(AppError::vault)?;
+    kb_core::runtime_recovery::plan(&vault).map_err(AppError::index)
 }
 
 /// Vault の有無に依存しないため、初回の「既存 Vault を復元」画面からも呼べる。
@@ -182,14 +216,34 @@ pub fn backup_now(state: State<'_, AppState>) -> AppResult<String> {
 #[tauri::command]
 #[specta::specta]
 pub fn connect_desktop(state: State<'_, AppState>) -> AppResult<()> {
-    let name = state.vault_name()?;
+    let binding = selected_client_binding(&state)?;
     let cfg =
         kb_core::connect::claude_desktop_config_path().ok_or(AppError::ClaudeDesktopNotFound)?;
     let exe = std::env::current_exe()?;
-    kb_core::connect::connect_desktop_at(&cfg, &exe, &name).map_err(AppError::configuration)?;
-    // 使っていないが、レジストリの整合を明示するために読み出しておく
-    debug_assert!(Registry::load().is_ok());
+    kb_core::connect::connect_desktop_at(&cfg, &exe, &binding.vault_name)
+        .map_err(AppError::configuration)?;
+    // 設定登録とbindingは別ファイル。後半が失敗しても「接続済み」とせず再実行できる。
+    client_binding::bind(ClientSurface::ClaudeDesktop, &binding)?;
     Ok(())
+}
+
+fn desktop_status_with_binding(
+    status: DesktopStatus,
+    expected: Option<&ClientBinding>,
+    mut load: impl FnMut(ClientSurface) -> kb_core::error::Result<Option<ClientBinding>>,
+) -> DesktopStatus {
+    if status == DesktopStatus::Connected
+        && expected.is_none_or(|expected| {
+            load(ClientSurface::ClaudeDesktop)
+                .ok()
+                .flatten()
+                .is_none_or(|actual| !binding_matches(&actual, expected))
+        })
+    {
+        DesktopStatus::NotConnected
+    } else {
+        status
+    }
 }
 
 /// 現在ノートを記録して Claude Desktop を前面に(FR-A5 最小)。
@@ -255,5 +309,74 @@ fn launch_claude_desktop() -> AppResult<()> {
         } else {
             Err(AppError::ClaudeDesktopLaunchFailed)
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding(name: &str, workspace: &str) -> ClientBinding {
+        ClientBinding::new(name.into(), workspace.into()).unwrap()
+    }
+
+    /// 2026-09-05: Desktop設定だけ書けた状態を、接続先IDまで確認済みと扱わない。
+    #[test]
+    fn desktop_registration_requires_a_matching_workspace_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("desktop.json");
+        let exe = temp.path().join("kb-app");
+        let expected = binding("selected", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        std::fs::write(&config, "{}").unwrap();
+        kb_core::connect::connect_desktop_at(&config, &exe, &expected.vault_name).unwrap();
+        let registered = kb_core::connect::desktop_status_at(&config, &exe, &expected.vault_name);
+        assert_eq!(registered, DesktopStatus::Connected);
+        assert_eq!(
+            desktop_status_with_binding(registered.clone(), Some(&expected), |surface| {
+                assert_eq!(surface, ClientSurface::ClaudeDesktop);
+                Ok(Some(expected.clone()))
+            }),
+            DesktopStatus::Connected
+        );
+
+        for stale in [
+            None,
+            Some(binding("other", "01ARZ3NDEKTSV4RRFFQ69G5FAV")),
+            Some(binding("selected", "01ARZ3NDEKTSV4RRFFQ69G5FAW")),
+        ] {
+            assert_eq!(
+                desktop_status_with_binding(registered.clone(), Some(&expected), |_| {
+                    Ok(stale.clone())
+                }),
+                DesktopStatus::NotConnected
+            );
+        }
+        assert_eq!(
+            desktop_status_with_binding(registered, Some(&expected), |_| {
+                Err(kb_core::error::CoreError::configuration(anyhow::anyhow!(
+                    "fixture"
+                )))
+            }),
+            DesktopStatus::NotConnected
+        );
+    }
+
+    #[test]
+    fn absent_desktop_and_unknown_selection_do_not_read_a_binding() {
+        for status in [DesktopStatus::NotFound, DesktopStatus::NotConnected] {
+            let expected_status = status.clone();
+            assert_eq!(
+                desktop_status_with_binding(status, None, |_| {
+                    panic!("未登録ならbindingを読む必要はない")
+                }),
+                expected_status
+            );
+        }
+        assert_eq!(
+            desktop_status_with_binding(DesktopStatus::Connected, None, |_| {
+                panic!("選択先が不明ならbindingを読む必要はない")
+            }),
+            DesktopStatus::NotConnected
+        );
     }
 }

@@ -10,18 +10,25 @@ pub mod ai_guard;
 pub mod artifact;
 pub mod artifact_search;
 pub mod authority;
+pub mod auto_distillation;
 pub mod autostart;
 pub mod backup;
+pub mod cadence_cache;
 pub mod care;
+pub mod client_binding;
+pub mod client_notice;
 pub mod client_surface;
 pub mod connect;
 pub mod degradation;
 pub mod derived_index;
 pub mod derived_lifecycle;
 pub mod distillation;
+pub mod distillation_ai;
 pub mod distillation_audit;
 pub mod distillation_cadence;
 pub mod distillation_executor;
+pub mod distillation_jobs;
+pub mod distillation_metrics;
 pub mod embed;
 pub mod error;
 mod external_tools;
@@ -29,16 +36,24 @@ pub mod favorites;
 pub mod frontmatter;
 pub mod github;
 pub mod github_auth;
+pub mod harvest;
+pub mod hook_delivery;
 pub mod import;
 pub mod index;
 pub mod initiative_lifecycle;
 pub mod intake;
+pub mod judgment;
+pub mod judgment_context;
 pub mod ledger;
 pub mod lfs;
 pub mod mcp;
 pub mod migrate;
+pub mod note_count_history;
 pub mod note_id;
 pub mod note_store;
+pub mod observation_health;
+pub mod observation_trend;
+pub mod proposal_workflow;
 pub mod purge;
 pub mod reason;
 pub mod registry;
@@ -48,7 +63,10 @@ pub mod retrieval_benchmark;
 pub mod retrieval_eval;
 pub mod retrieval_profile;
 pub mod rule_delivery_eval;
+pub mod runtime_diagnostics;
+pub mod runtime_recovery;
 pub mod search;
+pub mod session_ledger;
 pub mod settings;
 pub mod storage_contract;
 pub mod store;
@@ -56,6 +74,8 @@ pub mod tags;
 pub mod tokenize;
 pub mod vault;
 pub mod workspace;
+pub(crate) mod write_guidance;
+pub mod write_rejection;
 
 /// コアのバージョン。GUI / CLI / MCP が同一コアを共有していることの確認用。
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -98,6 +118,9 @@ pub const OWNER_ACTOR: &str = "human:owner";
 
 #[cfg(test)]
 mod contract_guard;
+
+#[cfg(test)]
+mod judgment_eval;
 
 #[cfg(test)]
 mod tests {

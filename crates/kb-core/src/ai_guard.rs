@@ -22,6 +22,7 @@ const CODEX_MARKER: &str = "# Managed by kb-app: AI raw-vault access guard";
 const CODEX_DEVELOPMENT_MARKER: &str =
     "# kb-app development mode: Codex full access; KB broker disabled";
 const CLAUDE_MARKER: &str = "Read(//.kb-app-ai-raw-vault-guard-v1)";
+pub(crate) const CODEX_DISTILLATION_PROFILE: &str = "kb_app_distillation";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
@@ -33,6 +34,19 @@ pub enum GuardTargetState {
     Outdated,
     Conflict,
     Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectionDecision {
+    Allowed,
+    Disabled,
+    GuardOutdated,
+}
+
+impl ConnectionDecision {
+    pub fn is_allowed(self) -> bool {
+        self == Self::Allowed
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -99,13 +113,42 @@ pub fn status() -> Result<AiGuardStatus> {
 /// kb-app MCP自体が生path能力を公開しないbroker境界で許可する。未知surfaceは、
 /// model名から推測せずfail-closedにする。
 pub fn client_connection_is_allowed(client: &str) -> bool {
-    let surface = ClientSurface::from_hint(client);
+    client_connection_decision(client, true).is_allowed()
+}
+
+pub fn client_connection_decision(client: &str, requested_enabled: bool) -> ConnectionDecision {
+    resolve_client_connection(ClientSurface::from_hint(client), requested_enabled, status)
+}
+
+pub(crate) fn resolve_client_connection(
+    surface: ClientSurface,
+    requested_enabled: bool,
+    load_status: impl FnOnce() -> Result<AiGuardStatus>,
+) -> ConnectionDecision {
+    // 2026-09-05: 本人のOFFはguard通知より優先し、停止中は管理設定も追加で読まない。
+    if !requested_enabled {
+        return ConnectionDecision::Disabled;
+    }
     match surface.capabilities().raw_vault_boundary {
-        RawVaultBoundary::McpToolBoundary => true,
-        RawVaultBoundary::ManagedOsSandbox => status()
-            .ok()
-            .is_some_and(|status| managed_surface_is_enforced(surface, &status)),
-        RawVaultBoundary::EvaluationFixture | RawVaultBoundary::Unsupported => false,
+        RawVaultBoundary::McpToolBoundary => ConnectionDecision::Allowed,
+        RawVaultBoundary::ManagedOsSandbox => match load_status() {
+            Ok(status) if managed_surface_is_enforced(surface, &status) => {
+                ConnectionDecision::Allowed
+            }
+            Ok(status)
+                if matches!(
+                    (surface, status.codex, status.claude),
+                    (ClientSurface::CodexCli, GuardTargetState::Outdated, _)
+                        | (ClientSurface::ClaudeCode, _, GuardTargetState::Outdated)
+                ) =>
+            {
+                ConnectionDecision::GuardOutdated
+            }
+            Ok(_) | Err(_) => ConnectionDecision::Disabled,
+        },
+        RawVaultBoundary::EvaluationFixture | RawVaultBoundary::Unsupported => {
+            ConnectionDecision::Disabled
+        }
     }
 }
 
@@ -512,7 +555,8 @@ statusMessage = \"kb-appをMCP検索中…\"\n\
 additionalContextLimit = 12000\n\n\
 [allowed_permission_profiles]\n\
 kb_app_read_only = true\n\
-kb_app_workspace = true\n\n\
+kb_app_workspace = true\n\
+{CODEX_DISTILLATION_PROFILE} = true\n\n\
 [permissions.filesystem]\n\
 deny_read = [\n",
         toml_key(&managed_dir.to_string_lossy()),
@@ -540,6 +584,18 @@ extends = \":workspace\"\n\n\
     for path in paths {
         text.push_str(&format!("{} = \"deny\"\n", toml_key(path)));
     }
+    // 2026-09-06: 自動蒸留は専用の空ディレクトリから実行する。通常workspaceの
+    // 権限を流用せず、管理allowlistにも読み取り限定profileを明示する。
+    text.push_str(&format!(
+        "\n[permissions.{CODEX_DISTILLATION_PROFILE}]\n\
+description = \"Distillation context processing without access to personal files.\"\n\n\
+[permissions.{CODEX_DISTILLATION_PROFILE}.filesystem]\n\
+\":root\" = \"deny\"\n\
+\":minimal\" = \"read\"\n\
+\":workspace_roots\" = \"read\"\n\n\
+[permissions.{CODEX_DISTILLATION_PROFILE}.network]\n\
+enabled = false\n"
+    ));
     Ok(text)
 }
 
@@ -609,6 +665,18 @@ fn claude_settings(paths: &[String], hook_executable: &Path) -> Result<String> {
             }
         },
         "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": hook_executable,
+                    "args": [
+                        "--hook-session-start",
+                        "--client",
+                        "claude-code/claude"
+                    ],
+                    "timeout": 30
+                }]
+            }],
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
@@ -785,6 +853,74 @@ mod tests {
         ));
     }
 
+    /// 2026-09-05: OFFや通常チャット面の通知のために管理設定を読まない。
+    #[test]
+    fn connection_decision_loads_guard_only_for_enabled_coding_surfaces() {
+        for surface in [
+            ClientSurface::CodexCli,
+            ClientSurface::ClaudeCode,
+            ClientSurface::ClaudeDesktop,
+            ClientSurface::ChatGpt,
+            ClientSurface::Unknown,
+            ClientSurface::RuleDeliveryEvaluation,
+        ] {
+            assert_eq!(
+                resolve_client_connection(surface, false, || panic!("OFF must not read guard")),
+                ConnectionDecision::Disabled
+            );
+        }
+        for (surface, expected) in [
+            (ClientSurface::ClaudeDesktop, ConnectionDecision::Allowed),
+            (ClientSurface::ChatGpt, ConnectionDecision::Allowed),
+            (ClientSurface::Unknown, ConnectionDecision::Disabled),
+            (
+                ClientSurface::RuleDeliveryEvaluation,
+                ConnectionDecision::Disabled,
+            ),
+        ] {
+            assert_eq!(
+                resolve_client_connection(surface, true, || panic!("surface must not read guard")),
+                expected
+            );
+        }
+    }
+
+    /// 2026-09-05: 他クライアントの古いguardをこの接続の拒否理由にしない。
+    #[test]
+    fn connection_decision_reports_only_the_matching_outdated_guard() {
+        for state in [
+            GuardTargetState::Enforced,
+            GuardTargetState::Development,
+            GuardTargetState::Missing,
+            GuardTargetState::Outdated,
+            GuardTargetState::Conflict,
+            GuardTargetState::Unsupported,
+        ] {
+            let expected = match state {
+                GuardTargetState::Enforced => ConnectionDecision::Allowed,
+                GuardTargetState::Outdated => ConnectionDecision::GuardOutdated,
+                _ => ConnectionDecision::Disabled,
+            };
+            for surface in [ClientSurface::CodexCli, ClientSurface::ClaudeCode] {
+                let status = if surface == ClientSurface::CodexCli {
+                    example_status(state, GuardTargetState::Outdated)
+                } else {
+                    example_status(GuardTargetState::Outdated, state)
+                };
+                assert_eq!(
+                    resolve_client_connection(surface, true, || Ok(status)),
+                    expected
+                );
+            }
+        }
+        assert_eq!(
+            resolve_client_connection(ClientSurface::CodexCli, true, || {
+                Err(CoreError::configuration(anyhow::anyhow!("unavailable")))
+            }),
+            ConnectionDecision::Disabled
+        );
+    }
+
     #[test]
     fn policies_deny_raw_data_for_builtins_and_subprocesses() {
         let policy = example_policy();
@@ -841,6 +977,55 @@ mod tests {
             claude["hooks"]["UserPromptSubmit"][0]["hooks"][0]["args"][0],
             "--hook-auto-retrieve"
         );
+    }
+
+    /// 2026-09-06: ルーティンの開始だけでなくresume/clearも記録し、旧IDの再利用を見逃さない。
+    #[test]
+    fn claude_start_observation_is_managed_and_matches_every_source() {
+        let policy = example_policy();
+        let claude: serde_json::Value = serde_json::from_str(&policy.claude_settings).unwrap();
+        let groups = claude["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert!(groups[0].get("matcher").is_none());
+        let hooks = groups[0]["hooks"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["type"], "command");
+        assert_eq!(
+            hooks[0]["command"],
+            "/Applications/kb-app.app/Contents/MacOS/kb-app"
+        );
+        assert_eq!(
+            hooks[0]["args"],
+            serde_json::json!(["--hook-session-start", "--client", "claude-code/claude"])
+        );
+        assert_eq!(hooks[0]["timeout"], 30);
+        assert!(hooks[0].get("statusMessage").is_none());
+        assert!(!policy.codex_requirements.contains("SessionStart"));
+        assert!(
+            !policy
+                .codex_development_requirements
+                .contains("SessionStart")
+        );
+    }
+
+    #[test]
+    fn guard_without_claude_start_observation_requires_managed_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let codex = dir.path().join("requirements.toml");
+        let claude_path = dir.path().join("managed.json");
+        let policy = example_policy();
+        let mut previous: serde_json::Value =
+            serde_json::from_str(&policy.claude_settings).unwrap();
+        previous["hooks"]
+            .as_object_mut()
+            .unwrap()
+            .remove("SessionStart");
+        fs::write(&codex, &policy.codex_requirements).unwrap();
+        fs::write(&claude_path, serde_json::to_vec_pretty(&previous).unwrap()).unwrap();
+        let status = status_for(&policy, &codex, &claude_path, false).unwrap();
+        assert_eq!(status.codex, GuardTargetState::Enforced);
+        assert_eq!(status.claude, GuardTargetState::Outdated);
+        assert!(!status.ready);
     }
 
     #[test]
@@ -906,6 +1091,49 @@ mod tests {
         let enforced = status_for(&policy, &codex, &claude, false).unwrap();
         assert!(enforced.ready);
         assert!(release_ready(enforced).is_ok());
+    }
+
+    /// 2026-09-06: 古いallowlistは自動蒸留profileを拒否するため、実行失敗の反復より
+    /// 先に既存の管理設定更新へ案内する。生データのglobal denyは全profileに残す。
+    #[test]
+    fn distillation_profile_is_restricted_and_older_policy_needs_update() {
+        let policy = example_policy();
+        let requirements = &policy.codex_requirements;
+        assert!(requirements.contains("kb_app_distillation = true\n"));
+        let profile = requirements
+            .split("[permissions.kb_app_distillation]")
+            .nth(1)
+            .unwrap();
+        assert!(profile.contains("\":root\" = \"deny\""));
+        assert!(profile.contains("\":minimal\" = \"read\""));
+        assert!(profile.contains("\":workspace_roots\" = \"read\""));
+        assert!(profile.contains("[permissions.kb_app_distillation.network]\nenabled = false"));
+        assert!(!profile.contains("\"write\""));
+        assert!(!profile.contains("extends ="));
+        let global_denials = requirements
+            .split("[permissions.filesystem]\ndeny_read = [")
+            .nth(1)
+            .unwrap()
+            .split(']')
+            .next()
+            .unwrap();
+        assert!(global_denials.contains("\"/Users/example/kb\""));
+
+        let dir = tempfile::tempdir().unwrap();
+        let codex = dir.path().join("requirements.toml");
+        let claude = dir.path().join("managed.json");
+        let old = requirements
+            .split("\n[permissions.kb_app_distillation]")
+            .next()
+            .unwrap()
+            .replace("kb_app_distillation = true\n", "");
+        fs::write(&codex, old).unwrap();
+        fs::write(&claude, &policy.claude_settings).unwrap();
+        let outdated = status_for(&policy, &codex, &claude, false).unwrap();
+        assert_eq!(outdated.codex, GuardTargetState::Outdated);
+        assert!(!outdated.ready);
+        fs::write(&codex, requirements).unwrap();
+        assert!(status_for(&policy, &codex, &claude, false).unwrap().ready);
     }
 
     #[test]

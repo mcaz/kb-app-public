@@ -131,6 +131,30 @@ enum Command {
         #[command(subcommand)]
         command: EvalCommand,
     },
+    /// 会話の配信・起票観測を読み取り専用で集計する(Vaultは開かない)
+    Sessions {
+        /// 集計する直近の日数(保持期間内)
+        #[arg(long, default_value_t = 14, value_parser = clap::value_parser!(u16).range(1..=90))]
+        days: u16,
+        /// workspaceの不透明IDで絞る。省略時は全workspaceと未帰属分
+        #[arg(long, conflicts_with = "vault")]
+        workspace_id: Option<String>,
+    },
+    /// 固定期間の観測を集計する(Vault・会話本文は開かない)
+    ObservationSummary {
+        /// 開始日時(UTC Unixミリ秒、含む)
+        #[arg(long)]
+        since_ms: i64,
+        /// 終了日時(UTC Unixミリ秒、含まない)
+        #[arg(long)]
+        until_ms: i64,
+        /// 対象workspaceの不透明ID
+        #[arg(long, conflicts_with = "vault")]
+        workspace_id: String,
+        /// 診断等の除外期間。開始:終了をUTC Unixミリ秒で指定(複数可)
+        #[arg(long, value_parser = parse_exclusion_window)]
+        exclude_window: Vec<kb_core::session_ledger::ExclusionWindow>,
+    },
     /// MCP サーバーを stdio で起動
     Mcp {
         /// generated.by に刻むクライアント actor(例: claude-desktop/claude-fable-5)
@@ -517,8 +541,31 @@ fn body_or_stdin(body: Option<String>) -> Result<String> {
     }
 }
 
+fn parse_exclusion_window(value: &str) -> Result<kb_core::session_ledger::ExclusionWindow, String> {
+    let (since, until) = value
+        .split_once(':')
+        .ok_or_else(|| "除外期間は開始:終了のUTC Unixミリ秒で指定する".to_string())?;
+    let since_ms = since
+        .parse::<i64>()
+        .map_err(|_| "除外期間の開始が整数ではない".to_string())?;
+    let until_ms = until
+        .parse::<i64>()
+        .map_err(|_| "除外期間の終了が整数ではない".to_string())?;
+    if since_ms < 0 || since_ms >= until_ms {
+        return Err("除外期間は0以上の開始 < 終了で指定する".into());
+    }
+    Ok(kb_core::session_ledger::ExclusionWindow { since_ms, until_ms })
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    anyhow::ensure!(
+        !matches!(
+            cli.command,
+            Command::Sessions { .. } | Command::ObservationSummary { .. }
+        ) || cli.vault.is_none(),
+        "観測集計はVaultを開かない。絞り込みには--workspace-idを指定する"
+    );
     match cli.command {
         Command::Vault { command } => match command {
             VaultCommand::Create { name, path } => {
@@ -570,10 +617,15 @@ fn main() -> Result<()> {
             let vault = open_vault(cli.vault.as_deref())?;
             let conn = open_db(&vault)?;
             sync(&vault, &conn)?;
+            let snapshot = conn.unchecked_transaction()?;
+            kb_core::proposal_workflow::require_normal_reference(&snapshot, &note)?;
             print!(
                 "{}",
-                vault.read_note_from_db(&conn, &note)?.to_file_string()?
+                vault
+                    .read_note_from_db(&snapshot, &note)?
+                    .to_file_string()?
             );
+            snapshot.commit()?;
         }
         Command::Recent { limit } => {
             let vault = open_vault(cli.vault.as_deref())?;
@@ -602,6 +654,7 @@ fn main() -> Result<()> {
             let id = vault.propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: &title,
                     body: &body,
                     description: description.as_deref(),
@@ -1074,6 +1127,32 @@ fn main() -> Result<()> {
                 write_eval_output(output.as_ref(), &rendered, "Rule Delivery report")?;
             }
         },
+        Command::Sessions { days, workspace_id } => {
+            let until_ms = kb_core::session_ledger::now_ms();
+            let report =
+                kb_core::session_ledger::summary(&kb_core::session_ledger::SummaryQuery {
+                    since_ms: until_ms - i64::from(days) * 86_400_000,
+                    until_ms,
+                    workspace_id,
+                })?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::ObservationSummary {
+            since_ms,
+            until_ms,
+            workspace_id,
+            exclude_window,
+        } => {
+            let report = kb_core::session_ledger::observation_summary(
+                &kb_core::session_ledger::ObservationQuery {
+                    since_ms,
+                    until_ms,
+                    workspace_id,
+                    manual_exclusions: exclude_window,
+                },
+            )?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
         Command::Mcp {
             client,
             surface,
@@ -1083,6 +1162,8 @@ fn main() -> Result<()> {
                 &client,
                 kb_core::mcp::ServeOptions {
                     remote_sync: true,
+                    require_client_binding: false,
+                    hook_context: false,
                     tool_surface: kb_core::mcp::ToolSurface::parse(&surface)?,
                     retrieval_profile: retrieval_profile
                         .as_deref()
@@ -1216,9 +1297,11 @@ mod tests {
             "import".to_string(),
             "mcp".to_string(),
             "migrate-files".to_string(),
+            "observation-summary".to_string(),
             "propose".to_string(),
             "recent".to_string(),
             "search".to_string(),
+            "sessions".to_string(),
             "settings".to_string(),
             "settings ai-enabled".to_string(),
             "settings ai-guard-status".to_string(),
@@ -1240,6 +1323,102 @@ mod tests {
         assert_eq!(
             actual, expected,
             "CLI commandを追加・削除する場合は、所有境界を監査してallowlistも更新する"
+        );
+    }
+
+    #[test]
+    fn sessions_limits_the_window_to_the_retention_period() {
+        let cli = Cli::try_parse_from(["kb", "sessions"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Sessions {
+                days: 14,
+                workspace_id: None
+            }
+        ));
+        for days in ["0", "91", "-1", "65536"] {
+            assert!(Cli::try_parse_from(["kb", "sessions", "--days", days]).is_err());
+        }
+        let cli = Cli::try_parse_from([
+            "kb",
+            "sessions",
+            "--days",
+            "90",
+            "--workspace-id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Sessions {
+                days: 90,
+                workspace_id: Some(_)
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "kb",
+                "sessions",
+                "--vault",
+                "private",
+                "--workspace-id",
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn observation_summary_requires_fixed_window_workspace_and_typed_exclusions() {
+        let cli = Cli::try_parse_from([
+            "kb",
+            "observation-summary",
+            "--since-ms",
+            "100",
+            "--until-ms",
+            "200",
+            "--workspace-id",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--exclude-window",
+            "110:120",
+            "--exclude-window",
+            "130:140",
+        ])
+        .unwrap();
+        let Command::ObservationSummary {
+            since_ms,
+            until_ms,
+            workspace_id,
+            exclude_window,
+        } = cli.command
+        else {
+            panic!("fixed observation summary expected");
+        };
+        assert_eq!((since_ms, until_ms), (100, 200));
+        assert_eq!(workspace_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(exclude_window.len(), 2);
+        assert_eq!(
+            (exclude_window[0].since_ms, exclude_window[0].until_ms),
+            (110, 120)
+        );
+        assert!(Cli::try_parse_from(["kb", "observation-summary"]).is_err());
+        for value in ["110", "120:110", "1:1", "-1:1", "one:two", "1:2:3"] {
+            assert!(super::parse_exclusion_window(value).is_err());
+        }
+        assert!(
+            Cli::try_parse_from([
+                "kb",
+                "observation-summary",
+                "--since-ms",
+                "100",
+                "--until-ms",
+                "200",
+                "--workspace-id",
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "--vault",
+                "private",
+            ])
+            .is_err()
         );
     }
 

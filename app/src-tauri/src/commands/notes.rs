@@ -36,6 +36,38 @@ pub fn note_get(state: State<'_, AppState>, id: String) -> AppResult<NoteView> {
     state.with_db(|vault, conn, degraded| note_view_from(vault, conn, &id, degraded))
 }
 
+/// 自動再取得や検索プレビューに文脈を奪われないよう、主ノートの選択だけを記録する。
+#[tauri::command(async)]
+#[specta::specta]
+pub fn note_set_current(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Vec<kb_core::degradation::Degradation>> {
+    state.with_db(|vault, conn, _| set_current_note_from(vault, conn, &id))
+}
+
+fn set_current_note_from(
+    vault: &kb_core::vault::Vault,
+    conn: &kb_core::rusqlite::Connection,
+    id: &str,
+) -> AppResult<Vec<kb_core::degradation::Degradation>> {
+    let id = kb_core::note_id::NoteId::parse(id).map_err(AppError::invalid_input)?;
+    let id = id.as_str();
+    if !kb_core::note_store::contains(conn, id).map_err(AppError::index)? {
+        return Err(AppError::note_not_found(id));
+    }
+    // 文脈の記録に失敗しても、既に取得した本文の表示は止めない。
+    Ok(kb_core::connect::set_current_note(vault, id)
+        .err()
+        .map(
+            |error| kb_core::degradation::Degradation::CurrentNoteContext {
+                detail: error.to_string(),
+            },
+        )
+        .into_iter()
+        .collect())
+}
+
 fn note_view_from(
     vault: &kb_core::vault::Vault,
     conn: &kb_core::rusqlite::Connection,
@@ -47,12 +79,7 @@ fn note_view_from(
     let note = vault
         .read_note_from_db(conn, id)
         .map_err(|_| AppError::note_not_found(id))?;
-    // 本文は表示できるので、現在ノート文脈や派生索引の失敗だけを型付きで添える。
-    if let Err(error) = kb_core::connect::set_current_note(vault, id) {
-        degraded.push(kb_core::degradation::Degradation::CurrentNoteContext {
-            detail: error.to_string(),
-        });
-    }
+    // 本文は表示できるので、派生索引の失敗だけを型付きで添える。
     let related = match related_of(conn, Some(id)) {
         Ok(related) => related,
         Err(error) => {
@@ -101,11 +128,133 @@ pub fn note_search(state: State<'_, AppState>, query: String) -> AppResult<Searc
     })
 }
 
+#[tauri::command(async)]
+#[specta::specta]
+pub fn note_browse(
+    state: State<'_, AppState>,
+    tags: Vec<String>,
+    period: kb_core::search::NoteBrowsePeriod,
+    sort: kb_core::search::NoteBrowseSort,
+    after: Option<String>,
+    limit: usize,
+) -> AppResult<kb_core::search::NoteBrowsePage> {
+    state.with_db(|_, conn, degraded| {
+        let mut page =
+            kb_core::search::browse_notes(conn, &tags, period, sort, after.as_deref(), limit)?;
+        page.degraded.extend(degraded);
+        Ok(page)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use kb_core::index::{open_db, sync};
     use kb_core::vault::{NoteProposal, Vault};
+
+    fn fixture_note(vault: &Vault, conn: &kb_core::rusqlite::Connection, title: &str) -> String {
+        vault
+            .propose(
+                conn,
+                NoteProposal {
+                    judgment: None,
+                    title,
+                    body: "合成ノートの本文",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: kb_core::authority::Authority {
+                        namespace: kb_core::authority::NoteNamespace::Knowledge,
+                        role: kb_core::authority::AuthorityRole::Canonical,
+                        status: kb_core::authority::AuthorityStatus::Active,
+                        scope: format!("test/{title}"),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "test/client",
+                },
+            )
+            .unwrap()
+    }
+
+    /// 2026-09-06: 自動更新・検索プレビューの取得が、明示選択したMCP文脈を上書きしない。
+    #[test]
+    fn note_reads_do_not_change_the_explicitly_selected_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let first = fixture_note(&vault, &conn, "first");
+        let preview = fixture_note(&vault, &conn, "preview");
+
+        note_view_from(&vault, &conn, &preview, Vec::new()).unwrap();
+        assert!(kb_core::connect::current_note(&vault).is_none());
+        assert!(
+            set_current_note_from(&vault, &conn, &first)
+                .unwrap()
+                .is_empty()
+        );
+        for id in [&first, &preview, &first, &preview] {
+            let view = note_view_from(&vault, &conn, id, Vec::new()).unwrap();
+            assert_eq!(view.body, "合成ノートの本文\n");
+            assert_eq!(
+                kb_core::connect::current_note(&vault).as_deref(),
+                Some(first.as_str())
+            );
+        }
+        assert!(
+            set_current_note_from(&vault, &conn, &preview)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            kb_core::connect::current_note(&vault).as_deref(),
+            Some(preview.as_str())
+        );
+    }
+
+    #[test]
+    fn selecting_an_invalid_or_missing_note_preserves_the_current_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let first = fixture_note(&vault, &conn, "first");
+        set_current_note_from(&vault, &conn, &first).unwrap();
+
+        assert!(matches!(
+            set_current_note_from(&vault, &conn, "../outside"),
+            Err(AppError::CoreFailed {
+                kind: kb_core::error::CoreErrorKind::InvalidInput
+            })
+        ));
+        assert!(matches!(
+            set_current_note_from(&vault, &conn, "notes/missing"),
+            Err(AppError::NoteNotFound { .. })
+        ));
+        assert_eq!(
+            kb_core::connect::current_note(&vault).as_deref(),
+            Some(first.as_str())
+        );
+    }
+
+    #[test]
+    fn context_write_failure_is_a_degradation_and_does_not_block_note_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let first = fixture_note(&vault, &conn, "first");
+        std::fs::create_dir(vault.root.join(".kb/current-note")).unwrap();
+
+        let degraded = set_current_note_from(&vault, &conn, &first).unwrap();
+        assert!(matches!(
+            degraded.as_slice(),
+            [kb_core::degradation::Degradation::CurrentNoteContext { .. }]
+        ));
+        let view = note_view_from(&vault, &conn, &first, Vec::new()).unwrap();
+        assert_eq!(view.body, "合成ノートの本文\n");
+        assert!(!view.degraded.iter().any(|item| matches!(
+            item,
+            kb_core::degradation::Degradation::CurrentNoteContext { .. }
+        )));
+    }
 
     /// 2026-08-16までは関連・近いノートのDB失敗が空配列になり、0件と見分けられなかった。
     #[test]
@@ -117,6 +266,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "本文は読める",
                     body: "本文",
                     description: None,

@@ -302,6 +302,7 @@ pub fn create_fixture(suite: &RuleDeliverySuite, path: &Path) -> Result<Vault> {
         let id = vault.propose(
             &conn,
             NoteProposal {
+                judgment: None,
                 title: &note.title,
                 body: &note.body,
                 description: Some("Rule Delivery Matrix evaluation fixture"),
