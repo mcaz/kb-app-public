@@ -16,7 +16,7 @@ pub const AUTO_SEED_LIMIT: usize = 5;
 pub const AUTO_MAX_DEPTH: u8 = 2;
 pub const AUTO_CANDIDATE_LIMIT: usize = 50;
 pub const AUTO_DOCUMENT_LIMIT: usize = 10;
-/// Codex hook側の約12,000 token spill閾値へ、見出し等の余白を残す。
+/// 検索側で選ぶ本文の予算。host向けstdout全体の上限は`hook_delivery`で別に適用する。
 pub const AUTO_ESTIMATED_TOKEN_BUDGET: usize = 10_000;
 
 /// 候補展開と本文選択の予算。既定は契約 8 の hook 数値(= `RetrievalProfile::SessionAuto`)。
@@ -113,6 +113,8 @@ pub struct RetrievalBundle {
     pub documents: Vec<RetrievalDocument>,
     pub candidates: Vec<RetrievalCandidate>,
     pub stats: RetrievalStats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judgment_context: Option<crate::judgment_context::JudgmentContext>,
 }
 
 #[derive(Clone, Debug)]
@@ -139,7 +141,7 @@ pub fn context_documents(
     ranked_hit_ids: &[String],
     options: RetrievalOptions,
 ) -> Result<RetrievalBundle> {
-    context_documents_inner(conn, ranked_hit_ids, None, options)
+    context_documents_inner(conn, ranked_hit_ids, None, options, None, true)
 }
 
 /// 検索queryに合う見出し・passageだけへ長文ノートを縮約して返す本番retrieval経路。
@@ -149,7 +151,35 @@ pub fn context_documents_for_query(
     query: &str,
     options: RetrievalOptions,
 ) -> Result<RetrievalBundle> {
-    context_documents_inner(conn, ranked_hit_ids, Some(query), options)
+    context_documents_inner(conn, ranked_hit_ids, Some(query), options, None, true)
+}
+
+/// scopeは呼出元の構造化入力だけを使い、自由文queryから適用済みと推測しない。
+pub fn context_documents_for_query_in_scope(
+    conn: &Connection,
+    ranked_hit_ids: &[String],
+    query: &str,
+    options: RetrievalOptions,
+    context_scope: Option<&str>,
+) -> Result<RetrievalBundle> {
+    context_documents_inner(
+        conn,
+        ranked_hit_ids,
+        Some(query),
+        options,
+        context_scope,
+        true,
+    )
+}
+
+/// 任意の判断情報が壊れても、呼出元が劣化を通知したうえで通常本文を返せる退避口。
+pub(crate) fn context_documents_for_query_without_judgment(
+    conn: &Connection,
+    ranked_hit_ids: &[String],
+    query: &str,
+    options: RetrievalOptions,
+) -> Result<RetrievalBundle> {
+    context_documents_inner(conn, ranked_hit_ids, Some(query), options, None, false)
 }
 
 fn context_documents_inner(
@@ -157,12 +187,29 @@ fn context_documents_inner(
     ranked_hit_ids: &[String],
     query: Option<&str>,
     options: RetrievalOptions,
+    context_scope: Option<&str>,
+    include_judgment: bool,
 ) -> Result<RetrievalBundle> {
     let started = Instant::now();
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
 
-    for id in ranked_hit_ids.iter().take(options.seed_limit) {
+    let mut visible_seed = conn.prepare_cached(
+        "SELECT 1 FROM notes WHERE id = ?1 AND status != 'deprecated'
+           AND normal_reference_allowed = 1",
+    )?;
+    for id in ranked_hit_ids {
+        if candidates.len() >= options.seed_limit {
+            break;
+        }
+        // 既知IDを渡された場合も候補案内へ露出させず、非表示票でseed枠を消費しない。
+        if visible_seed
+            .query_row([id], |_| Ok(()))
+            .optional()?
+            .is_none()
+        {
+            continue;
+        }
         push_candidate(
             &mut candidates,
             &mut seen,
@@ -252,7 +299,8 @@ fn context_documents_inner(
             .query_row(
                 "SELECT title, document, namespace, authority_role, authority_status,
                         authority_scope
-                 FROM notes WHERE id = ?1 AND status != 'deprecated'",
+                 FROM notes WHERE id = ?1 AND status != 'deprecated'
+                   AND normal_reference_allowed = 1",
                 [&candidate.id],
                 |row| {
                     Ok(CandidateRow {
@@ -279,12 +327,16 @@ fn context_documents_inner(
             authority_status: None,
             authority_scope: None,
         };
-        let Some(row) = row.filter(|row| !row.document.is_empty()) else {
+        // 呼出元がsnapshotを持たない場合の途中更新でも、非表示IDを省略候補へ出さない。
+        let Some(row) = row else {
+            continue;
+        };
+        if row.document.is_empty() {
             missing_documents += 1;
             summary.omitted_reason = Some("missing_document");
             candidate_summaries.push(summary);
             continue;
-        };
+        }
         summary.title = row.title;
         summary.namespace = row.namespace;
         summary.authority_role = row.authority_role;
@@ -334,6 +386,17 @@ fn context_documents_inner(
         .filter(|doc| doc.source == RetrievalSource::IncomingLink)
         .count();
 
+    let judgment_context = if include_judgment && options.document_limit > 0 {
+        let ids = candidate_summaries
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect::<Vec<_>>();
+        let context = crate::judgment_context::context_for_notes(conn, &ids, context_scope)?;
+        context.has_material().then_some(context)
+    } else {
+        None
+    };
+
     Ok(RetrievalBundle {
         stats: RetrievalStats {
             seed_count,
@@ -358,6 +421,7 @@ fn context_documents_inner(
         },
         documents,
         candidates: candidate_summaries,
+        judgment_context,
     })
 }
 
@@ -545,7 +609,9 @@ fn outgoing_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
         "SELECT other FROM (
              SELECT l.dst AS other, 1 AS edge_priority FROM links l
              JOIN notes n ON n.id = l.dst
-             WHERE l.src = ?1 AND n.status != 'deprecated'
+             JOIN notes root ON root.id = l.src
+             WHERE l.src = ?1 AND n.status != 'deprecated' AND n.normal_reference_allowed = 1
+               AND root.status != 'deprecated' AND root.normal_reference_allowed = 1
              UNION ALL
              SELECT target.id AS other,
                     CASE relation.kind
@@ -561,6 +627,8 @@ fn outgoing_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
              JOIN note_relations relation ON relation.src_uid = source.note_uid
              JOIN notes target ON target.note_uid = relation.target_uid
              WHERE source.id = ?1 AND target.status != 'deprecated'
+               AND target.normal_reference_allowed = 1
+               AND source.status != 'deprecated' AND source.normal_reference_allowed = 1
          ) GROUP BY other ORDER BY MIN(edge_priority), other",
     )?;
     let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
@@ -572,7 +640,9 @@ fn incoming_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
         "SELECT other FROM (
              SELECT l.src AS other, 1 AS edge_priority FROM links l
              JOIN notes n ON n.id = l.src
-             WHERE l.dst = ?1 AND n.status != 'deprecated'
+             JOIN notes root ON root.id = l.dst
+             WHERE l.dst = ?1 AND n.status != 'deprecated' AND n.normal_reference_allowed = 1
+               AND root.status != 'deprecated' AND root.normal_reference_allowed = 1
              UNION ALL
              SELECT source.id AS other,
                     CASE relation.kind
@@ -588,6 +658,8 @@ fn incoming_ids(conn: &Connection, id: &str) -> Result<Vec<String>> {
              JOIN note_relations relation ON relation.target_uid = target.note_uid
              JOIN notes source ON source.note_uid = relation.src_uid
              WHERE target.id = ?1 AND source.status != 'deprecated'
+               AND source.normal_reference_allowed = 1
+               AND target.status != 'deprecated' AND target.normal_reference_allowed = 1
          ) GROUP BY other ORDER BY MIN(edge_priority), other",
     )?;
     let rows = statement.query_map([id], |row| row.get::<_, String>(0))?;
@@ -610,7 +682,8 @@ mod tests {
                  namespace TEXT,
                  authority_role TEXT,
                  authority_status TEXT,
-                 authority_scope TEXT
+                 authority_scope TEXT,
+                 normal_reference_allowed INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE links(src TEXT, dst TEXT, PRIMARY KEY(src, dst));
              CREATE INDEX links_dst ON links(dst);
@@ -628,7 +701,7 @@ mod tests {
 
     fn add_note(conn: &Connection, id: &str, text: &str) {
         conn.execute(
-            "INSERT INTO notes(id, title, status, document) VALUES (?1, ?1, 'stable', ?2)",
+            "INSERT INTO notes(id, title, status, document, normal_reference_allowed) VALUES (?1, ?1, 'stable', ?2, 1)",
             rusqlite::params![id, text],
         )
         .unwrap();
@@ -636,11 +709,45 @@ mod tests {
 
     fn add_note_with_uid(conn: &Connection, id: &str, uid: &str) {
         conn.execute(
-            "INSERT INTO notes(id, note_uid, title, status, document)
-             VALUES (?1, ?2, ?1, 'stable', ?1)",
+            "INSERT INTO notes(id, note_uid, title, status, document, normal_reference_allowed)
+             VALUES (?1, ?2, ?1, 'stable', ?1, 1)",
             rusqlite::params![id, uid],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn missing_optional_judgment_relations_can_fall_back_to_the_original_document() {
+        use crate::authority::{Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteUid};
+        use crate::frontmatter::{Frontmatter, Note};
+        let conn = setup();
+        let mut front = Frontmatter::new_note("退避対象");
+        front.note_uid = Some(NoteUid::new());
+        front.authority = Some(Authority {
+            namespace: NoteNamespace::Knowledge,
+            role: AuthorityRole::Canonical,
+            status: AuthorityStatus::Active,
+            scope: "fixture/fallback".into(),
+        });
+        let text = Note {
+            front,
+            body: "元の本文を返す".into(),
+        }
+        .to_file_string()
+        .unwrap();
+        add_note(&conn, "notes/source", &text);
+        conn.execute_batch("DROP TABLE note_relations").unwrap();
+        let options = RetrievalOptions {
+            max_depth: 0,
+            include_incoming: false,
+            ..RetrievalOptions::default()
+        };
+        let ids = ["notes/source".to_string()];
+        assert!(context_documents_for_query(&conn, &ids, "本文", options).is_err());
+        let fallback =
+            context_documents_for_query_without_judgment(&conn, &ids, "本文", options).unwrap();
+        assert_eq!(fallback.documents[0].text, text);
+        assert!(fallback.judgment_context.is_none());
     }
 
     #[test]
@@ -684,6 +791,102 @@ mod tests {
         assert_eq!(bundle.stats.selected_incoming, 1);
     }
 
+    /// 2026-09-06: 検索を迂回した既知IDも、本文だけでなく候補案内から除外する。
+    #[test]
+    fn hidden_seeds_do_not_consume_limits_or_appear_in_candidate_metadata() {
+        let conn = setup();
+        add_note(&conn, "hidden", "非表示票の本文");
+        add_note(&conn, "visible", "通常参照本文");
+        conn.execute(
+            "UPDATE notes SET normal_reference_allowed = 0 WHERE id = 'hidden'",
+            [],
+        )
+        .unwrap();
+        let options = RetrievalOptions {
+            seed_limit: 1,
+            candidate_limit: 1,
+            document_limit: 1,
+            max_depth: 0,
+            include_incoming: false,
+            ..RetrievalOptions::default()
+        };
+        let hidden = context_documents(&conn, &["hidden".into()], options).unwrap();
+        assert!(hidden.documents.is_empty());
+        assert!(hidden.candidates.is_empty());
+        assert_eq!(hidden.stats.seed_count, 0);
+        assert_eq!(hidden.stats.candidate_count, 0);
+        let visible = context_documents_for_query(
+            &conn,
+            &["hidden".into(), "missing".into(), "visible".into()],
+            "本文",
+            options,
+        )
+        .unwrap();
+        assert_eq!(visible.documents.len(), 1);
+        assert_eq!(visible.documents[0].id, "visible");
+        assert_eq!(visible.candidates.len(), 1);
+        assert_eq!(visible.candidates[0].id, "visible");
+    }
+
+    /// 2026-09-06: 非表示票をリンクの中継点にしても、候補・本文・探索枠へ混ぜない。
+    #[test]
+    fn hidden_link_endpoints_and_bridges_are_filtered_before_candidate_limits() {
+        let conn = setup();
+        for id in [
+            "seed",
+            "hidden-out",
+            "hidden-in",
+            "hidden-typed",
+            "bridge-target",
+            "visible",
+        ] {
+            add_note_with_uid(&conn, id, &format!("uid-{id}"));
+        }
+        conn.execute_batch(
+            "UPDATE notes SET normal_reference_allowed = 0 WHERE id LIKE 'hidden-%';
+             INSERT INTO links VALUES ('seed','hidden-out');
+             INSERT INTO links VALUES ('hidden-out','bridge-target');
+             INSERT INTO links VALUES ('hidden-in','seed');
+             INSERT INTO links VALUES ('seed','visible');
+             INSERT INTO note_relations VALUES ('uid-seed','supports','uid-hidden-typed');
+             INSERT INTO note_relations VALUES ('uid-hidden-typed','supports','uid-seed');
+             INSERT INTO note_relations VALUES ('uid-hidden-typed','supports','uid-bridge-target');",
+        )
+        .unwrap();
+        assert_eq!(outgoing_ids(&conn, "seed").unwrap(), ["visible"]);
+        assert!(incoming_ids(&conn, "seed").unwrap().is_empty());
+        for id in ["hidden-out", "hidden-in", "hidden-typed"] {
+            assert!(outgoing_ids(&conn, id).unwrap().is_empty());
+            assert!(incoming_ids(&conn, id).unwrap().is_empty());
+        }
+        let bundle = context_documents(
+            &conn,
+            &["seed".into()],
+            RetrievalOptions {
+                candidate_limit: 2,
+                document_limit: 2,
+                ..RetrievalOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            bundle
+                .documents
+                .iter()
+                .map(|doc| doc.id.as_str())
+                .collect::<Vec<_>>(),
+            ["seed", "visible"]
+        );
+        assert_eq!(
+            bundle
+                .candidates
+                .iter()
+                .map(|doc| doc.id.as_str())
+                .collect::<Vec<_>>(),
+            ["seed", "visible"]
+        );
+    }
+
     #[test]
     fn token_budget_skips_large_candidate_and_keeps_later_short_candidate() {
         let conn = setup();
@@ -724,7 +927,7 @@ mod tests {
             add_note(&conn, id, id);
         }
         conn.execute(
-            "INSERT INTO notes(id, title, status, document) VALUES ('old', 'old', 'deprecated', 'old')",
+            "INSERT INTO notes(id, title, status, document, normal_reference_allowed) VALUES ('old', 'old', 'deprecated', 'old', 1)",
             [],
         )
         .unwrap();
@@ -885,9 +1088,9 @@ mod tests {
         add_note(&conn, "legacy", "legacy body");
         conn.execute(
             "INSERT INTO notes(id, title, status, document, namespace, authority_role,
-                               authority_status, authority_scope)
+                               authority_status, authority_scope, normal_reference_allowed)
              VALUES ('canon', 'canon', 'stable', 'canon body', 'decisions', 'canonical',
-                     'active', 'atlas/recovery')",
+                     'active', 'atlas/recovery', 1)",
             [],
         )
         .unwrap();

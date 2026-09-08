@@ -1,5 +1,7 @@
 {
   "search": {
+    "allNotes": "All notes",
+    "loadedCount": "Showing {{loaded}} of {{total}}",
     "placeholder": "Search notes",
     "open": "Open search",
     "dialogTitle": "Search notes",
@@ -80,7 +82,15 @@
     "opened": "Opened Claude",
     "missing": "That note doesn’t exist yet",
     "careConfirm": "Got it",
-    "careDismissed": "OK, leaving it as is"
+    "careDismissed": "OK, leaving it as is",
+    "metadata": "Metadata",
+    "titleLabel": "Title",
+    "descriptionLabel": "Description",
+    "tagsLabel": "Tags",
+    "createdLabel": "Created",
+    "updatedLabel": "Updated",
+    "showSource": "Show source",
+    "showPreview": "Show preview"
   },
   "file": {
     "label": "Files:",

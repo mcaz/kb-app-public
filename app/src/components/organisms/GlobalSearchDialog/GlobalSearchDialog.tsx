@@ -1,4 +1,4 @@
-import { Clock3, Search, Star } from "lucide-react";
+import { Clock3, NotebookText, Search, Star } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -23,31 +23,48 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { formatDateTime } from "@/lib/format";
 import { matchesFilter, sortHits } from "@/lib/hits";
-import { useFavorites, useHomeState, useNoteSearch } from "@/lib/queries";
+import { useFavorites, useHomeState, useNoteBrowse, useNoteSearch } from "@/lib/queries";
 import { effectiveSearchPane, resolveSearchSelection, type SearchPane } from "@/lib/searchDialog";
 import { useSession } from "@/lib/stores/session";
 
 import { SearchFilterBar } from "./SearchFilterBar";
 
 export interface GlobalSearchDialogProps {
+  mode?: "recent" | "all";
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
 /** どの画面からでも開ける、結果と本文プレビューを一体にした検索。 */
-export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogProps) {
+export function GlobalSearchDialog({
+  mode = "recent",
+  open,
+  onOpenChange,
+}: GlobalSearchDialogProps) {
   const { t, i18n } = useTranslation(["notes", "common"]);
   const session = useSession();
   const compact = useMediaQuery("(max-width: 759px)");
   const [compactPane, setCompactPane] = useState<SearchPane>("results");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const debouncedQuery = useDebouncedValue(session.query.trim(), 250);
-  const search = useNoteSearch(debouncedQuery);
-  const { data: home } = useHomeState();
+  const query = session.query.trim();
+  const debouncedQuery = useDebouncedValue(query, 250);
+  const browsingAll = mode === "all" && query === "";
+  const searching = query.length > 0;
+  const queryPending = searching && query !== debouncedQuery;
+  const search = useNoteSearch(debouncedQuery, open && searching && !queryPending);
+  const browse = useNoteBrowse(
+    session.selectedTags,
+    session.period,
+    session.sort,
+    open && browsingAll,
+  );
+  const homeQuery = useHomeState(open);
+  const home = homeQuery.data;
   const { data: favorites = [] } = useFavorites();
-  const searching = debouncedQuery.length > 0;
 
   const hits = useMemo(() => {
+    if (browsingAll) return browse.data?.pages.flatMap((page) => page.hits) ?? [];
+    if (queryPending) return [];
     const source = (searching ? search.data?.hits : home?.notes) ?? [];
     return sortHits(
       source.filter((hit) =>
@@ -57,6 +74,9 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
       i18n.language,
     ).slice(0, 30);
   }, [
+    browsingAll,
+    browse.data,
+    queryPending,
     home?.notes,
     i18n.language,
     search.data?.hits,
@@ -86,7 +106,19 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
 
   const showResults = !compact || effectiveCompactPane === "results";
   const showPreview = !compact || effectiveCompactPane === "preview";
-  const resultHeading = searching ? t("notes:search.results") : t("notes:search.recent");
+  const resultHeading = browsingAll
+    ? t("notes:search.allNotes")
+    : searching
+      ? t("notes:search.results")
+      : t("notes:search.recent");
+  const results = browsingAll ? browse : searching ? search : homeQuery;
+  const loading = queryPending || results.isPending;
+  const failed = !queryPending && results.isError;
+  const total = browsingAll ? browse.data?.pages[0]?.total : loading ? undefined : hits.length;
+  const retry = () => {
+    if (browsingAll && browse.isFetchNextPageError) void browse.fetchNextPage();
+    else void results.refetch();
+  };
 
   return (
     <Dialog
@@ -134,7 +166,7 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
                 tags={session.selectedTags}
                 period={session.period}
                 sort={session.sort}
-                onAddTag={session.addTag}
+                onAddTag={(tag) => session.setSearchTags([...session.selectedTags, tag])}
                 onRemoveTag={session.removeTag}
                 onClearTags={session.clearTags}
                 onPeriodChange={session.setPeriod}
@@ -167,21 +199,34 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
                   </div>
                 )}
 
-                {searching && (
-                  <DegradedBanner items={search.data?.degraded ?? []} variant="inline" />
-                )}
+                <DegradedBanner
+                  items={
+                    browsingAll
+                      ? (browse.data?.pages.flatMap((page) => page.degraded) ?? [])
+                      : searching
+                        ? (search.data?.degraded ?? [])
+                        : []
+                  }
+                  variant="inline"
+                />
 
                 <div className="text-muted flex items-center gap-1.5 px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-wide">
-                  {searching ? <Search className="size-3.5" /> : <Clock3 className="size-3.5" />}
+                  {browsingAll ? (
+                    <NotebookText className="size-3.5" />
+                  ) : searching ? (
+                    <Search className="size-3.5" />
+                  ) : (
+                    <Clock3 className="size-3.5" />
+                  )}
                   <span>{resultHeading}</span>
-                  <span>({hits.length})</span>
-                  {search.isFetching && (
+                  {total !== undefined && <span>({total})</span>}
+                  {(queryPending || results.isFetching) && (
                     <span className="ml-auto">{t("common:state.loading")}</span>
                   )}
                 </div>
 
                 <CommandList className="max-h-none min-h-0 flex-1 px-2 pb-2">
-                  <CommandEmpty>{t("notes:list.notFound")}</CommandEmpty>
+                  {!loading && !failed && <CommandEmpty>{t("notes:list.notFound")}</CommandEmpty>}
                   <CommandGroup>
                     {hits.map((hit) => (
                       <CommandItem
@@ -211,6 +256,42 @@ export function GlobalSearchDialog({ open, onOpenChange }: GlobalSearchDialogPro
                     ))}
                   </CommandGroup>
                 </CommandList>
+                {failed && (
+                  <div role="alert" className="border-line border-t px-3 py-2 text-sm">
+                    <p>{t("notes:browse.loadError")}</p>
+                    <button
+                      type="button"
+                      className="text-grow mt-1 cursor-pointer underline"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") event.stopPropagation();
+                      }}
+                      onClick={retry}
+                      disabled={results.isFetching}
+                    >
+                      {t("notes:browse.retry")}
+                    </button>
+                  </div>
+                )}
+                {browsingAll && total !== undefined && (
+                  <div className="border-line flex items-center justify-between border-t px-3 py-2 text-xs">
+                    <span className="text-muted">
+                      {t("notes:search.loadedCount", { loaded: hits.length, total })}
+                    </span>
+                    {browse.hasNextPage && !browse.isFetchNextPageError && (
+                      <button
+                        type="button"
+                        className="text-grow cursor-pointer underline disabled:opacity-50"
+                        disabled={browse.isFetching}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") event.stopPropagation();
+                        }}
+                        onClick={() => void browse.fetchNextPage()}
+                      >
+                        {t("notes:browse.loadMore")}
+                      </button>
+                    )}
+                  </div>
+                )}
               </section>
             )}
 

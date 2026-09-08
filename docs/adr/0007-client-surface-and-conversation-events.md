@@ -29,6 +29,10 @@ Claude Code用managed sandboxへ、ChatGPTをCodex用policyへ誤分類してい
   新語追加能力はtrusted UI / CLIの別承認経路に限定する。
 - note link、degradation、KB OFF、tool errorを`structuredContent.conversation_events` v1へ
   `required=true`で返す。対応hostはモデルの最終文と独立して描画する。
+- 2026-09-05本人指定: 起票・更新の報告には、参照リンク付きタイトルとnamespace/scopeを含める。
+  text応答をそのまま一行報告にできる形にし、`note_created` / `note_updated` eventには保存後の
+  authorityも載せる。legacyのauthority不在はnullとし、textでは未設定と示す。非対応host向けには
+  instructionsでも会話への報告を求めるが、下記の保証境界は変わらない。
 
 ## 保証境界
 

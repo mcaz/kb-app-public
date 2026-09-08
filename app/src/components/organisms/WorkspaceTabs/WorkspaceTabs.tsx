@@ -1,6 +1,7 @@
 import {
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   House,
   NotebookText,
   Paperclip,
@@ -14,18 +15,21 @@ import { useTranslation } from "react-i18next";
 import { Icon } from "@/components/atoms/Icon";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { usePrefs } from "@/lib/stores/prefs";
-import { useSession, type View, type WorkspaceTab } from "@/lib/stores/session";
+import { useSession, type View } from "@/lib/stores/session";
+
+import { tabTitle } from "./tabTitle";
 
 const viewIcons = {
   home: House,
   notes: NotebookText,
   files: Paperclip,
   graph: Waypoints,
+  proposals: ClipboardCheck,
 } satisfies Record<View, typeof House>;
 
 /** 開いている作業文脈を切り替え、各タブのページ履歴を独立して保つ。 */
 export function WorkspaceTabs() {
-  const { t } = useTranslation();
+  const { t } = useTranslation("common");
   const tabs = useSession((state) => state.tabs);
   const activeTabId = useSession((state) => state.activeTabId);
   const openTab = useSession((state) => state.openTab);
@@ -67,6 +71,10 @@ export function WorkspaceTabs() {
 
   useEffect(() => {
     const activeIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+    // 見出しを操作している間は、次の矢印キーも新しいタブを起点にする。
+    if (tabListRef.current?.contains(document.activeElement)) {
+      tabRefs.current[activeIndex]?.focus();
+    }
     tabRefs.current[activeIndex]?.scrollIntoView({
       behavior: "smooth",
       block: "nearest",
@@ -75,6 +83,15 @@ export function WorkspaceTabs() {
   }, [activeTabId, tabs]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    )
+      return;
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const nextIndex =
@@ -170,6 +187,7 @@ export function WorkspaceTabs() {
                   type="button"
                   className="hover:bg-sel mr-1 grid size-7 flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-inherit opacity-60 hover:opacity-100"
                   aria-label={t("nav.closeTab", { name: tabTitle(tab, t) })}
+                  title={`${t("nav.closeTab", { name: tabTitle(tab, t) })} (${navigator.platform.startsWith("Mac") ? "⌘W" : "Ctrl+W"})`}
                   onClick={() => closeTab(tab.id)}
                 >
                   <Icon as={X} size="sm" />
@@ -184,6 +202,7 @@ export function WorkspaceTabs() {
           type="button"
           className="text-muted hover:bg-panel-2 hover:text-ink mb-1 grid size-8 flex-none cursor-pointer place-items-center rounded-lg border-0 bg-transparent"
           aria-label={t("nav.newTab")}
+          title={`${t("nav.newTab")} (${navigator.platform.startsWith("Mac") ? "⌘N" : "Ctrl+N"})`}
           onClick={openTab}
         >
           <Icon as={Plus} />
@@ -191,13 +210,4 @@ export function WorkspaceTabs() {
       </div>
     </header>
   );
-}
-
-function tabTitle(tab: WorkspaceTab, t: ReturnType<typeof useTranslation>["t"]) {
-  if (tab.view === "notes") {
-    const path = tab.selectedId ?? tab.selectedCategory;
-    const name = path?.split("/").filter(Boolean).at(-1);
-    return name || t("nav.notes");
-  }
-  return t(`nav.${tab.view}`);
 }

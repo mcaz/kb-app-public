@@ -1,0 +1,1 @@
+export { StorageRecoveryPage } from "./StorageRecoveryPage";

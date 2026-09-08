@@ -28,6 +28,12 @@ pub fn tray_set_labels(app: AppHandle, show: String, quit: String) -> AppResult<
     background::apply_labels(&app, &show, &quit)
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn window_hide(app: AppHandle) -> AppResult<()> {
+    background::hide_or_close(&app)
+}
+
 fn current_exe() -> AppResult<std::path::PathBuf> {
     std::env::current_exe().map_err(|error| AppError::configuration(anyhow::Error::new(error)))
 }

@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum ClientSurface {
     ClaudeCode,
@@ -43,6 +44,28 @@ pub enum PreAnswerRetrieval {
     Unavailable,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookOutputUnit {
+    Utf8Bytes,
+    Utf16CodeUnits,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HookOutputBudget {
+    pub unit: HookOutputUnit,
+    pub limit: usize,
+}
+
+impl HookOutputBudget {
+    pub fn measure(self, text: &str) -> usize {
+        match self.unit {
+            HookOutputUnit::Utf8Bytes => text.len(),
+            HookOutputUnit::Utf16CodeUnits => text.encode_utf16().count(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ClientCapabilities {
     pub client_surface: ClientSurface,
@@ -55,6 +78,20 @@ pub struct ClientCapabilities {
 }
 
 impl ClientSurface {
+    pub fn hook_output_budget(self) -> HookOutputBudget {
+        match self {
+            Self::ClaudeCode => HookOutputBudget {
+                unit: HookOutputUnit::Utf16CodeUnits,
+                limit: 9_000,
+            },
+            // PATH上のCLI版は稼働中hostの版を証明しない。確認できない面も保守枠を維持する。
+            _ => HookOutputBudget {
+                unit: HookOutputUnit::Utf8Bytes,
+                limit: 9_600,
+            },
+        }
+    }
+
     /// `generated.by` と MCP 起動引数で共有する actor の先頭segmentだけを見る。
     /// model名の `claude` / `gpt` などはsurface判定へ使わない。
     pub fn from_hint(client: &str) -> Self {
@@ -127,6 +164,20 @@ impl ClientSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_budgets_keep_units_and_unknown_hosts_explicit() {
+        let claude = ClientSurface::ClaudeCode.hook_output_budget();
+        assert_eq!(claude.unit, HookOutputUnit::Utf16CodeUnits);
+        assert_eq!(claude.limit, 9_000);
+        assert_eq!(claude.measure("日本😀"), 4);
+        for surface in [ClientSurface::CodexCli, ClientSurface::Unknown] {
+            let budget = surface.hook_output_budget();
+            assert_eq!(budget.unit, HookOutputUnit::Utf8Bytes);
+            assert_eq!(budget.limit, 9_600);
+            assert_eq!(budget.measure("日本😀"), 10);
+        }
+    }
 
     #[test]
     fn surface_uses_the_actor_segment_instead_of_model_name_substrings() {

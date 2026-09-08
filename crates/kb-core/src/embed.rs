@@ -347,8 +347,13 @@ pub fn embed_pending(conn: &Connection, cap: usize) -> Result<usize> {
 /// 現行producerの複合形stamp(`is_current_stamp`)の行だけを対象にする —
 /// 旧形式stampの行は再埋め込みが追い付くまで意味検索に混ぜない。
 pub fn knn(conn: &Connection, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
-    let mut stmt =
-        conn.prepare_cached("SELECT id, stamp, embedding FROM note_vecs WHERE stamp IS NOT NULL")?;
+    // 検索結果の件数を切る前に除外し、未採用票で近傍枠を消費させない。
+    let mut stmt = conn.prepare_cached(
+        "SELECT v.id, v.stamp, v.embedding FROM note_vecs v
+         JOIN notes n ON n.id = v.id
+         WHERE v.stamp IS NOT NULL AND n.status != 'deprecated'
+           AND n.normal_reference_allowed = 1",
+    )?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,

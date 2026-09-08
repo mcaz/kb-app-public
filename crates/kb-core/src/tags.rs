@@ -10,7 +10,8 @@
 //! GUI はノートを作らない。MCP・CLI・旧 Markdown import の全書き込み経路をここへ
 //! 合流させ、入口ごとの検証忘れを作らない。
 
-use anyhow::{Result, bail};
+use crate::write_rejection::WriteRejection;
+use anyhow::Result;
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,10 +25,10 @@ const VOCAB_SHOWN: usize = 60;
 /// 契約1: ノートはタグを1〜4個持つ。語彙判定より前に構造を確定する。
 pub fn validate_structure(tags: &[String]) -> Result<()> {
     if tags.is_empty() || tags.len() > 4 {
-        bail!(
+        return Err(WriteRejection::TagCount.validation(format!(
             "契約: ノートにはタグを1〜4個付ける(いまは {} 個)。既存の語彙に揃えること",
             tags.len()
-        );
+        )));
     }
     for tag in tags {
         validate_shape(tag)?;
@@ -41,10 +42,11 @@ pub fn validate_structure(tags: &[String]) -> Result<()> {
 /// (実例: `ai-agent`/`ai-agents`、`skill`/`skills`、`知見管理`/`knowledge-management`)。
 pub fn validate_shape(tag: &str) -> Result<()> {
     if tag.is_empty() {
-        bail!("契約: 空のタグは付けられない");
+        return Err(WriteRejection::TagShape.validation("契約: 空のタグは付けられない"));
     }
     if tag.chars().count() > MAX_LEN {
-        bail!("契約: タグは{MAX_LEN}文字以内(不正: 「{tag}」)");
+        return Err(WriteRejection::TagShape
+            .validation(format!("契約: タグは{MAX_LEN}文字以内(不正: 「{tag}」)")));
     }
     let first_ok = tag
         .chars()
@@ -54,10 +56,10 @@ pub fn validate_shape(tag: &str) -> Result<()> {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if !first_ok || !rest_ok {
-        bail!(
+        return Err(WriteRejection::TagShape.validation(format!(
             "契約: タグは英小文字・数字・ハイフンのみで先頭は英数(不正: 「{tag}」)。\
 日本語・大文字・空白は使わない"
-        );
+        )));
     }
     Ok(())
 }
@@ -83,7 +85,8 @@ pub fn glossary(conn: &Connection) -> Result<Glossary> {
     let found: Option<(String, String)> = conn
         .query_row(
             "SELECT id, body FROM notes
-             WHERE status != 'deprecated' AND (title LIKE '%タグ運用%' OR title LIKE '%タグの運用%')
+             WHERE status != 'deprecated' AND normal_reference_allowed = 1
+               AND (title LIKE '%タグ運用%' OR title LIKE '%タグの運用%')
              LIMIT 1",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
@@ -211,7 +214,7 @@ impl TagValidator {
         } else {
             String::new()
         };
-        bail!(
+        Err(WriteRejection::TagVocabulary.validation(format!(
             "契約: 語彙にないタグは使えない。{}\n現在の語彙({}語): {}{}\n\
 既存語で8割合うならそれを使う。どうしても新語が要るなら allow_new_tags を true にして\
 呼び直す(合意は KB の「タグ運用」ノート)",
@@ -219,7 +222,7 @@ impl TagValidator {
             vocab.len(),
             shown.join(" / "),
             tail
-        );
+        )))
     }
 }
 
@@ -363,6 +366,58 @@ mod tests {
             BTreeSet::from(["kb-app".to_string(), "knowledge-base".to_string()])
         );
         assert!(validate(&conn, &["stray".into()], false).is_err());
+    }
+
+    /// 2026-09-06: 未採用票内の語彙案が、通常書込のタグ正本やエラーの既存語一覧へ昇格しない。
+    #[test]
+    fn unapproved_tag_proposal_cannot_become_the_glossary() {
+        let (_d, vault, conn) = setup();
+        let ticket = crate::proposal_workflow::create(
+            &vault,
+            &conn,
+            crate::proposal_workflow::ProposalInput {
+                title: "タグ運用の改訂提案".into(),
+                problem: "語彙を見直したい".into(),
+                proposal:
+                    "## 語彙\n\n| タグ | 説明 |\n|---|---|\n| unapproved-term | 未採用の語彙案 |\n"
+                        .into(),
+                impact: "既存ノートのタグ選択に影響する".into(),
+                acceptance: "本人のレビューと採否を経て反映する".into(),
+                tags: vec!["kb-app".into()],
+                scope: "kb-app/tags".into(),
+            },
+            "test/client",
+        )
+        .unwrap();
+        assert_eq!(
+            ticket.ticket.status,
+            crate::proposal_workflow::TicketStatus::ReviewPending
+        );
+        assert!(glossary(&conn).unwrap().note_id.is_none());
+        // 語彙正本がないときの使用済みタグfallbackは維持し、本文の提案語彙だけを除く。
+        assert_eq!(
+            vocabulary(&conn).unwrap(),
+            BTreeSet::from(["kb-app".into()])
+        );
+
+        let glossary_id = vault
+            .propose_for_test(
+                "タグ運用 — 合意の置き場",
+                "## 語彙\n\n| タグ | 説明 |\n|---|---|\n| kb-app | 合意済みの語彙 |\n",
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+        assert_eq!(glossary(&conn).unwrap().note_id, Some(glossary_id));
+        assert_eq!(
+            vocabulary(&conn).unwrap(),
+            BTreeSet::from(["kb-app".into()])
+        );
+        validate(&conn, &["kb-app".into()], false).unwrap();
+        let error = validate(&conn, &["unknown-term".into()], false).unwrap_err();
+        assert!(!error.to_string().contains("unapproved-term"));
     }
 
     #[test]

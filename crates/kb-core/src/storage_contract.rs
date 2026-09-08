@@ -139,11 +139,18 @@ fn read_notes(vault: &Vault) -> Result<Vec<SnapshotNote>> {
         .collect()
 }
 
-fn validate_note_authority(notes: &[SnapshotNote]) -> Result<()> {
+pub(crate) fn validate_note_authority(notes: &[SnapshotNote]) -> Result<()> {
     let mut by_uid = BTreeMap::new();
     let mut active_canonical = BTreeMap::new();
     for note in notes {
         let front = &note.frontmatter;
+        crate::proposal_workflow::guard_import(
+            None,
+            &Note {
+                front: front.clone(),
+                body: note.body.clone(),
+            },
+        )?;
         crate::authority::validate_envelope(
             front.note_uid.as_ref(),
             front.authority.as_ref(),

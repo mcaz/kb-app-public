@@ -1,4 +1,11 @@
+import { matchesFilter } from "@/lib/hits";
 import { KbError } from "@/lib/api/error";
+
+import { demoObservationHealth } from "./observationHealth";
+import { demoObservationTrend } from "./observationTrend";
+import { demoNoteCountTrend } from "./noteCountTrend";
+import { demoProposalNote, demoProposals } from "./proposals";
+import { demoDistillation } from "./distillation";
 
 import type {
   Added,
@@ -18,8 +25,12 @@ import type {
   MaintenanceReport,
   NoteFiles,
   NoteListPage,
+  NoteBrowsePage,
+  Period,
+  SortKey,
   NoteSummary,
   NoteView,
+  ObservationTrendFilter,
   PreviewFile,
   PurgePlan,
   Purged,
@@ -331,6 +342,7 @@ let settings: Settings = {
   claude_kb_enabled: true,
   gpt_kb_enabled: true,
   launch_at_login_initialized: true,
+  harvest_status_line: true,
 };
 
 let autostart: AutostartState = { enabled: true, supported: true };
@@ -364,6 +376,12 @@ function aiGuard(): AiGuardStatus {
 let guardOverride: AiGuardStatus | null = null;
 
 export const demoApi = {
+  ...demoProposals,
+  ...demoDistillation,
+  distillationQueueStatus: () => demoDistillation.distillationQueueStatus(settings),
+  distillationRetryFailed: () => demoDistillation.distillationRetryFailed(settings),
+  distillationRequestNow: (scope: Parameters<typeof demoDistillation.distillationRequestNow>[0]) =>
+    demoDistillation.distillationRequestNow(scope, settings),
   setupState: (): Promise<SetupState> =>
     delay({
       needs_onboarding: params().get("screen") === "onboarding",
@@ -371,6 +389,10 @@ export const demoApi = {
       vault_path: "(demo)",
     }),
   settingsGet: (): Promise<Settings> => delay(settings),
+  settingsSetHarvestStatusLine: (enabled: boolean): Promise<Settings> => {
+    settings = { ...settings, harvest_status_line: enabled };
+    return delay(settings);
+  },
   settingsSetAiKbEnabled: (enabled: boolean): Promise<Settings> => {
     settings = { ...settings, ai_kb_enabled: enabled };
     return delay(settings);
@@ -411,6 +433,7 @@ export const demoApi = {
     delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" }),
   homeState: (): Promise<HomeState> =>
     delay({
+      note_count: notes.length,
       stats: {
         total: notes.length,
         deprecated: 0,
@@ -429,6 +452,11 @@ export const demoApi = {
       ],
       degraded: [],
     }),
+  homeObservationHealth: () => delay(demoObservationHealth(params().get("health"), settings)),
+  homeObservationTrend: (dayBoundariesMs: number[], filter: ObservationTrendFilter) =>
+    delay(demoObservationTrend(dayBoundariesMs, params().get("health"), settings, filter)),
+  homeNoteCountTrend: (localToday: string) =>
+    delay(demoNoteCountTrend(localToday, params().get("counts"))),
   maintenanceRefresh: (): Promise<MaintenanceReport> => delay({ degraded: [], elapsed_ms: 1 }),
   tagOverview: (): Promise<TagOverview> =>
     delay({
@@ -441,7 +469,7 @@ export const demoApi = {
       degraded: [],
     }),
   noteGet: (id: string): Promise<NoteView> => {
-    const found = notes.find((n) => n.id === id);
+    const found = notes.find((n) => n.id === id) ?? demoProposalNote(id);
     if (!found) return Promise.reject(new KbError({ code: "note_not_found", id }));
     return delay(found);
   },
@@ -488,6 +516,34 @@ export const demoApi = {
       notes: page,
       total: matches.length,
       next_cursor: hasMore ? (page.at(-1)?.id ?? null) : null,
+      degraded: [],
+    });
+  },
+  noteBrowse: (
+    tags: string[],
+    period: Period,
+    sort: SortKey,
+    after: string | null,
+    limit: number,
+  ): Promise<NoteBrowsePage> => {
+    const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+    const key = (hit: Hit) =>
+      (sort === "title" ? (hit.title ?? hit.id) : sort === "created" ? hit.created : hit.updated) ??
+      "";
+    const matches = notes
+      .map(toHit)
+      .filter((hit) => matchesFilter(hit, { tags, period }))
+      .sort(
+        (a, b) =>
+          (sort === "title" ? compare(key(a), key(b)) : compare(key(b), key(a))) ||
+          compare(a.id, b.id),
+      );
+    const start = after ? matches.findIndex((hit) => hit.id === after) + 1 : 0;
+    const hits = matches.slice(start, start + Math.max(1, Math.min(limit, 100)));
+    return delay({
+      hits,
+      total: matches.length,
+      next_cursor: start + hits.length < matches.length ? hits.at(-1)!.id : null,
       degraded: [],
     });
   },

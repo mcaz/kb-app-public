@@ -176,6 +176,7 @@ pub fn create_fixture(suite: &RetrievalBenchmarkSuite, path: &Path) -> Result<Va
         let id = vault.propose(
             &conn,
             NoteProposal {
+                judgment: None,
                 title: &note.title,
                 body: &body,
                 description: note.description.as_deref(),
@@ -221,6 +222,7 @@ pub fn create_fixture(suite: &RetrievalBenchmarkSuite, path: &Path) -> Result<Va
         vault.agent_update_note(
             &conn,
             NoteUpdate {
+                judgment: None,
                 id: &note.expected_id,
                 title: None,
                 body: None,

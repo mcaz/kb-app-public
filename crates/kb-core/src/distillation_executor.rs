@@ -506,7 +506,7 @@ fn read_document(conn: &Connection, note: &str) -> Result<String> {
     .with_context(|| format!("ノートが見つからない: {note}"))
 }
 
-fn prepare_target(
+pub(crate) fn prepare_target(
     conn: &Connection,
     before: &Note,
     change: &DistillationChange,
@@ -692,6 +692,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "a canonical",
                     body: "旧結論",
                     description: Some("現行の結論"),
@@ -713,6 +714,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "z record",
                     body: "原証拠",
                     description: Some("後続の観測"),
@@ -954,6 +956,7 @@ mod tests {
             .propose(
                 &fixture.conn,
                 NoteProposal {
+                    judgment: None,
                     title: "later unrelated note",
                     body: "後続変更",
                     description: Some("rollback境界を進める対象外note"),
@@ -989,6 +992,7 @@ mod tests {
             .agent_update_note(
                 &fixture.conn,
                 NoteUpdate {
+                    judgment: None,
                     id: &fixture.canonical,
                     title: None,
                     body: Some("別経路の更新"),
@@ -1050,6 +1054,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "normalize target",
                     body: "本文",
                     description: None,
@@ -1106,6 +1111,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "targeted canonical",
                     body: "欠落参照に依存する本文",
                     description: Some("機械plannerではkeepになる正本"),

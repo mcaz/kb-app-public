@@ -11,6 +11,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::frontmatter::Note;
 use crate::note_id::NoteId;
 use crate::vault::Vault;
+use crate::write_rejection::WriteRejection;
 
 const UPSERT: &str = "upsert";
 const DELETE: &str = "delete";
@@ -77,13 +78,47 @@ pub(crate) fn put(
         &op_id,
         log_entry,
         commit_message,
-    )?;
+    )
+    .map_err(crate::write_rejection::confirm_before_write)?;
     transaction.commit()?;
     Ok(())
 }
 
 /// 複数ノートを同じtransactionへ積むexecutor専用口。commitとexport flushは呼び出し側が行う。
 pub(crate) fn queue_put(
+    vault: &Vault,
+    conn: &Connection,
+    raw: &str,
+    note: &Note,
+    op_id: &str,
+    log_entry: &str,
+    commit_message: &str,
+) -> Result<()> {
+    let before = contains(conn, raw)?.then(|| read(conn, raw)).transpose()?;
+    crate::proposal_workflow::guard_note_write(before.as_ref(), note)?;
+    queue_put_document(vault, conn, raw, note, op_id, log_entry, commit_message)
+}
+
+pub(crate) fn queue_proposal_put(
+    vault: &Vault,
+    conn: &Connection,
+    raw: &str,
+    note: &Note,
+    _permit: &crate::proposal_workflow::ProposalWritePermit,
+) -> Result<()> {
+    let op_id = crate::authority::NoteUid::new().to_string();
+    queue_put_document(
+        vault,
+        conn,
+        raw,
+        note,
+        &op_id,
+        &format!("**Proposal workflow**: [{raw}](/{raw}.md) の提案履歴を更新。"),
+        &format!("proposal: update {raw}"),
+    )
+}
+
+fn queue_put_document(
     vault: &Vault,
     conn: &Connection,
     raw: &str,
@@ -140,6 +175,7 @@ pub(crate) fn delete(
         )
         .optional()?
         .with_context(|| format!("削除するノートが見つからない: {id}"))?;
+    crate::proposal_workflow::guard_note_delete(&Note::parse(&base_document)?)?;
     let note_uid: Option<String> = transaction
         .query_row(
             "SELECT note_uid FROM notes WHERE id = ?1",
@@ -196,11 +232,11 @@ fn validate_authority_write(conn: &Connection, id: &str, note: &Note) -> Result<
             )
             .optional()?;
         let Some((target_namespace, target_role, target_status, target_scope)) = target else {
-            bail!(
+            return Err(WriteRejection::RelationIntegrity.validation(format!(
                 "typed relationの参照先がない: {id} {} -> {}",
                 relation.kind.as_str(),
                 relation.target
-            );
+            )));
         };
         if relation.kind == RelationKind::Supersedes
             && (!authority.is_active_canonical()
@@ -209,9 +245,9 @@ fn validate_authority_write(conn: &Connection, id: &str, note: &Note) -> Result<
                 || target_namespace != authority.namespace.as_str()
                 || target_scope != authority.scope)
         {
-            bail!(
-                "supersedesは同じnamespace/scopeのactive canonicalからsuperseded canonicalへ結ぶ"
-            );
+            return Err(WriteRejection::RelationIntegrity.validation(
+                "supersedesは同じnamespace/scopeのactive canonicalからsuperseded canonicalへ結ぶ",
+            ));
         }
     }
 
@@ -229,17 +265,23 @@ fn validate_authority_write(conn: &Connection, id: &str, note: &Note) -> Result<
     if authority.role == AuthorityRole::Canonical && authority.status == AuthorityStatus::Superseded
     {
         let Some((namespace, role, status, scope)) = incoming_supersedes else {
-            bail!("superseded canonicalに後継のsupersedes relationがない: {id}");
+            return Err(WriteRejection::RelationIntegrity.validation(format!(
+                "superseded canonicalに後継のsupersedes relationがない: {id}"
+            )));
         };
         if namespace != authority.namespace.as_str()
             || role != AuthorityRole::Canonical.as_str()
             || status != AuthorityStatus::Active.as_str()
             || scope != authority.scope
         {
-            bail!("superseded canonicalの後継authorityが一致しない: {id}");
+            return Err(WriteRejection::RelationIntegrity.validation(format!(
+                "superseded canonicalの後継authorityが一致しない: {id}"
+            )));
         }
     } else if incoming_supersedes.is_some() {
-        bail!("supersedesの参照先はsuperseded canonicalに固定する: {id}");
+        return Err(WriteRejection::RelationIntegrity.validation(format!(
+            "supersedesの参照先はsuperseded canonicalに固定する: {id}"
+        )));
     }
     Ok(())
 }
@@ -521,6 +563,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "不変UID",
                     body: "本文",
                     description: None,
@@ -543,5 +586,20 @@ mod tests {
 
         assert!(put(&vault, &conn, &id, &changed, "update", "update note").is_err());
         assert_eq!(read(&conn, &id).unwrap().front.note_uid, original);
+
+        // 同じSQLite UNIQUE codeでもuid重複はcanonical scope衝突ではない。
+        let mut duplicate_uid = read(&conn, &id).unwrap();
+        duplicate_uid.front.authority.as_mut().unwrap().scope = "test/different-scope".into();
+        let error = put(
+            &vault,
+            &conn,
+            "notes/duplicate-uid",
+            &duplicate_uid,
+            "fixture",
+            "fixture",
+        )
+        .unwrap_err();
+        assert_eq!(WriteRejection::from_error(&error), None);
+        assert!(!contains(&conn, "notes/duplicate-uid").unwrap());
     }
 }

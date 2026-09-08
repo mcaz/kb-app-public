@@ -1,4 +1,25 @@
 {
+  "loadFailed": "Could not load connection status",
+  "diagnostics": {
+    "copy": "Copy diagnostics",
+    "copySaved": "Copy collected diagnostics",
+    "copying": "Copying…",
+    "description": "Inspect counts and status needed for recovery without changing stored data.",
+    "inspecting": "Running diagnostics…",
+    "copied": "Diagnostics copied",
+    "failed": "Could not run diagnostics: {{error}}",
+    "copyFailed": "Diagnostics were collected but could not be copied. Select “Copy collected diagnostics” to try again."
+  },
+  "recoveryPlan": {
+    "copy": "Copy recovery source comparison",
+    "copySaved": "Copy collected comparison",
+    "copying": "Copying…",
+    "description": "Read the remaining note content and distillation history to compare recovery sources. No data is changed.",
+    "inspecting": "Comparing recovery sources…",
+    "copied": "Recovery source comparison copied",
+    "failed": "Could not compare recovery sources: {{error}}",
+    "copyFailed": "The comparison was collected but could not be copied. Select “Copy collected comparison” to try again."
+  },
   "ai": {
     "name": "AI app (Claude)",
     "desc": "Your knowledge base gets pulled into conversations, and what you learn there comes back as drafts.",

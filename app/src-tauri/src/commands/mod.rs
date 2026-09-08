@@ -5,9 +5,12 @@
 
 pub mod background;
 pub mod connect;
+pub mod distillation;
 pub mod favorites;
 pub mod files;
 pub mod home;
 pub mod notes;
+pub mod proposals;
 pub mod settings;
 pub mod setup;
+pub mod workspace_tabs;

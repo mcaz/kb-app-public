@@ -11,25 +11,35 @@
 
 pub mod background;
 pub mod commands;
+mod distillation_worker;
 pub mod error;
 pub mod hook_mode;
 pub mod mcp_mode;
+pub mod recovery_mode;
 pub mod state;
+mod workspace_tabs;
 
 use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events};
 
 use commands::{
-    background as background_commands, connect, favorites, files, home, notes, settings, setup,
+    background as background_commands, connect, distillation, favorites, files, home, notes,
+    proposals, settings, setup, workspace_tabs as workspace_tab_commands,
 };
 
 /// GUI が呼べるコマンドとイベントの全集合。ここが `app/src/lib/bindings.ts` の正本。
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(collect_commands![
+            recovery_mode::app_boot_mode,
+            recovery_mode::recovery_plan,
+            recovery_mode::recovery_apply,
+            recovery_mode::recovery_exit,
             background_commands::autostart_status,
             background_commands::autostart_set,
             background_commands::tray_set_labels,
+            background_commands::window_hide,
+            workspace_tab_commands::workspace_tab_shortcuts_configure,
             setup::setup_state,
             setup::onboard,
             setup::onboard_existing,
@@ -37,15 +47,32 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             settings::settings_set_ai_kb_enabled,
             settings::settings_set_claude_kb_enabled,
             settings::settings_set_gpt_kb_enabled,
+            settings::settings_set_harvest_status_line,
             settings::settings_ai_guard_status,
             settings::settings_install_ai_guard,
             settings::settings_enable_ai_guard_development_mode,
+            distillation::distillation_settings_get,
+            distillation::distillation_settings_set,
+            distillation::distillation_providers,
+            distillation::distillation_models,
+            distillation::distillation_queue_status,
+            distillation::distillation_retry_failed,
+            distillation::distillation_request_now,
             home::home_state,
+            home::note_revision,
+            home::home_observation_health,
+            home::home_observation_trend,
+            home::home_note_count_trend,
             home::maintenance_refresh,
             home::tag_overview,
             home::care_dismiss,
+            proposals::proposal_list,
+            proposals::proposal_get,
+            proposals::proposal_decide,
             notes::note_get,
+            notes::note_set_current,
             notes::note_search,
+            notes::note_browse,
             notes::note_categories,
             notes::note_list,
             notes::graph_data,
@@ -65,6 +92,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             files::file_preview,
             files::legacy_open,
             connect::connect_state,
+            connect::inspect_runtime_storage,
+            connect::plan_runtime_recovery,
             connect::github_auth_state,
             connect::github_sign_in,
             connect::github_sign_out,
@@ -79,7 +108,8 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         .events(collect_events![
             connect::EmbedProgress,
             connect::GitHubDeviceAuthorization,
-            setup::VaultRestoreProgress
+            setup::VaultRestoreProgress,
+            workspace_tabs::WorkspaceTabShortcut
         ])
 }
 
@@ -96,26 +126,52 @@ fn export_bindings() -> Result<(), Box<dyn std::error::Error>> {
             ),
             "../src/lib/bindings.ts",
         )?;
+    // spectaのdocument付きunionに残る行末空白を生成時に揃え、手修正を不要にする。
+    let path = "../src/lib/bindings.ts";
+    let generated = std::fs::read_to_string(path)?;
+    let generated = generated
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("{generated}\n"))?;
     Ok(())
+}
+
+// macOSのInfo.plist埋込symbolを重複させず、起動面ごとに新しいContextを作る。
+pub(crate) fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
 }
 
 pub fn run() {
     let builder = specta_builder();
+    let normal_handler = builder.invoke_handler();
 
     #[cfg(debug_assertions)]
     export_bindings().expect("bindings.ts の生成に失敗");
 
     tauri::Builder::default()
+        .manage(recovery_mode::AppBootMode::Normal)
         // ファイルを選ぶ経路。取り込みに渡すのはパスだけなので、
         // 中身を JS 側へ載せない選択肢がこれしかない(ADR-0003 決定8)
         .plugin(tauri_plugin_dialog::init())
         // 既定のアプリでファイルを開く。**JS 側の権限は与えない** —
         // 開く経路を files::file_open だけにして、必ず resolver を通す
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(builder.invoke_handler())
+        .invoke_handler(move |invoke| {
+            if recovery_mode::normal_command_allowed(invoke.message.command()) {
+                normal_handler(invoke)
+            } else {
+                invoke
+                    .resolver
+                    .reject("recovery commands require the recovery window");
+                true
+            }
+        })
         .setup(move |app| {
             // イベントの購読口を張る(進捗通知など)
             builder.mount_events(app);
+            workspace_tabs::install(app.handle())?;
             // trayと「閉じても常駐」。窓は既定で非表示なので、ここで出す側に回る。
             // trayを作れない環境(indicatorの無いLinux等)では常駐せず、閉じるボタンは
             // 従来どおり終了になる。開く手段が無い状態で隠したままにはしない。
@@ -140,6 +196,7 @@ pub fn run() {
             }
             // vault と索引接続はここに集約する(生成は遅延 — 未オンボーディングでも起動できる)
             app.manage(state::AppState::default());
+            app.manage(distillation_worker::start(app.handle()));
             // asset protocolの静的scopeは空。登録済みの現在Vaultだけを動的に許可する。
             if let Ok(registry) = kb_core::registry::Registry::load()
                 && let Ok(root) = registry.resolve(None)
@@ -148,11 +205,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("tauri build")
         // Dockアイコンからの復帰。窓を隠して常駐している間、macOSはここしか通らない
         // (窓が破棄されていないので、Launchpad / Spotlight もこの経路になる)。
         .run(|_app, _event| {
+            if matches!(_event, tauri::RunEvent::Exit) {
+                _app.state::<distillation_worker::WorkerControl>()
+                    .shutdown();
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = _event {
                 background::show(_app);

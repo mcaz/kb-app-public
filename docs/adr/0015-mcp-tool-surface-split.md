@@ -14,7 +14,7 @@
 
 通常接続を次の3 serverへ分ける。
 
-- `kb-app-read`: search / get / recent
+- `kb-app-read`: search / get / recent（2026-09-06追加: [ADR-0019](0019-proposal-workflow.md)の提案レビュー専用get_proposal）
 - `kb-app-write`: propose / update / attach / prepare_remove / commit_remove
 - `kb-app-maintenance`: Markdown競合、蒸留、initiative closure、旧Artifact移行
 

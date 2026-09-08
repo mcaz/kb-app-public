@@ -16,16 +16,41 @@ use kb_core::error::{CoreError, CoreErrorKind};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalFailureKind {
+    InvalidInput,
+    Stale,
+    InvalidState,
+    Protected,
+    Corrupt,
+    NotFound,
+}
+
+#[derive(Debug, Serialize, specta::Type)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AppError {
+    RecoveryFailed {
+        kind: kb_core::runtime_recovery::RuntimeRecoveryFailureKind,
+    },
+    ProposalFailed {
+        kind: ProposalFailureKind,
+    },
     /// vault を開けない(未オンボーディング・レジストリの不整合)。
     VaultUnavailable,
     /// 指定 ID のノートが無い(消された・まだ書かれていない)。
-    NoteNotFound { id: String },
+    NoteNotFound {
+        id: String,
+    },
     /// 「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。
-    FileTooLarge { size: u64, limit: u64 },
+    FileTooLarge {
+        size: u64,
+        limit: u64,
+    },
     /// 別の場所で更新された。**自動再試行も強制上書きもしない**(決定7)。
-    FileConflict { expected: u64, current: u64 },
+    FileConflict {
+        expected: u64,
+        current: u64,
+    },
     /// 端末固有の場所は指せない(他の端末から辿れないため)。
     FileLocationUnstable,
     /// 仕事のリポジトリ由来なので、この変更は認めない。
@@ -34,9 +59,13 @@ pub enum AppError {
     FileNeedsConfirm,
     /// ファイルを取り除けなかった。**利用者が次にできることがある**拒否だけを
     /// ここへ運ぶ。git・ディスクの失敗は `CoreFailed` として扱う。
-    FilePurgeRefused { refusal: kb_core::purge::Refusal },
+    FilePurgeRefused {
+        refusal: kb_core::purge::Refusal,
+    },
     /// 識別子・参照名の形が不正。
-    FileMalformed { field: String },
+    FileMalformed {
+        field: String,
+    },
     /// 手元に無い(または方針で閉じている)ので開けない。
     FileNotHere,
     /// クリップボード画像が大きすぎる。**ファイルの上限ではない** —
@@ -61,14 +90,20 @@ pub enum AppError {
     /// かしこい検索の準備に失敗。
     EmbedFailed,
     /// コアの失敗。診断詳細は画面へ運ばず、kindだけを翻訳する。
-    CoreFailed { kind: CoreErrorKind },
+    CoreFailed {
+        kind: CoreErrorKind,
+    },
     /// Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。
-    Unexpected { message: String },
+    Unexpected {
+        message: String,
+    },
 }
 
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RecoveryFailed { kind } => write!(f, "recovery failed: {kind:?}"),
+            Self::ProposalFailed { kind } => write!(f, "proposal failed: {kind:?}"),
             Self::VaultUnavailable => write!(f, "vault unavailable"),
             Self::Unexpected { message } => write!(f, "{message}"),
             Self::NoteNotFound { id } => write!(f, "ノートが見つからない: {id}"),
@@ -143,6 +178,24 @@ impl From<std::io::Error> for AppError {
 }
 
 impl AppError {
+    pub fn recovery(error: anyhow::Error) -> Self {
+        match kb_core::runtime_recovery::failure_kind(&error) {
+            Some(kind) => Self::RecoveryFailed { kind },
+            None => Self::storage(error),
+        }
+    }
+    pub fn proposal(error: anyhow::Error) -> Self {
+        let kind = match kb_core::proposal_workflow::error_code(&error) {
+            Some("proposal_invalid_input") => ProposalFailureKind::InvalidInput,
+            Some("proposal_stale") => ProposalFailureKind::Stale,
+            Some("proposal_invalid_state") => ProposalFailureKind::InvalidState,
+            Some("proposal_protected") => ProposalFailureKind::Protected,
+            Some("proposal_corrupt") => ProposalFailureKind::Corrupt,
+            Some("proposal_not_found") => ProposalFailureKind::NotFound,
+            _ => return Self::storage(error),
+        };
+        Self::ProposalFailed { kind }
+    }
     /// 文脈が分かっている箇所で明示的に包むための補助。
     pub fn unexpected(e: impl std::fmt::Display) -> Self {
         Self::Unexpected {

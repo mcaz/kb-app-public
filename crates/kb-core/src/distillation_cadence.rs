@@ -119,7 +119,7 @@ impl Default for DistillationCadenceState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DistillationCadenceLaneStatus {
     pub lane: DistillationCadenceLane,
     pub due: bool,
@@ -127,9 +127,9 @@ pub struct DistillationCadenceLaneStatus {
     pub next_due_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DistillationCadenceStatus {
-    pub schema: &'static str,
+    pub schema: String,
     pub checked_at: String,
     pub state_exists: bool,
     pub current_checkpoint_id: String,
@@ -179,6 +179,21 @@ pub fn status(vault: &Vault, conn: &Connection) -> Result<DistillationCadenceSta
     status_at_path(conn, &paths.state, OffsetDateTime::now_utc())
 }
 
+/// 書込後の判断支援では、plannerと同じsnapshotから期限を計算して全件走査の重複を避ける。
+pub(crate) fn status_for_plan(
+    vault: &Vault,
+    plan: &crate::distillation::DistillationPlan,
+) -> Result<DistillationCadenceStatus> {
+    let paths = StatePaths::for_vault(vault)?;
+    let (state, state_exists) = load_state(&paths.state)?;
+    build_status(
+        &DistillationCheckpoint::from_plan(plan).checkpoint_id,
+        &state,
+        state_exists,
+        OffsetDateTime::now_utc(),
+    )
+}
+
 pub fn run(
     vault: &Vault,
     conn: &Connection,
@@ -186,6 +201,15 @@ pub fn run(
 ) -> Result<DistillationCadenceRunReport> {
     let paths = StatePaths::for_vault(vault)?;
     run_at_paths(vault, conn, arguments, OffsetDateTime::now_utc(), &paths)
+}
+
+pub(crate) fn status_for_checkpoint(
+    vault: &Vault,
+    checkpoint: &str,
+) -> Result<DistillationCadenceStatus> {
+    let paths = StatePaths::for_vault(vault)?;
+    let (state, exists) = load_state(&paths.state)?;
+    build_status(checkpoint, &state, exists, OffsetDateTime::now_utc())
 }
 
 fn status_at_path(
@@ -196,7 +220,7 @@ fn status_at_path(
     let (state, state_exists) = load_state(state_path)?;
     let plan = crate::distillation::plan(conn)?;
     let current = DistillationCheckpoint::from_plan(&plan);
-    build_status(&current, &state, state_exists, now)
+    build_status(&current.checkpoint_id, &state, state_exists, now)
 }
 
 fn run_at_paths(
@@ -214,7 +238,7 @@ fn run_at_paths(
     let (mut state, state_exists) = load_state(&paths.state)?;
     let plan = crate::distillation::plan(conn)?;
     let current = DistillationCheckpoint::from_plan(&plan);
-    let status_before = build_status(&current, &state, state_exists, now)?;
+    let status_before = build_status(&current.checkpoint_id, &state, state_exists, now)?;
     let selected_lanes = arguments
         .lane
         .map(|lane| vec![lane])
@@ -258,7 +282,7 @@ fn run_at_paths(
         });
     }
     save_state(&paths.state, &state)?;
-    let status_after = build_status(&report.checkpoint, &state, true, now)?;
+    let status_after = build_status(&report.checkpoint.checkpoint_id, &state, true, now)?;
     let accepted = report.gate.passed;
 
     Ok(DistillationCadenceRunReport {
@@ -275,7 +299,7 @@ fn run_at_paths(
 }
 
 fn build_status(
-    current: &DistillationCheckpoint,
+    current: &str,
     state: &DistillationCadenceState,
     state_exists: bool,
     now: OffsetDateTime,
@@ -283,7 +307,7 @@ fn build_status(
     let changed = state
         .checkpoint
         .as_ref()
-        .is_none_or(|accepted| accepted.checkpoint_id != current.checkpoint_id);
+        .is_none_or(|accepted| accepted.checkpoint_id != current);
     let mut lanes = Vec::with_capacity(DistillationCadenceLane::ALL.len());
     for lane in DistillationCadenceLane::ALL {
         if lane == DistillationCadenceLane::AfterWrite {
@@ -309,10 +333,10 @@ fn build_status(
         });
     }
     Ok(DistillationCadenceStatus {
-        schema: CADENCE_STATUS_SCHEMA,
+        schema: CADENCE_STATUS_SCHEMA.into(),
         checked_at: format_at(now)?,
         state_exists,
-        current_checkpoint_id: current.checkpoint_id.clone(),
+        current_checkpoint_id: current.to_owned(),
         accepted_checkpoint_id: state
             .checkpoint
             .as_ref()
@@ -607,6 +631,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "未接続record",
                     body: "本文",
                     description: Some("説明"),
@@ -673,6 +698,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title,
                         body: "本文",
                         description: Some("説明"),
@@ -745,5 +771,59 @@ mod tests {
         assert_eq!(example["schema"], CADENCE_RUN_SCHEMA);
         assert_eq!(example["status_before"]["schema"], CADENCE_STATUS_SCHEMA);
         assert_eq!(example["selected_lanes"], serde_json::json!([]));
+    }
+    #[test]
+    fn cached_digest_changes_on_due_boundary_or_state_change_but_not_check_time() {
+        let state = DistillationCadenceState {
+            checkpoint: None,
+            completed_at: CompletedAt {
+                daily: Some(format_at(at(100)).unwrap()),
+                weekly: Some(format_at(at(100)).unwrap()),
+                monthly: Some(format_at(at(100)).unwrap()),
+            },
+            ..Default::default()
+        };
+        let before = crate::cadence_cache::from_status(
+            build_status("fixture", &state, true, at(100)).unwrap(),
+            2,
+        )
+        .unwrap();
+        let shortly = crate::cadence_cache::from_status(
+            build_status(
+                "fixture",
+                &state,
+                true,
+                at(100) + time::Duration::seconds(10),
+            )
+            .unwrap(),
+            2,
+        )
+        .unwrap();
+        assert_eq!(before.digest, shortly.digest);
+        let due = crate::cadence_cache::from_status(
+            build_status("fixture", &state, true, at(101)).unwrap(),
+            2,
+        )
+        .unwrap();
+        assert_ne!(before.digest, due.digest);
+        let changed_count = crate::cadence_cache::from_status(
+            build_status("fixture", &state, true, at(100)).unwrap(),
+            3,
+        )
+        .unwrap();
+        assert_ne!(before.digest, changed_count.digest);
+        let mut failed = state;
+        failed.last_failure = Some(DistillationCadenceFailure {
+            at: format_at(at(100)).unwrap(),
+            audit_id: "failure".into(),
+            lanes: vec![DistillationCadenceLane::AfterWrite],
+            failed_checks: vec![DistillationAuditCheckCode::NoActionableEntries],
+        });
+        let after = crate::cadence_cache::from_status(
+            build_status("fixture", &failed, true, at(100)).unwrap(),
+            2,
+        )
+        .unwrap();
+        assert_ne!(before.digest, after.digest);
     }
 }

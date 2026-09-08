@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Folder, FolderOpen, NotebookText } from "luc
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
+import { Button } from "@/components/atoms/ui/button";
 import {
   buildCategoryTree,
   categoryAncestorPaths,
@@ -10,9 +11,13 @@ import {
 } from "@/lib/categoryTree";
 
 import type { NoteCategory } from "@/lib/api";
+import { categoryAccordionVariants } from "./variants";
 
 export interface CategoryAccordionProps {
-  categories: NoteCategory[];
+  categories: NoteCategory[] | undefined;
+  error: string | null;
+  isFetching: boolean;
+  onRetry: () => void;
   active: boolean;
   selectedCategory: string | null;
   onInitializeCategory: (path: string) => void;
@@ -22,6 +27,9 @@ export interface CategoryAccordionProps {
 
 export function CategoryAccordion({
   categories,
+  error,
+  isFetching,
+  onRetry,
   active,
   selectedCategory,
   onInitializeCategory,
@@ -30,7 +38,8 @@ export function CategoryAccordion({
 }: CategoryAccordionProps) {
   const { t } = useTranslation();
   const contentId = useId();
-  const tree = useMemo(() => buildCategoryTree(categories), [categories]);
+  const tree = useMemo(() => buildCategoryTree(categories ?? []), [categories]);
+  const loadStyles = categoryAccordionVariants();
   const [expanded, setExpanded] = useState(true);
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
 
@@ -95,21 +104,40 @@ export function CategoryAccordion({
       </button>
 
       {expanded && (
-        <div id={contentId} className="mt-0.5 min-h-0 overflow-y-auto pb-1" role="tree">
-          {tree.length ? (
-            tree.map((item) => (
-              <CategoryItem
-                key={item.path || "__root__"}
-                item={item}
-                depth={0}
-                selectedCategory={selectedCategory}
-                openFolders={openFolders}
-                onSelect={selectCategory}
-              />
-            ))
-          ) : (
-            <p className="text-muted m-0 px-7 py-1 text-[11px]">{t("nav.notesEmpty")}</p>
+        <div id={contentId} className="mt-0.5 min-h-0 overflow-y-auto pb-1">
+          {error !== null && (
+            <div className={loadStyles.failure()}>
+              <p className={loadStyles.error()} role="alert">
+                {t("nav.notesLoadFailed")}
+                <br />
+                {error}
+              </p>
+              <Button size="sm" disabled={isFetching} onClick={onRetry}>
+                {t(isFetching ? "state.loading" : "action.retry")}
+              </Button>
+            </div>
           )}
+          {categories === undefined && error === null && (
+            <p className={loadStyles.message()} role="status">
+              {t("state.loading")}
+            </p>
+          )}
+          {tree.length > 0 ? (
+            <div role="tree">
+              {tree.map((item) => (
+                <CategoryItem
+                  key={item.path || "__root__"}
+                  item={item}
+                  depth={0}
+                  selectedCategory={selectedCategory}
+                  openFolders={openFolders}
+                  onSelect={selectCategory}
+                />
+              ))}
+            </div>
+          ) : categories !== undefined && error === null ? (
+            <p className={loadStyles.message()}>{t("nav.notesEmpty")}</p>
+          ) : null}
         </div>
       )}
     </div>

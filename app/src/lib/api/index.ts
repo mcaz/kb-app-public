@@ -9,15 +9,23 @@ import type {
   AutostartState,
   Availability,
   ConnectState,
+  Degradation,
   Favorite,
   FilesPage,
   GraphData,
   GitHubAuthState,
   HomeState,
+  ObservationHealth,
+  ObservationTrend,
+  ObservationTrendFilter,
+  NoteCountTrend,
   MaintenanceReport,
   NoteCategories,
   NoteFiles,
   NoteListPage,
+  NoteBrowsePage,
+  Period,
+  SortKey,
   NoteView,
   PreviewFile,
   PurgePlan,
@@ -26,6 +34,22 @@ import type {
   Settings,
   SetupState,
   TagOverview,
+  ProposalListData,
+  ProposalDetailData,
+  ProposalMutationData,
+  DecisionInput,
+  DistillationAiSettings,
+  DistillationAiProviderStatus,
+  DistillationAiProvider,
+  DistillationModelCatalog,
+  DistillationQueueView,
+  ImmediateDistillationScope,
+  ImmediateDistillationResult,
+  RuntimeDiagnosticsReport,
+  RuntimeRecoveryPlan,
+  RuntimeRecoveryRequest,
+  RuntimeRecoveryReceipt,
+  AppBootMode,
 } from "./types";
 
 export * from "./types";
@@ -53,10 +77,83 @@ async function demo() {
 }
 
 export const api = {
+  appBootMode: async (): Promise<AppBootMode> => (IN_TAURI ? commands.appBootMode() : "normal"),
+  recoveryPlan: async (): Promise<RuntimeRecoveryPlan> => {
+    if (!IN_TAURI) throw new KbError({ code: "unexpected", message: "Desktop recovery only" });
+    return unwrap(commands.recoveryPlan());
+  },
+  recoveryApply: async (input: RuntimeRecoveryRequest): Promise<RuntimeRecoveryReceipt> => {
+    if (!IN_TAURI) throw new KbError({ code: "unexpected", message: "Desktop recovery only" });
+    return unwrap(commands.recoveryApply(input));
+  },
+  recoveryExit: async (): Promise<void> => {
+    if (!IN_TAURI) throw new KbError({ code: "unexpected", message: "Desktop recovery only" });
+    await commands.recoveryExit();
+  },
+  proposalList: async (): Promise<ProposalListData> =>
+    IN_TAURI ? unwrap(commands.proposalList()) : (await demo()).proposalList(),
+  proposalGet: async (note: string): Promise<ProposalDetailData> =>
+    IN_TAURI ? unwrap(commands.proposalGet(note)) : (await demo()).proposalGet(note),
+  proposalDecide: async (
+    note: string,
+    expectedEtag: string,
+    input: DecisionInput,
+  ): Promise<ProposalMutationData> =>
+    IN_TAURI
+      ? unwrap(commands.proposalDecide(note, expectedEtag, input))
+      : (await demo()).proposalDecide(note, expectedEtag, input),
   setupState: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.setupState()) : (await demo()).setupState(),
+  inspectRuntimeStorage: async (): Promise<RuntimeDiagnosticsReport> => {
+    if (!IN_TAURI) {
+      throw new KbError({
+        code: "unexpected",
+        message: "Storage diagnostics require the desktop app",
+      });
+    }
+    return unwrap(commands.inspectRuntimeStorage());
+  },
+  planRuntimeRecovery: async (): Promise<RuntimeRecoveryPlan> => {
+    if (!IN_TAURI) {
+      throw new KbError({
+        code: "unexpected",
+        message: "Recovery planning requires the desktop app",
+      });
+    }
+    return unwrap(commands.planRuntimeRecovery());
+  },
   settingsGet: async (): Promise<Settings> =>
     IN_TAURI ? unwrap(commands.settingsGet()) : (await demo()).settingsGet(),
+  distillationSettingsGet: async (): Promise<DistillationAiSettings> =>
+    IN_TAURI
+      ? unwrap(commands.distillationSettingsGet())
+      : (await demo()).distillationSettingsGet(),
+  distillationSettingsSet: async (
+    settings: DistillationAiSettings,
+  ): Promise<DistillationAiSettings> =>
+    IN_TAURI
+      ? unwrap(commands.distillationSettingsSet(settings))
+      : (await demo()).distillationSettingsSet(settings),
+  distillationProviders: async (): Promise<DistillationAiProviderStatus[]> =>
+    IN_TAURI ? commands.distillationProviders() : (await demo()).distillationProviders(),
+  distillationModels: async (
+    provider: DistillationAiProvider,
+  ): Promise<DistillationModelCatalog> =>
+    IN_TAURI ? commands.distillationModels(provider) : (await demo()).distillationModels(provider),
+  distillationQueueStatus: async (): Promise<DistillationQueueView> =>
+    IN_TAURI
+      ? unwrap(commands.distillationQueueStatus())
+      : (await demo()).distillationQueueStatus(),
+  distillationRetryFailed: async (): Promise<DistillationQueueView> =>
+    IN_TAURI
+      ? unwrap(commands.distillationRetryFailed())
+      : (await demo()).distillationRetryFailed(),
+  distillationRequestNow: async (
+    scope: ImmediateDistillationScope,
+  ): Promise<ImmediateDistillationResult> =>
+    IN_TAURI
+      ? unwrap(commands.distillationRequestNow(scope))
+      : (await demo()).distillationRequestNow(scope),
   settingsSetAiKbEnabled: async (enabled: boolean): Promise<Settings> =>
     IN_TAURI
       ? unwrap(commands.settingsSetAiKbEnabled(enabled))
@@ -69,6 +166,10 @@ export const api = {
     IN_TAURI
       ? unwrap(commands.settingsSetGptKbEnabled(enabled))
       : (await demo()).settingsSetGptKbEnabled(enabled),
+  settingsSetHarvestStatusLine: async (enabled: boolean): Promise<Settings> =>
+    IN_TAURI
+      ? unwrap(commands.settingsSetHarvestStatusLine(enabled))
+      : (await demo()).settingsSetHarvestStatusLine(enabled),
   settingsAiGuardStatus: async (): Promise<AiGuardStatus> =>
     IN_TAURI ? unwrap(commands.settingsAiGuardStatus()) : (await demo()).settingsAiGuardStatus(),
   settingsInstallAiGuard: async (): Promise<AiGuardStatus> =>
@@ -85,18 +186,50 @@ export const api = {
   traySetLabels: async (show: string, quit: string): Promise<void> => {
     if (IN_TAURI) await unwrap(commands.traySetLabels(show, quit));
   },
+  windowHide: async (): Promise<void> => {
+    if (IN_TAURI) await unwrap(commands.windowHide());
+  },
+  workspaceTabShortcutsConfigure: async (
+    enabled: boolean,
+    file: string,
+    newTab: string,
+    closeTab: string,
+  ): Promise<void> => {
+    if (IN_TAURI) {
+      await unwrap(commands.workspaceTabShortcutsConfigure(enabled, file, newTab, closeTab));
+    }
+  },
   onboard: async (): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboard()) : (await demo()).onboard(),
   onboardExisting: async (url: string): Promise<SetupState> =>
     IN_TAURI ? unwrap(commands.onboardExisting(url)) : (await demo()).onboard(),
   homeState: async (): Promise<HomeState> =>
     IN_TAURI ? unwrap(commands.homeState()) : (await demo()).homeState(),
+  noteRevision: async (): Promise<string> => (IN_TAURI ? unwrap(commands.noteRevision()) : "demo"),
+  homeObservationHealth: async (): Promise<ObservationHealth> =>
+    IN_TAURI ? unwrap(commands.homeObservationHealth()) : (await demo()).homeObservationHealth(),
+  homeObservationTrend: async (
+    dayBoundariesMs: number[],
+    filter: ObservationTrendFilter,
+  ): Promise<ObservationTrend> =>
+    IN_TAURI
+      ? unwrap(commands.homeObservationTrend(dayBoundariesMs, filter))
+      : (await demo()).homeObservationTrend(dayBoundariesMs, filter),
+  homeNoteCountTrend: async (localToday: string): Promise<NoteCountTrend> =>
+    IN_TAURI
+      ? unwrap(commands.homeNoteCountTrend(localToday))
+      : (await demo()).homeNoteCountTrend(localToday),
   maintenanceRefresh: async (): Promise<MaintenanceReport> =>
     IN_TAURI ? unwrap(commands.maintenanceRefresh()) : (await demo()).maintenanceRefresh(),
   tagOverview: async (): Promise<TagOverview> =>
     IN_TAURI ? unwrap(commands.tagOverview()) : (await demo()).tagOverview(),
   noteGet: async (id: string): Promise<NoteView> =>
     IN_TAURI ? unwrap(commands.noteGet(id)) : (await demo()).noteGet(id),
+  noteSetCurrent: async (id: string): Promise<Degradation[]> => {
+    if (IN_TAURI) return unwrap(commands.noteSetCurrent(id));
+    await (await demo()).noteGet(id);
+    return [];
+  },
   noteSearch: async (query: string): Promise<SearchOutcome> =>
     IN_TAURI ? unwrap(commands.noteSearch(query)) : (await demo()).noteSearch(query),
   noteCategories: async (): Promise<NoteCategories> =>
@@ -105,6 +238,16 @@ export const api = {
     IN_TAURI
       ? unwrap(commands.noteList(category, after, limit))
       : (await demo()).noteList(category, after, limit),
+  noteBrowse: async (
+    tags: string[],
+    period: Period,
+    sort: SortKey,
+    after: string | null,
+    limit = 100,
+  ): Promise<NoteBrowsePage> =>
+    IN_TAURI
+      ? unwrap(commands.noteBrowse(tags, period, sort, after, limit))
+      : (await demo()).noteBrowse(tags, period, sort, after, limit),
   graphData: async (): Promise<GraphData> =>
     IN_TAURI ? unwrap(commands.graphData()) : (await demo()).graphData(),
   connectState: async (): Promise<ConnectState> =>

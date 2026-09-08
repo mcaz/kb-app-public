@@ -13,9 +13,9 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "8";
+const SCHEMA_VERSION: &str = "10";
 /// 現行schema versionの数値形。migration state machineの比較はこちらを使う。
-const CURRENT_SCHEMA: u32 = 8;
+const CURRENT_SCHEMA: u32 = 10;
 /// 加算migrationを持つ最古のversion。これより古い宣言versionはfail-closed
 /// (unknown versionを破壊的rebuildの合図にしない)。
 const OLDEST_SUPPORTED_SCHEMA: u32 = 3;
@@ -166,6 +166,7 @@ fn restore_missing_documents(vault: &Vault, conn: &Connection) -> Result<usize> 
     }
 
     for (id, mtime, note) in &recovered {
+        crate::proposal_workflow::guard_import(None, note)?;
         upsert(&transaction, vault, id, *mtime, note)?;
     }
     let remaining: i64 = transaction.query_row(
@@ -187,7 +188,7 @@ fn restore_missing_documents(vault: &Vault, conn: &Connection) -> Result<usize> 
 enum SchemaState {
     /// DBオブジェクトが1つもない空DB。registry生成DDLの唯一の対象。
     Fresh,
-    /// 加算migrationで現行へ到達できる宣言version({3..=8})。
+    /// 加算migrationで現行へ到達できる宣言version({3..=10})。
     Supported(u32),
 }
 
@@ -242,6 +243,22 @@ fn classify_schema(conn: &Connection) -> Result<SchemaState> {
              未知の旧versionを破壊的rebuildの合図にはしない"
         );
     }
+    // 2026-09-07: 旧バイナリの非transaction再作成はschemaだけを9へ戻し、
+    // v10の台帳を残し得る。加算migrationやWAL変換で原状を動かす前に止める。
+    if version < 10 {
+        let future_tables: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table'
+             AND name IN ('distillation_jobs', 'distillation_job_runs')",
+            [],
+            |row| row.get(0),
+        )?;
+        if future_tables > 0 {
+            bail!(
+                "index.dbのschema宣言と新しい蒸留台帳が不整合。\
+                 自動migration・再作成を行わず、保存状態の診断が必要"
+            );
+        }
+    }
     Ok(SchemaState::Supported(version))
 }
 
@@ -258,6 +275,10 @@ fn required_durable_tables(version: u32) -> Vec<&'static str> {
     if version >= 6 {
         required.push("action_receipts");
         required.push("action_capability_uses");
+    }
+    if version >= 10 {
+        required.push("distillation_jobs");
+        required.push("distillation_job_runs");
     }
     required
 }
@@ -283,6 +304,9 @@ fn verify_durable_tables(conn: &Connection, version: u32) -> Result<()> {
             missing.join(", ")
         );
     }
+    if version >= 10 {
+        crate::distillation_jobs::verify_schema(conn)?;
+    }
     Ok(())
 }
 
@@ -300,7 +324,11 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
             origin TEXT, generated_by TEXT, generated_at TEXT,
             mtime INTEGER, body TEXT, tags TEXT DEFAULT '', created TEXT,
             document TEXT NOT NULL DEFAULT '', note_uid TEXT, namespace TEXT,
-            authority_role TEXT, authority_status TEXT, authority_scope TEXT
+            authority_role TEXT, authority_status TEXT, authority_scope TEXT,
+            normal_reference_allowed INTEGER NOT NULL DEFAULT 0
+                CHECK(normal_reference_allowed IN (0, 1)),
+            distillation_allowed INTEGER NOT NULL DEFAULT 0
+                CHECK(distillation_allowed IN (0, 1))
         );
         CREATE UNIQUE INDEX notes_note_uid ON notes(note_uid) WHERE note_uid IS NOT NULL;
         CREATE UNIQUE INDEX notes_active_canonical_scope ON notes(namespace, authority_scope)
@@ -354,6 +382,7 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
         );
         ",
     )?;
+    transaction.execute_batch(crate::distillation_jobs::SCHEMA_SQL)?;
     for artifact in crate::derived_index::DerivedArtifact::ALL {
         for object in artifact.spec().objects {
             transaction.execute_batch(object.create_sql)?;
@@ -367,19 +396,21 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// supported versionからの加算migration。明示step列(v3→v4→…→v8)を単一transactionで
+/// supported versionからの加算migration。明示step列(v3→v4→…→v10)を単一transactionで
 /// 適用し、meta version書込は最後。途中失敗は全stepをrollbackして旧versionのまま残す。
 fn migrate_schema(conn: &Connection, from: u32) -> Result<()> {
     if from == CURRENT_SCHEMA {
         return Ok(());
     }
     type MigrationStep = fn(&Connection) -> Result<()>;
-    const STEPS: [(u32, &str, MigrationStep); 5] = [
+    const STEPS: [(u32, &str, MigrationStep); 7] = [
         (3, "v3→v4", migrate_v3_to_v4),
         (4, "v4→v5", migrate_v4_to_v5),
         (5, "v5→v6", migrate_v5_to_v6),
         (6, "v6→v7", migrate_v6_to_v7),
         (7, "v7→v8", migrate_v7_to_v8),
+        (8, "v8→v9", migrate_v8_to_v9),
+        (9, "v9→v10", migrate_v9_to_v10),
     ];
     let transaction = conn.unchecked_transaction()?;
     for (source, label, step) in STEPS {
@@ -550,6 +581,57 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// 2026-09-06本人決定: 未採用の提案を通常参照へ混ぜない。判定は本文の書換えなしで補う。
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE notes ADD COLUMN normal_reference_allowed INTEGER NOT NULL DEFAULT 0
+             CHECK(normal_reference_allowed IN (0, 1));",
+    )?;
+    let documents = {
+        let mut statement = conn.prepare("SELECT id, document FROM notes")?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    let mut update =
+        conn.prepare("UPDATE notes SET normal_reference_allowed = ?1 WHERE id = ?2")?;
+    for (id, document) in documents {
+        // 壊れたticket・未復元のdocumentを許可にしない。後続の正規upsertで再導出する。
+        let allowed = Note::parse(&document)
+            .is_ok_and(|note| crate::proposal_workflow::derive_normal_reference_allowed(&note));
+        update.execute(rusqlite::params![allowed, id])?;
+    }
+    Ok(())
+}
+
+/// 保存と同時に未蒸留の世代を永続化し、既存ノートは未確認から開始する。
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "ALTER TABLE notes ADD COLUMN distillation_allowed INTEGER NOT NULL DEFAULT 0
+             CHECK(distillation_allowed IN (0, 1));",
+    )?;
+    let documents = {
+        let mut statement = conn.prepare("SELECT id, document FROM notes")?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for (id, document) in documents {
+        let allowed = Note::parse(&document)
+            .is_ok_and(|note| crate::distillation_jobs::derive_allowed(&note));
+        conn.execute(
+            "UPDATE notes SET distillation_allowed=?1 WHERE id=?2",
+            rusqlite::params![allowed, id],
+        )?;
+    }
+    conn.execute_batch(crate::distillation_jobs::SCHEMA_SQL)?;
+    Ok(())
+}
+
 pub(crate) fn rebuild_anchor_index_from_notes(conn: &Connection) -> Result<()> {
     let notes = {
         let mut statement = conn.prepare("SELECT id, body FROM notes")?;
@@ -716,11 +798,23 @@ fn sync_files(
                 continue;
             }
         };
+        let before = transaction
+            .query_row("SELECT document FROM notes WHERE id=?1", [&id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+            .filter(|document| !document.is_empty())
+            .map(|document| Note::parse(&document))
+            .transpose()?;
+        // 復元・pullも採否履歴を短縮したり分岐した内容で置換しない。
+        crate::proposal_workflow::guard_import(before.as_ref(), &note)?;
         upsert(&transaction, vault, &id, mtime, &note)?;
         updated += 1;
     }
 
     for gone in known.keys().filter(|k| !seen.contains(*k)) {
+        let previous = crate::note_store::read(&transaction, gone)?;
+        crate::proposal_workflow::guard_note_delete(&previous)?;
         // 派生行の削除(inbound relation存在時の拒否を含む)はregistry走査へ統一。
         // durableのnotes行だけをここで消す。
         let note_uid: Option<String> = transaction
@@ -837,6 +931,28 @@ pub(crate) fn upsert(
     mtime: i64,
     note: &Note,
 ) -> Result<()> {
+    let old_uid = upsert_row(conn, id, mtime, note, &note.to_file_string()?)?;
+    // 派生索引は通常の保存と同じtransaction内で追従する。
+    crate::derived_index::apply_note_change(
+        vault,
+        conn,
+        crate::derived_index::NoteChange::Upsert {
+            note_id: id,
+            previous_uid: old_uid.as_ref().and_then(|uid| uid.as_deref()),
+            previously_indexed: old_uid.is_some(),
+            note,
+        },
+    )?;
+    Ok(())
+}
+
+fn upsert_row(
+    conn: &Connection,
+    id: &str,
+    mtime: i64,
+    note: &Note,
+    document: &str,
+) -> Result<Option<Option<String>>> {
     let f = &note.front;
     // 旧行の有無とuidは notes を上書きする前に取っておく(uid不変検査と、
     // registry走査へ渡すNoteChangeの材料)。
@@ -854,8 +970,8 @@ pub(crate) fn upsert(
         "INSERT INTO notes(
             id, title, description, status, origin, generated_by, generated_at, mtime, body,
             tags, created, document, note_uid, namespace, authority_role, authority_status,
-            authority_scope
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+            authority_scope, normal_reference_allowed, distillation_allowed
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
          ON CONFLICT(id) DO UPDATE SET
             title=excluded.title, description=excluded.description, status=excluded.status,
             origin=excluded.origin, generated_by=excluded.generated_by,
@@ -863,7 +979,9 @@ pub(crate) fn upsert(
             tags=excluded.tags, created=excluded.created, document=excluded.document,
             note_uid=excluded.note_uid, namespace=excluded.namespace,
             authority_role=excluded.authority_role, authority_status=excluded.authority_status,
-            authority_scope=excluded.authority_scope",
+            authority_scope=excluded.authority_scope,
+            normal_reference_allowed=excluded.normal_reference_allowed,
+            distillation_allowed=excluded.distillation_allowed",
         rusqlite::params![
             id,
             f.title,
@@ -876,7 +994,7 @@ pub(crate) fn upsert(
             note.body,
             f.tags.join(" "),
             f.created_at(),
-            note.to_file_string()?,
+            document,
             f.note_uid.as_ref().map(|uid| uid.as_str()),
             f.authority
                 .as_ref()
@@ -890,21 +1008,110 @@ pub(crate) fn upsert(
             f.authority
                 .as_ref()
                 .map(|authority| authority.scope.as_str()),
+            crate::proposal_workflow::derive_normal_reference_allowed(note),
+            crate::distillation_jobs::derive_allowed(note),
         ],
-    )?;
-    // 派生索引(fts_main/fts_tri/links/fts_anchor/note_relations/note_vecs)は
-    // registryのapply_change走査が同じtransaction内で維持する。
-    crate::derived_index::apply_note_change(
-        vault,
-        conn,
-        crate::derived_index::NoteChange::Upsert {
-            note_id: id,
-            previous_uid: old_uid.as_ref().and_then(|uid| uid.as_deref()),
-            previously_indexed: old_uid.is_some(),
-            note,
-        },
+    )
+    .map_err(|error| classify_authority_constraint(conn, id, note, error))?;
+    Ok(old_uid)
+}
+
+/// 正本を失った既知shapeだけを限定復旧する。通常migrationの代替入口にはしない。
+pub(crate) fn prepare_empty_runtime_recovery(conn: &Connection) -> Result<()> {
+    anyhow::ensure!(!conn.is_autocommit(), "限定復旧にはtransactionが必要");
+    let count: i64 = conn.query_row("SELECT count(*) FROM notes", [], |row| row.get(0))?;
+    anyhow::ensure!(count == 0, "非空の正本は限定復旧で置き換えない");
+    for name in ["notes_note_uid", "notes_active_canonical_scope"] {
+        let target: Option<String> = conn
+            .query_row(
+                "SELECT tbl_name FROM sqlite_schema WHERE name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        anyhow::ensure!(
+            target.as_deref().is_none_or(|target| target == "notes"),
+            "既知index名の参照先が不正"
+        );
+    }
+    conn.execute_batch(
+        "ALTER TABLE notes ADD COLUMN normal_reference_allowed INTEGER NOT NULL DEFAULT 0 CHECK(normal_reference_allowed IN (0,1));
+         ALTER TABLE notes ADD COLUMN distillation_allowed INTEGER NOT NULL DEFAULT 0 CHECK(distillation_allowed IN (0,1));
+         DROP INDEX IF EXISTS notes_note_uid;
+         DROP INDEX IF EXISTS notes_active_canonical_scope;
+         CREATE UNIQUE INDEX notes_note_uid ON notes(note_uid) WHERE note_uid IS NOT NULL;
+         CREATE UNIQUE INDEX notes_active_canonical_scope ON notes(namespace, authority_scope)
+             WHERE authority_role='canonical' AND authority_status='active';"
     )?;
     Ok(())
+}
+
+/// MDの改行・frontmatter表現も保持し、過去のreviewed_hashを再serializeで変えない。
+pub(crate) fn restore_document_row(
+    conn: &Connection,
+    id: &str,
+    mtime: i64,
+    document: &str,
+) -> Result<()> {
+    anyhow::ensure!(!conn.is_autocommit(), "原文復旧にはtransactionが必要");
+    crate::note_id::NoteId::parse(id)?;
+    let old = upsert_row(conn, id, mtime, &Note::parse(document)?, document)?;
+    anyhow::ensure!(old.is_none(), "限定復旧で既存ノートを上書きしない");
+    Ok(())
+}
+
+pub(crate) fn finish_runtime_recovery(conn: &Connection) -> Result<()> {
+    anyhow::ensure!(!conn.is_autocommit(), "復旧確定にはtransactionが必要");
+    verify_durable_tables(conn, CURRENT_SCHEMA)?;
+    let affected = conn.execute(
+        "UPDATE meta SET value=?1 WHERE key='schema'",
+        [SCHEMA_VERSION],
+    )?;
+    anyhow::ensure!(affected == 1, "schema宣言が一意ではない");
+    conn.execute(
+        "INSERT INTO meta(key,value) VALUES('runtime_store','db-v1')",
+        [],
+    )?;
+    Ok(())
+}
+
+fn classify_authority_constraint(
+    conn: &Connection,
+    id: &str,
+    note: &Note,
+    error: rusqlite::Error,
+) -> anyhow::Error {
+    // UNIQUEだけではnote_uid衝突と区別できない。SQLiteの型付きcodeに加えて、
+    // 同じ条件の競合行が存在するときだけ既存canonical拒否だと確定する。
+    if matches!(
+        &error,
+        rusqlite::Error::SqliteFailure(code, _)
+            if code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+    ) && let Some(authority) = &note.front.authority
+        && authority.is_active_canonical()
+    {
+        let conflict = conn.query_row(
+            "SELECT id, note_uid, title FROM notes WHERE id != ?1 AND namespace = ?2
+             AND authority_scope = ?3 AND authority_role = 'canonical'
+             AND authority_status = 'active' LIMIT 1",
+            rusqlite::params![id, authority.namespace.as_str(), authority.scope],
+            |row| {
+                Ok(crate::write_rejection::ScopeConflict {
+                    namespace: authority.namespace.as_str().into(),
+                    scope: authority.scope.clone(),
+                    note_id: row.get(0)?,
+                    note_uid: row.get(1)?,
+                    title: row.get(2)?,
+                })
+            },
+        );
+        if let Ok(conflict) = conflict {
+            return crate::write_rejection::WriteRejection::ActiveCanonicalConflict
+                .validation(error.to_string())
+                .context(conflict);
+        }
+    }
+    error.into()
 }
 
 /// 標準 markdown リンクから .md 宛先をノート ID へ解決(OKF §6.1)。
@@ -966,14 +1173,31 @@ pub(crate) mod test_support {
     use rusqlite::{Connection, OpenFlags};
 
     /// spec S-1のdurable table集合(metaはclassifyで検証されるがdumpには含める)。
-    pub(crate) const DURABLE_TABLES: [&str; 6] = [
+    pub(crate) const DURABLE_TABLES: [&str; 8] = [
         "meta",
         "notes",
         "note_exports",
         "distillation_runs",
         "action_receipts",
         "action_capability_uses",
+        "distillation_jobs",
+        "distillation_job_runs",
     ];
+
+    /// 2026-09-06: 旧schema fixtureへ現行triggerを残すと列削除や後続migrationが
+    /// 失敗するため、v10で追加されたdurable objectと列をまとめて除く。
+    pub(crate) fn drop_distillation_schema_for_legacy_fixture(conn: &Connection) {
+        conn.execute_batch(
+            "DROP TRIGGER distillation_jobs_insert;
+             DROP TRIGGER distillation_jobs_update;
+             DROP TRIGGER distillation_jobs_hide;
+             DROP TRIGGER distillation_jobs_delete;
+             DROP TABLE distillation_job_runs;
+             DROP TABLE distillation_jobs;
+             ALTER TABLE notes DROP COLUMN distillation_allowed;",
+        )
+        .unwrap();
+    }
 
     /// `sqlite_schema` と全durable tableの論理dump。ファイルbyteではなく
     /// 論理内容を比較する(WAL変換などSQLite都合のbyte変化は保証対象外)。
@@ -1056,7 +1280,9 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{DURABLE_TABLES, logical_snapshot};
+    use super::test_support::{
+        DURABLE_TABLES, drop_distillation_schema_for_legacy_fixture, logical_snapshot,
+    };
     use super::*;
     use crate::authority::{
         Authority, AuthorityRole, AuthorityStatus, NoteNamespace, NoteRelation, NoteUid,
@@ -1151,6 +1377,9 @@ mod tests {
         let conn = open_db(&vault).unwrap();
         conn.execute("UPDATE meta SET value='7' WHERE key='schema'", [])
             .unwrap();
+        drop_distillation_schema_for_legacy_fixture(&conn);
+        conn.execute("ALTER TABLE notes DROP COLUMN normal_reference_allowed", [])
+            .unwrap();
         conn.execute("DROP TABLE fts_anchor", []).unwrap();
         drop(conn);
 
@@ -1167,7 +1396,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(schema, "8");
+        assert_eq!(schema, SCHEMA_VERSION);
         assert_eq!(dst, "notes/kepler");
     }
 
@@ -1190,6 +1419,7 @@ mod tests {
             .agent_update_note(
                 &conn,
                 crate::vault::NoteUpdate {
+                    judgment: None,
                     id: &id,
                     title: None,
                     body: Some("See [new green alias](/notes/kepler.md)."),
@@ -1270,7 +1500,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "8");
+        assert_eq!(schema, SCHEMA_VERSION);
         assert!(migrated.prepare("SELECT note_uid, namespace, authority_role, authority_status, authority_scope FROM notes LIMIT 0").is_ok());
         assert!(
             migrated
@@ -1325,9 +1555,11 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
+        drop_distillation_schema_for_legacy_fixture(&conn);
         conn.execute_batch(
             "DROP TABLE action_capability_uses;
              DROP TABLE action_receipts;
+             ALTER TABLE notes DROP COLUMN normal_reference_allowed;
              UPDATE meta SET value='5' WHERE key='schema';",
         )
         .unwrap();
@@ -1339,7 +1571,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "8");
+        assert_eq!(schema, SCHEMA_VERSION);
         assert!(
             migrated
                 .prepare(
@@ -1370,6 +1602,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let conn = open_db(&vault).unwrap();
+        drop_distillation_schema_for_legacy_fixture(&conn);
         conn.execute_batch(
             "DROP TABLE action_capability_uses;
              DROP TABLE action_receipts;
@@ -1399,6 +1632,7 @@ mod tests {
                  'receipt:v6', 'workspace:test', 'hash:v6', 'key:v6',
                  '{}', '{}', 'pending', 1
              );
+             ALTER TABLE notes DROP COLUMN normal_reference_allowed;
              UPDATE meta SET value='6' WHERE key='schema';",
         )
         .unwrap();
@@ -1410,7 +1644,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "8");
+        assert_eq!(schema, SCHEMA_VERSION);
         let preserved: (String, Option<String>, Option<i64>, Option<i64>) = migrated
             .query_row(
                 "SELECT receipt_id, external_target, compensation_deadline, compensated_at
@@ -1443,8 +1677,10 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
+        drop_distillation_schema_for_legacy_fixture(&conn);
         conn.execute_batch(
             "DROP TABLE distillation_runs;
+             ALTER TABLE notes DROP COLUMN normal_reference_allowed;
              UPDATE meta SET value='4' WHERE key='schema';",
         )
         .unwrap();
@@ -1456,7 +1692,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(schema, "8");
+        assert_eq!(schema, SCHEMA_VERSION);
         assert!(
             migrated
                 .prepare(
@@ -1795,7 +2031,7 @@ mod tests {
     /// (note本文 / pending export / 蒸留履歴 / action receipt)を実装した
     /// fixture DBを作る。戻り値は保存したnote document文字列。
     fn build_versioned_fixture(vault: &Vault, version: u32) -> String {
-        assert!((3..=8).contains(&version));
+        assert!((3..=CURRENT_SCHEMA).contains(&version));
         let mut front = Frontmatter::new_note("移行");
         front.origin = Some("agent".into());
         front.tags = vec!["test".into()];
@@ -1970,14 +2206,28 @@ mod tests {
             )
             .unwrap();
         }
+        if version >= 9 {
+            conn.execute_batch(
+                "ALTER TABLE notes ADD COLUMN normal_reference_allowed INTEGER NOT NULL DEFAULT 0
+                     CHECK(normal_reference_allowed IN (0, 1));
+                 UPDATE notes SET normal_reference_allowed=1;
+                 UPDATE meta SET value='9' WHERE key='schema';",
+            )
+            .unwrap();
+        }
+        if version >= 10 {
+            migrate_v9_to_v10(&conn).unwrap();
+            conn.execute("UPDATE meta SET value='10' WHERE key='schema'", [])
+                .unwrap();
+        }
         document
     }
 
-    /// v3..v8の各fixture(durable行入り)が現行schemaへ到達し、durable行を
+    /// v3..現行の各fixture(durable行入り)が現行schemaへ到達し、durable行を
     /// 1行も失わないことのmatrix検証。
     #[test]
     fn migration_matrix_reaches_current_schema_and_preserves_durable_rows() {
-        for version in 3..=8u32 {
+        for version in 3..=CURRENT_SCHEMA {
             let dir = tempfile::tempdir().unwrap();
             let vault = Vault::create(dir.path().join("v")).unwrap();
             let document = build_versioned_fixture(&vault, version);
@@ -2009,6 +2259,11 @@ mod tests {
             assert_eq!(title, "移行", "v{version}");
             assert!(body.contains("blue comet policy"), "v{version}");
             assert_eq!(stored, document, "v{version}: note documentが失われた");
+            assert!(
+                crate::proposal_workflow::normal_reference_allowed(&migrated, "notes/migrate")
+                    .unwrap(),
+                "v{version}: 通常noteを参照できる"
+            );
             if version >= 4 {
                 let export: (String, String, Option<String>, String, String) = migrated
                     .query_row(
@@ -2119,7 +2374,16 @@ mod tests {
     fn opening_a_current_schema_database_performs_no_writes() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        build_versioned_fixture(&vault, 8);
+        build_versioned_fixture(&vault, CURRENT_SCHEMA);
+        // fixtureはcache導入前の形。任意派生artifactを準備した後の再openを検証する。
+        let prepared = Connection::open(vault.index_db_path()).unwrap();
+        crate::derived_index::force_rebuild(
+            &vault,
+            &prepared,
+            crate::derived_index::DerivedArtifact::CadenceCache,
+        )
+        .unwrap();
+        drop(prepared);
         let before = logical_snapshot(&vault.index_db_path());
 
         drop(open_db(&vault).unwrap());
@@ -2153,6 +2417,36 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode.to_lowercase(), "delete");
+    }
+
+    /// 2026-09-07: schemaだけ9へ戻ったv10 DBは、台帳を維持してWAL変換前に止める。
+    #[test]
+    fn older_declaration_with_newer_durable_tables_fails_closed_before_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 10);
+        let path = vault.index_db_path();
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE meta SET value='9' WHERE key='schema'", [])
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let logical_before = logical_snapshot(&path);
+
+        let error = open_db(&vault).unwrap_err();
+        assert!(format!("{error:#}").contains("schema宣言と新しい蒸留台帳が不整合"));
+        assert_eq!(before, std::fs::read(&path).unwrap());
+        assert_eq!(
+            modified,
+            std::fs::metadata(&path).unwrap().modified().unwrap()
+        );
+        assert_eq!(logical_before, logical_snapshot(&path));
+        let probe = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mode: String = probe
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "delete");
     }
 
     /// 非空DBのmeta欠落・schema key欠落・非数値versionはいずれもcorruptとして
@@ -2311,5 +2605,92 @@ mod tests {
                 .is_err(),
             "v5→v6で作ったaction_receiptsも巻き戻る"
         );
+    }
+
+    /// 2026-09-06: 参照可否の補完が失敗しても列追加・schema昇格を部分確定しない。
+    #[test]
+    fn normal_reference_migration_failure_rolls_back_column_and_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 8);
+        Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_reference_backfill BEFORE UPDATE ON notes
+             BEGIN SELECT RAISE(ABORT, 'test reference backfill failure'); END;",
+            )
+            .unwrap();
+        let before = logical_snapshot(&vault.index_db_path());
+        let error = open_db_recovery(&vault).unwrap_err();
+        assert!(format!("{error:#}").contains("v8→v9"));
+        assert_eq!(logical_snapshot(&vault.index_db_path()), before);
+        let unchanged = Connection::open(vault.index_db_path()).unwrap();
+        assert!(
+            unchanged
+                .prepare("SELECT normal_reference_allowed FROM notes LIMIT 0")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn v9_distillation_migration_queues_only_eligible_notes_and_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let document = build_versioned_fixture(&vault, 9);
+        let legacy = Connection::open(vault.index_db_path()).unwrap();
+        let mut human = Note::parse(&document).unwrap();
+        human.front.origin = Some("human".into());
+        legacy.execute(
+            "INSERT INTO notes(id, document, normal_reference_allowed) VALUES('notes/human', ?1, 1)",
+            [human.to_file_string().unwrap()],
+        ).unwrap();
+        let mut ticket = Note::parse(&document).unwrap();
+        ticket
+            .front
+            .extra
+            .insert("proposal_ticket".into(), serde_yaml::Value::Null);
+        legacy.execute(
+            "INSERT INTO notes(id, document, normal_reference_allowed) VALUES('notes/ticket', ?1, 1)",
+            [ticket.to_file_string().unwrap()],
+        ).unwrap();
+        drop(legacy);
+        let migrated = open_db_recovery(&vault).unwrap();
+        let jobs = crate::distillation_jobs::status(&migrated).unwrap();
+        assert_eq!(jobs.pending, 1);
+        let lease = crate::distillation_jobs::claim(&migrated, 100, 60)
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.note, "notes/migrate");
+        drop(migrated);
+        let reopened = open_db_recovery(&vault).unwrap();
+        assert!(
+            crate::distillation_jobs::claim(&reopened, 159, 60)
+                .unwrap()
+                .is_none()
+        );
+        let resumed = crate::distillation_jobs::claim(&reopened, 160, 60)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.note, lease.note);
+        assert_eq!(resumed.generation, lease.generation);
+        assert_ne!(resumed.token, lease.token);
+    }
+
+    #[test]
+    fn distillation_migration_rolls_back_eligibility_and_queue_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 9);
+        Connection::open(vault.index_db_path())
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_distillation_backfill BEFORE UPDATE ON notes
+             BEGIN SELECT RAISE(ABORT, 'test distillation backfill failure'); END;",
+            )
+            .unwrap();
+        let before = logical_snapshot(&vault.index_db_path());
+        let error = open_db_recovery(&vault).unwrap_err();
+        assert!(format!("{error:#}").contains("v9→v10"));
+        assert_eq!(logical_snapshot(&vault.index_db_path()), before);
     }
 }

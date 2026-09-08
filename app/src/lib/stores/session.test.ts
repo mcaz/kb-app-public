@@ -120,3 +120,53 @@ describe("workspace tabs", () => {
     expect(useSession.getState().tabs).toHaveLength(1);
   });
 });
+
+// 2026-09-08: ホームの件数リンクが以前のカテゴリ・詳細へ戻ったため、検索の初期化を画面遷移から分ける。
+describe("all-note search context", () => {
+  it.each(["list", "note"] as const)(
+    "%sからホームへ来ても、履歴と別タブを保って条件だけ解除する",
+    (pane) => {
+      const session = () => useSession.getState();
+      session().openNote("other/keep");
+      const other = session().tabs[0];
+      session().openTab();
+      session().selectCategory("research");
+      if (pane === "note") session().openListedNote("research/previous");
+      session().go("home");
+      session().applyFavorite({
+        name: "old",
+        query: "old query",
+        tags: ["old"],
+        period: "7",
+        sort: "title",
+      });
+      const before = session();
+      session().resetSearch();
+      expect(session()).toMatchObject({
+        view: "home",
+        selectedId: before.selectedId,
+        selectedCategory: "research",
+        browsePane: pane,
+        backStack: before.backStack,
+        forwardStack: before.forwardStack,
+        query: "",
+        selectedTags: [],
+        period: "all",
+        sort: "updated",
+        activeFav: null,
+      });
+      expect(session().tabs[0]).toEqual(other);
+      expect(session().tabs[1]).toMatchObject({
+        query: "",
+        selectedTags: [],
+        period: "all",
+        sort: "updated",
+        activeFav: null,
+      });
+      session().setSearchTags(["new", "new"]);
+      expect(session().selectedTags).toEqual(["new"]);
+      expect(session().view).toBe("home");
+      expect(session().backStack).toEqual(before.backStack);
+    },
+  );
+});

@@ -19,12 +19,14 @@ import { FileCard } from "./FileCard";
 import { FilePreviewDialog } from "./FilePreviewDialog";
 import { OrphanSection } from "./OrphanSection";
 import { filterFiles, formatBytes, summarizeFiles, type FileKind } from "./fileKind";
+import { fileFilterVariants } from "./variants";
 
 const FILE_KINDS = ["pdf", "image", "document", "other"] as const;
 
 /** ノートを横断して、現行版のファイルを探して開く一覧。 */
 export function FilesPage() {
   const { t, i18n } = useTranslation("files");
+  const filterStyles = fileFilterVariants();
   const { data, isPending } = useFiles();
   const purge = usePurgeFlow();
   const [query, setQuery] = useState("");
@@ -92,11 +94,11 @@ export function FilesPage() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t("search")}
-              className="border-line bg-panel-2 text-ink w-full rounded-lg border py-2.5 pr-3 pl-10 text-[13px]"
+              className={filterStyles.search()}
             />
           </label>
           <Select value={kind} onValueChange={(value) => setKind(value as FileKind | "all")}>
-            <SelectTrigger aria-label={t("filter.label")} className="bg-panel-2 w-40">
+            <SelectTrigger aria-label={t("filter.label")} className={filterStyles.kind()}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

@@ -680,6 +680,7 @@ mod tests {
                     .propose(
                         &conn,
                         NoteProposal {
+                            judgment: None,
                             title,
                             body: "完了内容",
                             description: Some("完了したinitiative"),
@@ -807,6 +808,7 @@ mod tests {
             .agent_update_note(
                 &stale_fixture.conn,
                 NoteUpdate {
+                    judgment: None,
                     id: &stale_fixture.first,
                     title: None,
                     body: Some("後続変更"),
@@ -894,6 +896,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "knowledge",
                     body: "本文",
                     description: Some("対象外"),

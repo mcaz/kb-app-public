@@ -50,6 +50,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: 契約 co-change gate 自体の回帰テスト
         run: python3 tests/contract-cochange/test_contract_cochange.py
+      - name: 観測用の新規会話起動を実モデルなしで検査
+        run: python3 scripts/test_start_observation_claude.py
+      - name: 復旧GUIの起動条件と設定保全を隔離環境で検査
+        run: python3 scripts/test_launch_storage_recovery.py
+      - name: 判断材料の評価を合成fixtureで検査
+        run: python3 scripts/test_judgment_eval.py
       - name: 契約文書とコア実装・テストを同じコミットで変更する
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}

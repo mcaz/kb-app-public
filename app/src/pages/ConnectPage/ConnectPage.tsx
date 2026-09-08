@@ -17,12 +17,16 @@ import {
   useConnectState,
   useEmbedEnable,
   useGitHubAuthState,
+  useInspectRuntimeStorage,
+  usePlanRuntimeRecovery,
 } from "@/lib/queries";
+import { useRuntimeReportCopy } from "./useRuntimeReportCopy";
+import { connectPageVariants } from "./variants";
 
 /** 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)。 */
 export function ConnectPage() {
   const { t } = useTranslation(["connect", "common"]);
-  const { data: state, isPending } = useConnectState();
+  const { data: state, error, isError, isFetching, refetch } = useConnectState();
   const { data: githubAuth } = useGitHubAuthState();
   const errorText = useErrorText();
   const backupErrorText = useBackupErrorText();
@@ -32,15 +36,60 @@ export function ConnectPage() {
   const backupSetRemote = useBackupSetRemote();
   const backupCreateRepository = useBackupCreateRepository();
   const backupNow = useBackupNow();
+  const inspectStorage = useInspectRuntimeStorage();
+  const planRecovery = usePlanRuntimeRecovery();
+  const diagnosticsCopy = useRuntimeReportCopy(inspectStorage.mutateAsync, "diagnostics");
+  const recoveryPlanCopy = useRuntimeReportCopy(planRecovery.mutateAsync, "recoveryPlan");
+  const copyingReport = diagnosticsCopy.copying || recoveryPlanCopy.copying;
   const [remoteUrl, setRemoteUrl] = useState("");
   const [repositoryName, setRepositoryName] = useState("kb-vault");
   const [backupMode, setBackupMode] = useState<"create" | "existing">("create");
+  const loadStyles = connectPageVariants();
 
-  if (isPending || !state) {
+  const loadFailure = isError && (
+    <div className={loadStyles.failure()}>
+      <p className={loadStyles.error()} role="alert">
+        {t("loadFailed")}
+        <br />
+        {errorText(error)}
+      </p>
+      <Button disabled={isFetching} onClick={() => void refetch()}>
+        {t(isFetching ? "common:state.checking" : "common:action.retry")}
+      </Button>
+      <p id="storage-diagnostics-description" className={loadStyles.description()}>
+        {t("diagnostics.description")}
+      </p>
+      <Button
+        disabled={copyingReport || isFetching}
+        aria-describedby="storage-diagnostics-description"
+        onClick={() => void diagnosticsCopy.copy()}
+      >
+        {diagnosticsCopy.buttonLabel}
+      </Button>
+      <p id="storage-recovery-plan-description" className={loadStyles.description()}>
+        {t("recoveryPlan.description")}
+      </p>
+      <Button
+        disabled={copyingReport || isFetching}
+        aria-describedby="storage-recovery-plan-description"
+        onClick={() => void recoveryPlanCopy.copy()}
+      >
+        {recoveryPlanCopy.buttonLabel}
+      </Button>
+    </div>
+  );
+
+  if (!state) {
     return (
       <SinglePaneLayout>
         <h1 className="px-5 pt-4 text-lg font-bold">{t("common:nav.connect")}</h1>
-        <p className="text-muted px-5 py-4">{t("common:state.checking")}</p>
+        {isError ? (
+          loadFailure
+        ) : (
+          <p className="text-muted px-5 py-4" role="status">
+            {t("common:state.checking")}
+          </p>
+        )}
       </SinglePaneLayout>
     );
   }
@@ -50,6 +99,7 @@ export function ConnectPage() {
   return (
     <SinglePaneLayout>
       <h1 className="px-5 pt-4 text-lg font-bold">{t("common:nav.connect")}</h1>
+      {loadFailure}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] content-start gap-3 px-5 py-4">
         <ConnectCard
           name={t("ai.name")}

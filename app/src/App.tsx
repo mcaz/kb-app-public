@@ -9,17 +9,21 @@ import { GlobalSearchDialog } from "@/components/organisms/GlobalSearchDialog";
 import { Sidebar } from "@/components/organisms/Sidebar";
 import { WorkspaceTabs } from "@/components/organisms/WorkspaceTabs";
 import { AppShell } from "@/components/templates/AppShell";
+import { useAutomaticRefresh } from "@/hooks/useAutomaticRefresh";
+import { useErrorText } from "@/hooks/useErrorText";
 import { useNoteFileIntake } from "@/hooks/useNoteFileIntake";
 import { useGlobalSearchShortcut } from "@/hooks/useGlobalSearchShortcut";
 import { useNavigationHistoryShortcut } from "@/hooks/useNavigationHistoryShortcut";
 import { useSettingsShortcut } from "@/hooks/useSettingsShortcut";
 import { useTheme } from "@/hooks/useTheme";
 import { useTrayLabels } from "@/hooks/useTrayLabels";
+import { useWorkspaceTabShortcuts } from "@/hooks/useWorkspaceTabShortcuts";
 import { GraphPage } from "@/pages/GraphPage";
 import { FilesPage } from "@/pages/FilesPage";
 import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
+import { ProposalsPage } from "@/pages/ProposalsPage";
 import { SettingsDialog } from "@/pages/SettingsDialog";
 import {
   queryKeys,
@@ -32,6 +36,7 @@ import { useSession } from "@/lib/stores/session";
 
 export function App() {
   const { t } = useTranslation("common");
+  const errorText = useErrorText();
   const {
     data: setup,
     error: setupError,
@@ -40,8 +45,15 @@ export function App() {
     refetch: retrySetup,
   } = useSetupState();
   const ready = setup !== undefined && !setup.needs_onboarding;
-  const { data: home } = useHomeState(ready);
-  const { data: categoryData } = useNoteCategories(ready);
+  const automaticRefresh = useAutomaticRefresh(ready);
+  const homeQuery = useHomeState(ready);
+  const home = homeQuery.data;
+  const {
+    data: categoryData,
+    error: categoryError,
+    isFetching: categoriesFetching,
+    refetch: retryCategories,
+  } = useNoteCategories(ready);
   // 初回のDB表示を先に完了させてから保守を開始する(stale-while-revalidate)。
   const maintenance = useMaintenanceRefresh(
     ready && home !== undefined && categoryData !== undefined,
@@ -52,8 +64,19 @@ export function App() {
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchMode, setSearchMode] = useState<"recent" | "all">("recent");
+  const [searchOpening, setSearchOpening] = useState(0);
   const openSearch = useCallback(() => {
+    setSearchMode("recent");
     setSettingsOpen(false);
+    setSearchOpen(true);
+  }, []);
+  const openAllNotes = useCallback(() => {
+    useSession.getState().resetSearch();
+    setSettingsOpen(false);
+    setSearchMode("all");
+    // 前回の選択・小画面プレビュー・debounceを一緒に捨て、毎回全件から開く。
+    setSearchOpening((opening) => opening + 1);
     setSearchOpen(true);
   }, []);
   const openSettings = useCallback(() => {
@@ -71,6 +94,7 @@ export function App() {
   useGlobalSearchShortcut(openSearch, !isPending && !setup?.needs_onboarding);
   useSettingsShortcut(openSettings, !isPending && !setup?.needs_onboarding);
   useNavigationHistoryShortcut(!isPending && !setup?.needs_onboarding);
+  useWorkspaceTabShortcuts(ready && !searchOpen && !settingsOpen);
 
   // 外部更新・派生情報の保守が終わった後だけ、影響するDB queryを再取得する。
   useEffect(() => {
@@ -83,6 +107,7 @@ export function App() {
     handledMaintenanceAt.current = maintenance.dataUpdatedAt;
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.home }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.noteCountHistory }),
       queryClient.invalidateQueries({ queryKey: queryKeys.tagOverview }),
       queryClient.invalidateQueries({ queryKey: queryKeys.noteCategories }),
       queryClient.invalidateQueries({ queryKey: queryKeys.noteLists }),
@@ -90,6 +115,7 @@ export function App() {
       queryClient.invalidateQueries({ queryKey: queryKeys.searches }),
       queryClient.invalidateQueries({ queryKey: queryKeys.graph }),
       queryClient.invalidateQueries({ queryKey: queryKeys.connect }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.proposals }),
     ]);
   }, [maintenance.dataUpdatedAt, queryClient]);
 
@@ -135,7 +161,7 @@ export function App() {
         <div style={{ maxWidth: 520, textAlign: "center" }}>
           <strong style={{ display: "block", fontSize: 20 }}>{t("state.startupFailed")}</strong>
           <p style={{ color: "var(--color-muted)", margin: "12px 0 20px" }}>
-            {setupError instanceof Error ? setupError.message : String(setupError)}
+            {errorText(setupError)}
           </p>
           <button
             type="button"
@@ -172,7 +198,10 @@ export function App() {
         }
         sidebar={
           <Sidebar
-            categories={categoryData?.categories ?? []}
+            categories={categoryData?.categories}
+            categoriesError={categoryError ? errorText(categoryError) : null}
+            categoriesFetching={categoriesFetching}
+            onRetryCategories={() => void retryCategories()}
             onOpenSearch={openSearch}
             settingsOpen={settingsOpen}
             onOpenSettings={openSettings}
@@ -180,13 +209,31 @@ export function App() {
         }
         tabs={<WorkspaceTabs />}
       >
-        {view === "home" && <HomePage home={home} />}
+        {view === "home" && (
+          <HomePage
+            home={home}
+            onOpenAllNotes={openAllNotes}
+            refresh={{
+              updatedAt: homeQuery.dataUpdatedAt,
+              isFetching: homeQuery.isFetching,
+              isError: homeQuery.isError,
+              detectionFailed: Boolean(automaticRefresh.error),
+              retry: automaticRefresh.retry,
+            }}
+          />
+        )}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
         {view === "files" && <FilesPage />}
         {view === "graph" && <GraphPage />}
+        {view === "proposals" && <ProposalsPage />}
       </AppShell>
 
-      <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+      <GlobalSearchDialog
+        key={searchOpening}
+        mode={searchMode}
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+      />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <Toaster theme={theme} />
     </TooltipProvider>

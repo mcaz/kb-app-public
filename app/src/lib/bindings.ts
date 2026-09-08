@@ -6,6 +6,11 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	/**  起動引数から選んだnativeの固定値。URLやWebViewの保存値でモードを変えない。 */
+	appBootMode: () => __TAURI_INVOKE<AppBootMode>("app_boot_mode"),
+	recoveryPlan: () => typedError<RuntimeRecoveryPlan, AppError>(__TAURI_INVOKE("recovery_plan")),
+	recoveryApply: (input: RuntimeRecoveryRequest) => typedError<RuntimeRecoveryReceipt, AppError>(__TAURI_INVOKE("recovery_apply", { input })),
+	recoveryExit: () => __TAURI_INVOKE<void>("recovery_exit"),
 	autostartStatus: () => typedError<AutostartState, AppError>(__TAURI_INVOKE("autostart_status")),
 	autostartSet: (enabled: boolean) => typedError<AutostartState, AppError>(__TAURI_INVOKE("autostart_set", { enabled })),
 	/**
@@ -13,6 +18,8 @@ export const commands = {
 	 *  起動時と切り替え時にフロントから渡す(常駐開始直後だけ既定の日本語が出る)。
 	 */
 	traySetLabels: (show: string, quit: string) => typedError<null, AppError>(__TAURI_INVOKE("tray_set_labels", { show, quit })),
+	windowHide: () => typedError<null, AppError>(__TAURI_INVOKE("window_hide")),
+	workspaceTabShortcutsConfigure: (enabled: boolean, file: string, newTab: string, closeTab: string) => typedError<null, AppError>(__TAURI_INVOKE("workspace_tab_shortcuts_configure", { enabled, file, newTab, closeTab })),
 	setupState: () => typedError<SetupState, AppError>(__TAURI_INVOKE("setup_state")),
 	/**  最初の vault を自動作成(既定名「わたしのノート」実体 my-notes)。 */
 	onboard: () => typedError<SetupState, AppError>(__TAURI_INVOKE("onboard")),
@@ -25,6 +32,7 @@ export const commands = {
 	settingsSetAiKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_ai_kb_enabled", { enabled })),
 	settingsSetClaudeKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_claude_kb_enabled", { enabled })),
 	settingsSetGptKbEnabled: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_gpt_kb_enabled", { enabled })),
+	settingsSetHarvestStatusLine: (enabled: boolean) => typedError<Settings, AppError>(__TAURI_INVOKE("settings_set_harvest_status_line", { enabled })),
 	settingsAiGuardStatus: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_ai_guard_status")),
 	/**
 	 *  macOS の管理者領域へ、Codex と Claude Code が上書きできないポリシーを置く。
@@ -33,13 +41,32 @@ export const commands = {
 	settingsInstallAiGuard: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_install_ai_guard")),
 	/**  Codex だけを Full Access に切り替える。Codex の KB 仲介は同時に fail-closed になる。 */
 	settingsEnableAiGuardDevelopmentMode: () => typedError<AiGuardStatus, AppError>(__TAURI_INVOKE("settings_enable_ai_guard_development_mode")),
+	distillationSettingsGet: () => typedError<DistillationAiSettings, AppError>(__TAURI_INVOKE("distillation_settings_get")),
+	distillationSettingsSet: (settings: DistillationAiSettings) => typedError<DistillationAiSettings, AppError>(__TAURI_INVOKE("distillation_settings_set", { settings })),
+	distillationProviders: () => __TAURI_INVOKE<DistillationAiProviderStatus[]>("distillation_providers"),
+	distillationModels: (provider: DistillationAiProvider) => __TAURI_INVOKE<DistillationModelCatalog>("distillation_models", { provider }),
+	distillationQueueStatus: () => typedError<DistillationQueueView, AppError>(__TAURI_INVOKE("distillation_queue_status")),
+	distillationRetryFailed: () => typedError<DistillationQueueView, AppError>(__TAURI_INVOKE("distillation_retry_failed")),
+	distillationRequestNow: (scope: ImmediateDistillationScope) => typedError<ImmediateDistillationResult, AppError>(__TAURI_INVOKE("distillation_request_now", { scope })),
 	homeState: () => typedError<HomeState_Serialize, AppError>(__TAURI_INVOKE("home_state")),
+	/**  別MCPプロセスの保存を、一覧全件の取得や保守処理なしで検知する。 */
+	noteRevision: () => typedError<string, AppError>(__TAURI_INVOKE("note_revision")),
+	/**  台帳障害やロック待ちを、最近のノート一覧の取得失敗へ波及させない。 */
+	homeObservationHealth: () => typedError<ObservationHealth, AppError>(__TAURI_INVOKE("home_observation_health")),
+	homeObservationTrend: (dayBoundariesMs: number[], filter: ObservationTrendFilter) => typedError<ObservationTrend, AppError>(__TAURI_INVOKE("home_observation_trend", { dayBoundariesMs, filter })),
+	homeNoteCountTrend: (localToday: string) => typedError<NoteCountTrend, AppError>(__TAURI_INVOKE("home_note_count_trend", { localToday })),
 	maintenanceRefresh: () => typedError<MaintenanceReport, AppError>(__TAURI_INVOKE("maintenance_refresh")),
 	/**  タグ一覧(説明は KB の「タグ運用」ノート由来 — アプリは意味づけを持たない)。 */
 	tagOverview: () => typedError<TagOverview, AppError>(__TAURI_INVOKE("tag_overview")),
 	careDismiss: (key: string) => typedError<null, AppError>(__TAURI_INVOKE("care_dismiss", { key })),
+	proposalList: () => typedError<ProposalListData, AppError>(__TAURI_INVOKE("proposal_list")),
+	proposalGet: (note: string) => typedError<ProposalDetailData, AppError>(__TAURI_INVOKE("proposal_get", { note })),
+	proposalDecide: (note: string, expectedEtag: string, input: DecisionInput) => typedError<ProposalMutationData, AppError>(__TAURI_INVOKE("proposal_decide", { note, expectedEtag, input })),
 	noteGet: (id: string) => typedError<NoteView, AppError>(__TAURI_INVOKE("note_get", { id })),
+	/**  自動再取得や検索プレビューに文脈を奪われないよう、主ノートの選択だけを記録する。 */
+	noteSetCurrent: (id: string) => typedError<Degradation[], AppError>(__TAURI_INVOKE("note_set_current", { id })),
 	noteSearch: (query: string) => typedError<SearchOutcome_Serialize, AppError>(__TAURI_INVOKE("note_search", { query })),
+	noteBrowse: (tags: string[], period: NoteBrowsePeriod, sort: NoteBrowseSort, after: string | null, limit: number) => typedError<NoteBrowsePage_Serialize, AppError>(__TAURI_INVOKE("note_browse", { tags, period, sort, after, limit })),
 	noteCategories: () => typedError<NoteCategories, AppError>(__TAURI_INVOKE("note_categories")),
 	/**  選択ディレクトリ配下のノートをcursor pageで返す。 */
 	noteList: (category: string, after: string | null, limit: number) => typedError<NoteListPage, AppError>(__TAURI_INVOKE("note_list", { category, after, limit })),
@@ -54,13 +81,13 @@ export const commands = {
 	filesList: () => typedError<FilesPage, AppError>(__TAURI_INVOKE("files_list")),
 	/**
 	 *  パスから取り込む(選択・ドラッグ&ドロップ)。
-	 * 
+	 *
 	 *  `supersedes` を渡すと**新しい版**になる(前の版は残る)。
 	 */
 	fileAdd: (noteId: string, path: string, supersedes: string | null) => typedError<Added, AppError>(__TAURI_INVOKE("file_add", { noteId, path, supersedes })),
 	/**
 	 *  クリップボードの画像を取り込む。画像が無ければ `None`(テキストの貼り付けを邪魔しない)。
-	 * 
+	 *
 	 *  WKWebView は DOM の paste にクリップボード画像を渡さないため、この経路が要る。
 	 */
 	fileAddFromClipboard: (noteId: string) => typedError<{
@@ -78,7 +105,7 @@ export const commands = {
 	filePurgePlan: (id: string, reason: string) => typedError<PurgePlan, AppError>(__TAURI_INVOKE("file_purge_plan", { id, reason })),
 	/**
 	 *  下見どおりなら取り除く。
-	 * 
+	 *
 	 *  `confirmed` は**画面が本人へ訊いたときだけ** true。原本の無い実体(MCP 添付)を
 	 *  消すときに要る。履歴からは消えないので、画面は「完全に削除」と書かない。
 	 */
@@ -87,10 +114,10 @@ export const commands = {
 	fileFetch: (id: string) => typedError<Availability, AppError>(__TAURI_INVOKE("file_fetch", { id })),
 	/**
 	 *  開く。**中身は必ず resolver 経由で取り出す。**
-	 * 
+	 *
 	 *  OS のアプリへ渡すにはパスが要るが、置き場のファイル名は照合値(hash)なので、
 	 *  表示名を付けた複製を一時領域に作ってから渡す。内容は不変なので使い回せる。
-	 * 
+	 *
 	 *  経路をここに一本化しているのは、**画面へパスを渡さない**ため。パスを渡すと
 	 *  「手元に無いものの中身を開かない」が画面側の作法に落ちる(決定9・resolver の doc)。
 	 */
@@ -105,6 +132,10 @@ export const commands = {
 	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */
 	legacyOpen: (noteId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("legacy_open", { noteId, name })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
+	/**  DB初期化に失敗している画面から使うため、通常のAppState接続を開かない。 */
+	inspectRuntimeStorage: () => typedError<RuntimeDiagnosticsReport, AppError>(__TAURI_INVOKE("inspect_runtime_storage")),
+	/**  復元元の照合も、失敗している通常接続や同期を開始せずに行う。 */
+	planRuntimeRecovery: () => typedError<RuntimeRecoveryPlan, AppError>(__TAURI_INVOKE("plan_runtime_recovery")),
 	/**  Vault の有無に依存しないため、初回の「既存 Vault を復元」画面からも呼べる。 */
 	githubAuthState: () => typedError<GitHubAuthState, AppError>(__TAURI_INVOKE("github_auth_state")),
 	/**  OAuth device flow は polling を含む blocking 処理なので同期 command にする。 */
@@ -119,7 +150,7 @@ export const commands = {
 	backupSetRemote: (url: string) => typedError<null, AppError>(__TAURI_INVOKE("backup_set_remote", { url })),
 	/**
 	 *  かしこい検索をオンにする(モデル導入+全ノート埋め込み)。数分かかる。
-	 * 
+	 *
 	 *  ブロッキング処理なので、同期関数のままTauriの非同期実行枠へ送る。
 	 */
 	embedEnable: () => typedError<null, AppError>(__TAURI_INVOKE("embed_enable")),
@@ -132,6 +163,7 @@ export const events = {
 	embedProgress: makeEvent<EmbedProgress>("embed-progress"),
 	gitHubDeviceAuthorization: makeEvent<GitHubDeviceAuthorization>("git-hub-device-authorization"),
 	vaultRestoreProgress: makeEvent<VaultRestoreProgress>("vault-restore-progress"),
+	workspaceTabShortcut: makeEvent<WorkspaceTabShortcut>("workspace-tab-shortcut"),
 };
 
 /* Types */
@@ -153,59 +185,63 @@ export type AiGuardStatus = {
 	guarded_paths: string[],
 };
 
-export type AppError = 
+export type AiRunError = "unconfigured" | "kb_disabled" | "invalid_settings" | "not_installed" | "unsupported_cli" | "system_policy_conflict" | "guard_outdated" | "guard_unavailable" | "start_failed" | "timed_out" | "cancelled" | "output_limit" | "process_failed" | "invalid_response" | "io";
+
+export type AppBootMode = "normal" | "storage_recovery";
+
+export type AppError = { code: "recovery_failed"; kind: RuntimeRecoveryFailureKind } | { code: "proposal_failed"; kind: ProposalFailureKind } |
 /**  vault を開けない(未オンボーディング・レジストリの不整合)。 */
-{ code: "vault_unavailable" } | 
+{ code: "vault_unavailable" } |
 /**  指定 ID のノートが無い(消された・まだ書かれていない)。 */
-{ code: "note_not_found"; id: string } | 
+{ code: "note_not_found"; id: string } |
 /**  「本体も同期」の上限を超えている。quota 不足とは別物(ADR-0003 決定8)。 */
-{ code: "file_too_large"; size: number; limit: number } | 
+{ code: "file_too_large"; size: number; limit: number } |
 /**  別の場所で更新された。**自動再試行も強制上書きもしない**(決定7)。 */
-{ code: "file_conflict"; expected: number; current: number } | 
+{ code: "file_conflict"; expected: number; current: number } |
 /**  端末固有の場所は指せない(他の端末から辿れないため)。 */
-{ code: "file_location_unstable" } | 
+{ code: "file_location_unstable" } |
 /**  仕事のリポジトリ由来なので、この変更は認めない。 */
-{ code: "file_client_repo_locked" } | 
+{ code: "file_client_repo_locked" } |
 /**  持ち出しを広げる変更なので、確認を経ていない限り通さない(決定10)。 */
-{ code: "file_needs_confirm" } | 
+{ code: "file_needs_confirm" } |
 /**
  *  ファイルを取り除けなかった。**利用者が次にできることがある**拒否だけを
  *  ここへ運ぶ。git・ディスクの失敗は `CoreFailed` として扱う。
  */
-{ code: "file_purge_refused"; refusal: Refusal } | 
+{ code: "file_purge_refused"; refusal: Refusal } |
 /**  識別子・参照名の形が不正。 */
-{ code: "file_malformed"; field: string } | 
+{ code: "file_malformed"; field: string } |
 /**  手元に無い(または方針で閉じている)ので開けない。 */
-{ code: "file_not_here" } | 
+{ code: "file_not_here" } |
 /**
  *  クリップボード画像が大きすぎる。**ファイルの上限ではない** —
  *  この経路だけ streaming できず全量がメモリに載るため(決定8)。
  */
-{ code: "clipboard_image_too_large" } | 
+{ code: "clipboard_image_too_large" } |
 /**  Claude Desktop が見つからない(未インストール)。 */
-{ code: "claude_desktop_not_found" } | 
+{ code: "claude_desktop_not_found" } |
 /**  Claude Desktop を起動できなかった。 */
-{ code: "claude_desktop_launch_failed" } | 
+{ code: "claude_desktop_launch_failed" } |
 /**  既存の管理者ポリシーへ黙って上書きできない。 */
-{ code: "ai_guard_policy_conflict" } | 
+{ code: "ai_guard_policy_conflict" } |
 /**  開発高速モードへ入る前提となる strict guard が有効でない。 */
-{ code: "ai_guard_strict_mode_required" } | 
+{ code: "ai_guard_strict_mode_required" } |
 /**  この OS では AI の生ファイルアクセスを強制的に閉じられない。 */
-{ code: "ai_guard_unsupported" } | 
+{ code: "ai_guard_unsupported" } |
 /**  管理者ポリシーの導入または導入後検査に失敗した。 */
-{ code: "ai_guard_install_failed" } | 
+{ code: "ai_guard_install_failed" } |
 /**  バックアップ・復元の失敗。既知の理由は画面が翻訳して次の行動を案内する。 */
-{ code: "backup_failed"; kind: BackupFailureKind | null } | 
+{ code: "backup_failed"; kind: BackupFailureKind | null } |
 /**  かしこい検索の準備に失敗。 */
-{ code: "embed_failed" } | 
+{ code: "embed_failed" } |
 /**  コアの失敗。診断詳細は画面へ運ばず、kindだけを翻訳する。 */
-{ code: "core_failed"; kind: CoreErrorKind } | 
+{ code: "core_failed"; kind: CoreErrorKind } |
 /**  Tauri / OS 層で分類できないもの。画面はmessageを表示せずログだけに使う。 */
 { code: "unexpected"; message: string };
 
 /**
  *  Artifact record の不透明な identity(ULID)。
- * 
+ *
  *  `content_hash` とは**別物**。同じ bytes でも来歴や信頼境界が違えば別の record を持てる
  *  (正本の却下案「`artifact_id = content_hash`」)。時刻が先頭に来るので、
  *  文字列のまま並べれば作成順になる。
@@ -230,11 +266,11 @@ export type AutostartState = {
 };
 
 /**  この端末で実体を開けるか。**台帳には載せない**(上の doc 参照)。 */
-export type Availability = 
+export type Availability =
 /**  手元にある */
-"local" | 
+"local" |
 /**  この端末には無い(取り寄せられる可能性がある) */
-"missing" | 
+"missing" |
 /**  方針により、この端末では開かない。**取得の再試行も提案しない** */
 "unavailable_by_policy";
 
@@ -255,6 +291,8 @@ export type CareProposal = {
 	detail: string,
 };
 
+export type ClientSurface = "claude_code" | "codex_cli" | "claude_desktop" | "chat_gpt" | "rule_delivery_evaluation" | "unknown";
+
 export type ConnectState = {
 	desktop: DesktopStatus,
 	backup: BackupStatus,
@@ -266,39 +304,98 @@ export type ConnectState = {
 /**  画面が次の行動を訳し分けるための安定した分類。 */
 export type CoreErrorKind = "vault_unavailable" | "invalid_input" | "storage" | "index" | "configuration" | "embedding" | "unexpected";
 
+export type DecisionInput = {
+	outcome: DecisionOutcome,
+	reason: string,
+	next_action: string,
+};
+
+export type DecisionOutcome = "approve" | "reject" | "hold";
+
 /**  データ本体を返し続けられる部分失敗。 */
-export type Degradation = { code: "remote_sync"; detail: string } | { code: "markdown_export"; detail: string } | { code: "index_sync"; detail: string } | 
+export type Degradation = { code: "remote_sync"; detail: string } | { code: "markdown_export"; detail: string } | { code: "index_sync"; detail: string } |
 /**  open時の自己修復で派生索引を再構築した(今回だけのrecovery notice)。 */
-{ code: "index_recovered"; artifact: string; detail: string } | 
+{ code: "index_recovered"; artifact: string; detail: string } |
 /**  派生索引の修復に失敗した(検索はfallback継続、次回openで再試行)。 */
-{ code: "index_repair"; artifact: string; detail: string } | 
+{ code: "index_repair"; artifact: string; detail: string } |
 /**  governance台帳を修復できず、note書込をfail-closedで停止中。 */
-{ code: "governance_write_blocked"; detail: string } | 
+{ code: "governance_write_blocked"; detail: string } |
 /**
  *  versioned派生artifactが利用不可(dirty・format不一致・retired等)で、
  *  baseline検索へfallbackした(derived_lifecycle::check_availability)。
  */
-{ code: "artifact_not_ready"; artifact: string; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "diversity_ranking"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
+{ code: "artifact_not_ready"; artifact: string; detail: string } | { code: "index_metadata"; note: string; detail: string } | { code: "index_read"; note: string; detail: string } | { code: "index_parse"; note: string; detail: string } | { code: "embedding_index_pending"; remaining: number } | { code: "embedding_index"; detail: string } | { code: "main_search"; detail: string } | { code: "anchor_search"; detail: string } | { code: "diversity_ranking"; detail: string } | { code: "semantic_search"; detail: string } | { code: "rescue_search"; detail: string } | { code: "related_notes"; detail: string } | { code: "context_retrieval"; detail: string } | { code: "session_ledger"; detail: string } | { code: "note_count_history"; detail: string } | { code: "similar_notes"; detail: string } | { code: "current_note_context"; detail: string } | { code: "care_detection"; detail: string } | { code: "care_list"; detail: string } | { code: "tag_counts"; detail: string } | { code: "graph_nodes"; detail: string } | { code: "graph_edges"; detail: string };
 
-export type DeliveryStatus = 
+export type DeliveryStatus =
 /**  `local_only` なので送信対象ではない。 */
-"local_only" | 
+"local_only" |
 /**  `full` だがバックアップ先がまだ無い。 */
-"remote_not_configured" | 
+"remote_not_configured" |
 /**  LFS object と Git ref の双方が remote へ到達した。 */
-"confirmed" | 
+"confirmed" |
 /**  ローカル取り込みは成功したが commit / privacy gate / upload のいずれかが失敗した。 */
 "degraded";
 
-export type DesktopStatus = 
+export type DesktopStatus =
 /**  Claude Desktop の設定ファイルが見つからない(未インストールか未起動) */
 "not_found" | "not_connected" | "connected";
+
+export type DistillationAiProvider = "claude_code" | "codex";
+
+export type DistillationAiProviderStatus = {
+	provider: DistillationAiProvider,
+	installed: boolean,
+	unavailable_reason: AiRunError | null,
+};
+
+export type DistillationAiSettings = {
+	enabled?: boolean,
+	provider?: DistillationAiProvider | null,
+	model?: string | null,
+	reasoning_effort?: string | null,
+	timeout_seconds?: number,
+	periodic_hours?: number,
+};
+
+export type DistillationIssueError = { code: "ai"; kind: AiRunError } | { code: "context_limit" } | { code: "context_size_limit" } | { code: "review_round_limit" } | { code: "review_no_progress" } | { code: "not_supported" } | { code: "review_failed" } | { code: "needs_review"; reason: string };
+
+export type DistillationIssueView = {
+	note: string,
+	title: string | null,
+	state: string,
+	error: DistillationIssueError,
+	available_at: number,
+	attempt: number,
+};
+
+export type DistillationModel = {
+	model: string,
+	display_name: string,
+	supported_reasoning_efforts: string[],
+	default_reasoning_effort: string | null,
+	is_default: boolean,
+};
+
+export type DistillationModelCatalog = {
+	provider: DistillationAiProvider,
+	models: DistillationModel[],
+	unavailable_reason: AiRunError | null,
+};
+
+export type DistillationQueueView = {
+	paused: boolean,
+	jobs: JobStatus | null,
+	issues: DistillationIssueView[],
+	metrics: MetricsView | null,
+};
 
 /**  かしこい検索の進み具合。数分かかるので画面へ流す。 */
 export type EmbedProgress = {
 	embedded: number,
 	total: number,
 };
+
+export type Failure = { code: "ai"; kind: AiRunError } | { code: "snapshot_changed" } | { code: "lease_changed" } | { code: "review_failed" } | { code: "context_limit" } | { code: "context_size_limit" } | { code: "review_round_limit" } | { code: "review_no_progress" } | { code: "not_supported" } | { code: "cancelled" } | { code: "needs_review" } | { code: "export_pending" };
 
 /**
  *  名前付きの絞り込みセット。タグだけでなく検索語・期間・並び順も保存する
@@ -352,7 +449,7 @@ export type FileCard = {
 
 /**
  *  横断一覧のカードと、プレビューの参照ノート一覧が使う。
- * 
+ *
  *  題名だけでは「どのノートだったか」を思い出せないので、関連 Modal の行と
  *  同じ材料(抜粋・タグ・更新)まで返す。索引の1行から取れるので追加の I/O は無い。
  */
@@ -423,6 +520,11 @@ export type GraphNode = {
 	degree: number,
 };
 
+export type GroupingCounts = {
+	actual_sessions: number,
+	daily_fallback_days: number,
+};
+
 export type GuardTargetState = "enforced" | "development" | "missing" | "outdated" | "conflict" | "unsupported";
 
 export type Hit = Hit_Serialize | Hit_Deserialize;
@@ -483,6 +585,7 @@ export type HomeState = HomeState_Serialize | HomeState_Deserialize;
 
 export type HomeState_Deserialize = {
 	stats: Stats,
+	note_count: number,
 	notes: Hit_Deserialize[],
 	care: CareProposal[],
 	tags: ([string, number])[],
@@ -491,10 +594,29 @@ export type HomeState_Deserialize = {
 
 export type HomeState_Serialize = {
 	stats: Stats,
+	note_count: number,
 	notes: Hit_Serialize[],
 	care: CareProposal[],
 	tags: ([string, number])[],
 	degraded: Degradation[],
+};
+
+export type ImmediateDistillationResult = {
+	registered: number,
+	requeued: number,
+	expedited: number,
+	jobs: JobStatus,
+};
+
+export type ImmediateDistillationScope = "unreviewed" | "all";
+
+export type JobStatus = {
+	pending: number,
+	running: number,
+	retry_wait: number,
+	blocked: number,
+	completed: number,
+	oldest_pending_at: number | null,
 };
 
 /**  移行前の添付(`<id>.files/`)。読み取り専用の旧経路(決定4)。 */
@@ -509,6 +631,31 @@ export type MaintenanceReport = {
 	elapsed_ms: number,
 };
 
+export type MetricsView = {
+	available: boolean,
+	runs: RunView[],
+};
+
+export type NoteBrowsePage = NoteBrowsePage_Serialize | NoteBrowsePage_Deserialize;
+
+export type NoteBrowsePage_Deserialize = {
+	hits: Hit_Deserialize[],
+	total: number,
+	next_cursor: string | null,
+	degraded: Degradation[],
+};
+
+export type NoteBrowsePage_Serialize = {
+	hits: Hit_Serialize[],
+	total: number,
+	next_cursor: string | null,
+	degraded: Degradation[],
+};
+
+export type NoteBrowsePeriod = "all" | "7" | "30" | "90";
+
+export type NoteBrowseSort = "updated" | "created" | "title";
+
 /**  サイドバー用のディレクトリと子孫ノート件数。ノート本文は返さない。 */
 export type NoteCategories = {
 	categories: NoteCategory[],
@@ -521,6 +668,19 @@ export type NoteCategory = {
 	name: string,
 	count: number,
 };
+
+export type NoteCountTrend = {
+	status: NoteCountTrendStatus,
+	days: NoteCountTrendDay[],
+};
+
+export type NoteCountTrendDay = {
+	local_date: string,
+	count: number | null,
+	observed_at_ms: number | null,
+};
+
+export type NoteCountTrendStatus = "available" | "no_observations" | "unavailable";
 
 export type NoteFiles = {
 	files: FileRow[],
@@ -580,10 +740,96 @@ export type NoteView = {
 	vault_root: string,
 };
 
+export type ObservationHealth = {
+	status: ObservationHealthStatus,
+	period_days: number,
+	retention_days: number,
+	surfaces: ObservationSurfaceHealth[],
+	unassigned: ObservationSurfaceHealth[],
+};
+
+export type ObservationHealthStatus = "available" | "no_observations" | "disabled" | "unavailable";
+
+export type ObservationSurfaceHealth = {
+	surface: ClientSurface,
+	kb_enabled: boolean,
+	counts: SurfaceSummary,
+	last_propose_days: number | null,
+};
+
+export type ObservationTrend = {
+	status: ObservationHealthStatus,
+	days: ObservationTrendDay[],
+};
+
+export type ObservationTrendDay = {
+	start_ms: number,
+	end_ms: number,
+	hook_output_emitted: number,
+	propose_successes: number,
+	update_successes: number,
+	errors: number,
+};
+
+export type ObservationTrendFilter = "all" | "claude" | "gpt";
+
+export type Outcome = "applied" | "no_change" | "blocked" | "retry_wait" | "cancelled" | "interrupted";
+
 /**  resolver が許可した一時コピーだけを WebView に見せる。 */
 export type PreviewFile = {
 	path: string,
 	text: string | null,
+};
+
+export type ProposalDecision = {
+	revision: number,
+	/**  本人が判断時に確認したレビュー集合を、履歴全体のprefix長で固定する。 */
+	review_count: number,
+	input: DecisionInput,
+	decider: string,
+	created_at: string,
+};
+
+export type ProposalDetailData = {
+	ticket: TicketView,
+	degraded: Degradation[],
+};
+
+export type ProposalFailureKind = "invalid_input" | "stale" | "invalid_state" | "protected" | "corrupt" | "not_found";
+
+export type ProposalInput = {
+	title: string,
+	problem: string,
+	proposal: string,
+	impact: string,
+	acceptance: string,
+	tags: string[],
+	scope: string,
+};
+
+export type ProposalListData = {
+	tickets: TicketView[],
+	degraded: Degradation[],
+};
+
+export type ProposalMutationData = {
+	ticket: TicketView,
+	export_pending: boolean,
+	degraded: Degradation[],
+};
+
+export type ProposalReview = {
+	revision: number,
+	input: ReviewInput,
+	reviewer: string,
+	created_at: string,
+};
+
+export type ProposalRevision = {
+	revision: number,
+	input: ProposalInput,
+	author: string,
+	created_at: string,
 };
 
 /**  purge の下見。**まだ何も消していない。** */
@@ -621,7 +867,7 @@ export type Purged = {
 	dropped_object: boolean,
 	/**
 	 *  実体を消せなかった理由。**台帳からは既に外れている。**
-	 * 
+	 *
 	 *  台帳を先に消すのは、実体だけ先に消えて台帳が残る(開けない行が残る)の
 	 *  を避けるため。つまりここへ来た時点で取り除く操作自体は成立していて、
 	 *  失敗にすると「一覧から消えたのにエラー」という嘘になる。残るのは
@@ -632,29 +878,230 @@ export type Purged = {
 	sync_error: string | null,
 };
 
+export type RecoveryCurrentSource = "markdown" | "history_after" | "history_before" | "unavailable" | "unproven";
+
+export type RecoveryEvidenceSummary = {
+	markdown_with_job: number,
+	markdown_without_job: number,
+	eligible_markdown: number,
+	eligible_markdown_without_job: number,
+	jobs_without_markdown: number,
+	completed_review_matches: number,
+	completed_review_conflicts: number,
+	previous_review_matches: number,
+	history_after_matches: number,
+	history_before_matches: number,
+	no_matching_history: number,
+	latest_state_unproven: number,
+	current_review_available_in_history: number,
+	/**  履歴だけに残るIDは、削除済みかもしれないので復元対象と認定しない。 */
+	historical_only_notes: number,
+};
+
+export type RecoveryFreshness = "current_completed_review" | "conflicts_with_completed_review" | "matches_previous_review" | "observed_in_after_history" | "observed_only_in_before_history" | "no_latest_version_evidence" | "eligible_without_job" | "missing_markdown";
+
+export type RecoveryJobState = "pending" | "running" | "retry_wait" | "completed" | "blocked";
+
+export type RecoveryNoteEvidence = {
+	note: string,
+	markdown_present: boolean,
+	eligible: boolean | null,
+	job_present: boolean,
+	job_state: RecoveryJobState | null,
+	reviewed_hash_matches_markdown: boolean | null,
+	history_after_matches_markdown: boolean,
+	history_before_matches_markdown: boolean,
+	history_after_versions: number,
+	history_before_versions: number,
+	current_review_source: RecoveryCurrentSource,
+	freshness: RecoveryFreshness,
+};
+
+export type RecoveryPlanIssue = {
+	code: string,
+	blocking: boolean,
+	note: string | null,
+};
+
 /**
  *  purge を通さなかった理由。**利用者が次にできることがある**ものだけを型にする。
- * 
+ *
  *  想定外の失敗(git・ディスク)はここへ入れない。境界で `storage` として扱い、
  *  診断はログへ落とす。`ArtifactError` と同じ形(ADR-0002 決定10)。
  */
-export type Refusal = 
+export type Refusal =
 /**  台帳に無い(既に取り除かれた・一覧が古い)。 */
-{ reason: "not_in_ledger" } | 
+{ reason: "not_in_ledger" } |
 /**  token を知らない(使用済み・別の窓が使った)。 */
-{ reason: "unknown_token" } | 
+{ reason: "unknown_token" } |
 /**  token の期限が切れた。 */
-{ reason: "expired" } | 
+{ reason: "expired" } |
 /**  token が別の対象のもの。 */
-{ reason: "wrong_target" } | 
+{ reason: "wrong_target" } |
 /**  下見のあとに版か実体が変わった。 */
-{ reason: "changed_since_plan" } | 
+{ reason: "changed_since_plan" } |
 /**  原本が無いので、画面の確認を経ないと通さない。 */
 { reason: "needs_confirmation" };
 
 export type RelationKind = "derived_from" | "supports" | "updates" | "contradicts" | "supersedes" | "mentions";
 
 export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";
+
+export type ReviewInput = {
+	summary: string,
+	benefits: string,
+	risks: string,
+	alternatives: string,
+	recommendation: ReviewRecommendation,
+};
+
+export type ReviewRecommendation = "approve" | "reject" | "revise";
+
+export type RunView = {
+	run_id: string,
+	provider: DistillationAiProvider | null,
+	model: string | null,
+	reasoning_effort: string | null,
+	attempt: number,
+	generation: number,
+	batch_size: number,
+	completed_notes: number | null,
+	input_bytes: number | null,
+	started_at_ms: number,
+	finished_at_ms: number | null,
+	elapsed_ms: number,
+	elapsed_is_estimate: boolean,
+	outcome: Outcome | null,
+	failure: Failure | null,
+	stages: StageView[],
+};
+
+export type RuntimeDiagnosticIssue = {
+	code: string,
+	table: string | null,
+	note: string | null,
+};
+
+export type RuntimeDiagnosticsReport = {
+	format_version: number,
+	read_only: boolean,
+	recovery_performed: boolean,
+	database_snapshot_complete: boolean,
+	declared_schema: string | null,
+	runtime_store: string | null,
+	schema_fingerprint: string | null,
+	notes_columns: string[] | null,
+	unrecognized_notes_columns: number | null,
+	durable_tables: RuntimeTableObservation[],
+	exports: RuntimeExportObservation,
+	jobs: RuntimeJobObservation,
+	markdown: RuntimeMarkdownObservation,
+	findings: string[],
+	issues: RuntimeDiagnosticIssue[],
+	issue_count: number,
+	issues_truncated: boolean,
+};
+
+export type RuntimeExportObservation = {
+	upserts: number | null,
+	deletes: number | null,
+	unknown_operations: number | null,
+	invalid_upsert_documents: number | null,
+	latest_upserts_matching_db: number | null,
+	latest_upserts_differing_from_db: number | null,
+	latest_upserts_missing_from_db: number | null,
+	latest_deletes_still_in_db: number | null,
+};
+
+export type RuntimeJobObservation = {
+	notes: number | null,
+	missing_from_db: number | null,
+	missing_from_db_with_valid_markdown: number | null,
+	missing_from_db_with_valid_pending_upsert: number | null,
+	missing_from_db_without_valid_markdown: number | null,
+	missing_from_db_without_valid_markdown_or_pending_upsert: number | null,
+	missing_from_db_without_valid_markdown_ids: string[],
+	missing_ids_truncated: boolean,
+};
+
+export type RuntimeMarkdownObservation = {
+	/**  SQLiteとファイル群をまたぐ原子的snapshotではないことを常に明示する。 */
+	atomic_snapshot: boolean,
+	scan_complete: boolean,
+	files: number | null,
+	parsed: number | null,
+	invalid: number | null,
+	unreadable: number | null,
+	database_only: number | null,
+	markdown_only: number | null,
+	matching_documents: number | null,
+	differing_documents: number | null,
+};
+
+export type RuntimeRecoveryFailureKind = "invalid_request" | "plan_changed" | "unsupported_state" | "unproven_not_acknowledged" | "database_busy" | "backup_failed" | "source_changed" | "restore_failed" | "verification_failed" | "commit_failed";
+
+export type RuntimeRecoveryLedgerReceipt = {
+	table: string,
+	rows: number,
+	sha256: string,
+};
+
+export type RuntimeRecoveryPlan = {
+	format_version: number,
+	read_only: boolean,
+	recovery_performed: boolean,
+	/**  DBとMarkdown群をまたぐ原子的snapshotは取得していない。 */
+	atomic_snapshot: boolean,
+	declared_schema: number | null,
+	supported_reset_shape: boolean,
+	/**  固定対象を完読・検証できたこと。観測終了後の変更までは保証しない。 */
+	snapshot_complete: boolean,
+	plan_digest: string | null,
+	/**
+	 *  現存Markdown全件を読め、全current jobを含み、構造・参照を検証できたこと。
+	 *  reset対象への該当やblockerとは独立した被覆の検査であり、適用許可ではない。
+	 */
+	existing_markdown_coverage_complete: boolean,
+	/**
+	 *  観測した全ノートがcurrent completed hashに一致した場合だけtrue。
+	 *  観測中・観測後の全保存場所の最新版保証や適用許可ではない。
+	 */
+	latest_state_proven: boolean,
+	markdown_notes: number | null,
+	job_notes: number | null,
+	history_runs: number | null,
+	summary: RecoveryEvidenceSummary | null,
+	notes: RecoveryNoteEvidence[],
+	note_count: number,
+	notes_truncated: boolean,
+	issues: RecoveryPlanIssue[],
+	issue_count: number,
+	blocking_issue_count: number,
+	issues_truncated: boolean,
+};
+
+export type RuntimeRecoveryReceipt = {
+	backup_id: string,
+	plan_digest: string,
+	restored_notes: number,
+	verified_review_notes: number,
+	unproven_notes: number,
+	backup_verified: boolean,
+	preserved_ledgers: RuntimeRecoveryLedgerReceipt[],
+	automatic_processing_resumed: boolean,
+	restart_required: boolean,
+};
+
+export type RuntimeRecoveryRequest = {
+	expected_plan_digest: string,
+	acknowledge_unproven: boolean,
+};
+
+export type RuntimeTableObservation = {
+	table: string,
+	present: boolean | null,
+	rows: number | null,
+};
 
 export type SearchOutcome = SearchOutcome_Serialize | SearchOutcome_Deserialize;
 
@@ -684,6 +1131,7 @@ export type Settings = {
 	ai_kb_enabled?: boolean,
 	claude_kb_enabled?: boolean,
 	gpt_kb_enabled?: boolean,
+	harvest_status_line?: boolean,
 	/**
 	 *  ログイン自動起動の既定を適用済みか。登録の正本はOS側のログイン項目で、
 	 *  ここは「一度でも既定を書いたか」だけを覚える(`autostart::initialize`)。
@@ -709,6 +1157,18 @@ export type SmartSearchState = {
 	total: number,
 };
 
+export type Stage = "prepare" | "cli_check" | "model_catalog" | "ai_response" | "search" | "validate" | "commit" | "export";
+
+export type StageView = {
+	stage: Stage,
+	round: number,
+	started_at_ms: number,
+	finished_at_ms: number | null,
+	elapsed_ms: number,
+	elapsed_is_estimate: boolean,
+	succeeded: boolean | null,
+};
+
 /**  健全性の要約(FR-A2 ホーム表示用)。 */
 export type Stats = {
 	total: number,
@@ -724,10 +1184,35 @@ export type Stats = {
 	embedded: number,
 };
 
+export type SurfaceSummary = {
+	surface: ClientSurface,
+	hook_groups: GroupingCounts,
+	write_groups: GroupingCounts,
+	hook_output_prepared: number,
+	hook_output_emitted: number,
+	hook_stdout_failed: number,
+	hook_filtered: number,
+	hook_errors: number,
+	emitted_chars: number,
+	emitted_bytes: number,
+	emitted_utf16_units: number,
+	emitted_documents: number,
+	trimmed_documents: number,
+	capped_outputs: number,
+	propose_successes: number,
+	propose_errors: number,
+	update_successes: number,
+	update_errors: number,
+	write_rejections: WriteRejectionCount[],
+	unclassified_propose_errors: number,
+	unclassified_update_errors: number,
+	last_successful_propose_at_ms: number | null,
+};
+
 /**  転送軸。どこまで端末の外へ出すか。並び順がそのまま「広さ」になる。 */
-export type SyncPolicy = 
+export type SyncPolicy =
 /**  この端末だけ。台帳も外へ出さない */
-"local_only" | 
+"local_only" |
 /**  実体も同期する */
 "full";
 
@@ -748,6 +1233,20 @@ export type TagOverview = {
 	degraded: Degradation[],
 };
 
+export type TicketStatus = "review_pending" | "decision_pending" | "approved" | "rejected" | "held";
+
+export type TicketView = {
+	note_id: string,
+	note_uid: string,
+	title: string,
+	status: TicketStatus,
+	etag: string,
+	current_revision: number,
+	revisions: ProposalRevision[],
+	reviews: ProposalReview[],
+	decisions: ProposalDecision[],
+};
+
 /**  既存Vaultの検査・clone・Full Artifact復元の進捗。 */
 export type VaultRestoreProgress = {
 	phase: RestorePhase,
@@ -755,6 +1254,16 @@ export type VaultRestoreProgress = {
 	total: number,
 	fetched: number,
 	reused: number,
+};
+
+export type WorkspaceTabShortcut = "new" | "close";
+
+export type WriteRejection = "tag_count" | "tag_shape" | "tag_vocabulary" | "authority_scope" | "authority_shape" | "relation_integrity" | "active_canonical_conflict" | "legacy_read_only" | "missing_argument" | "invalid_argument" | "mcp_capability";
+
+export type WriteRejectionCount = {
+	code: WriteRejection,
+	propose: number,
+	update: number,
 };
 
 /* Tauri Specta runtime */

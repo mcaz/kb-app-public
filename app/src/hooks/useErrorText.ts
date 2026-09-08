@@ -109,6 +109,8 @@ export function useErrorText(): (e: unknown) => string {
       if (!isKbError(e)) return String(e);
       const d = e.detail;
       switch (d.code) {
+        case "proposal_failed":
+          return t(`errors.proposal.${d.kind}`);
         case "note_not_found":
           return t("errors.noteNotFound");
         case "file_too_large":
@@ -149,6 +151,8 @@ export function useErrorText(): (e: unknown) => string {
           return t("errors.vaultUnavailable");
         case "core_failed":
           return t(coreErrorKey(d.kind));
+        case "recovery_failed":
+          return t(`errors.recovery.${d.kind}`);
         case "unexpected":
           return t("errors.unexpected");
       }

@@ -53,6 +53,7 @@ pub struct NoteProposal<'a> {
     pub tags: &'a [String],
     pub authority: Authority,
     pub relations: Vec<NoteRelation>,
+    pub judgment: Option<crate::judgment::Judgment>,
     pub allow_new_tags: bool,
     pub client: &'a str,
 }
@@ -66,6 +67,8 @@ pub struct NoteUpdate<'a> {
     pub tags: Option<&'a [String]>,
     pub authority: Option<Authority>,
     pub relations: Option<Vec<NoteRelation>>,
+    /// Noneは保持、Some(None)は削除、Some(Some(_))は全置換する。
+    pub judgment: Option<Option<crate::judgment::Judgment>>,
     pub allow_new_tags: bool,
     pub client: &'a str,
 }
@@ -235,6 +238,10 @@ impl Vault {
         allow_new_tags: bool,
     ) -> Result<()> {
         crate::tags::validate(conn, &note.front.tags, allow_new_tags)?;
+        let before = crate::note_store::contains(conn, id)?
+            .then(|| crate::note_store::read(conn, id))
+            .transpose()?;
+        crate::proposal_workflow::guard_import(before.as_ref(), note)?;
         self.write_note(id, note)
     }
 
@@ -253,10 +260,14 @@ impl Vault {
             tags,
             authority,
             relations,
+            judgment,
             allow_new_tags,
             client,
         } = proposal;
-        crate::tags::validate(conn, tags, allow_new_tags)?;
+        validate_note_text_input("title", title)?;
+        validate_note_text_input("body", body)?;
+        crate::tags::validate(conn, tags, allow_new_tags)
+            .map_err(crate::write_rejection::confirm_before_write)?;
         let mut front = Frontmatter::new_note(title);
         front.origin = Some("agent".into());
         front.created = Some(now_iso());
@@ -265,6 +276,7 @@ impl Vault {
         front.note_uid = Some(NoteUid::new());
         front.authority = Some(authority);
         front.relations = relations;
+        front.judgment = judgment;
         front.generated = Some(Generated {
             by: client.into(),
             at: now_iso(),
@@ -290,7 +302,7 @@ impl Vault {
         Ok(id)
     }
 
-    fn next_note_id(&self, conn: &rusqlite::Connection, title: &str) -> Result<String> {
+    pub(crate) fn next_note_id(&self, conn: &rusqlite::Connection, title: &str) -> Result<String> {
         let slug = slugify(title);
         let mut id = format!("{NOTES_DIR}/{slug}");
         let mut suffix = 1;
@@ -312,7 +324,7 @@ impl Vault {
         let note = self.read_note_from_db(conn, id)?;
         let origin = note.front.origin.as_deref().unwrap_or("human");
         if origin != expected {
-            bail!("{deny_msg}");
+            return Err(crate::write_rejection::WriteRejection::LegacyReadOnly.reject(deny_msg));
         }
         Ok(note)
     }
@@ -325,6 +337,7 @@ impl Vault {
             "agent",
             "旧 human ノートは削除できない(互換読み取り専用)",
         )?;
+        crate::proposal_workflow::guard_note_delete(&note)?;
         if let Some(uid) = &note.front.note_uid {
             let source: Option<String> = conn
                 .query_row(
@@ -376,6 +389,15 @@ impl Vault {
         conn: &rusqlite::Connection,
         update: NoteUpdate<'_>,
     ) -> Result<()> {
+        self.agent_update_note_with_warnings(conn, update)
+            .map(|_| ())
+    }
+
+    pub(crate) fn agent_update_note_with_warnings(
+        &self,
+        conn: &rusqlite::Connection,
+        update: NoteUpdate<'_>,
+    ) -> Result<Vec<crate::write_guidance::UpdateWarning>> {
         let NoteUpdate {
             id,
             title,
@@ -384,6 +406,7 @@ impl Vault {
             tags,
             authority,
             relations,
+            judgment,
             allow_new_tags,
             client,
         } = update;
@@ -393,14 +416,20 @@ impl Vault {
             "agent",
             "旧 human ノートは編集できない(互換読み取り専用)",
         )?;
+        let before = note.clone();
         if let Some(t) = title {
+            validate_note_text_input("title", t)?;
             note.front.title = Some(t.to_string());
+        }
+        if let Some(b) = body {
+            validate_note_text_input("body", b)?;
         }
         if let Some(d) = description {
             note.front.description = Some(d.to_string());
         }
         if let Some(ts) = tags {
-            crate::tags::validate(conn, ts, allow_new_tags)?;
+            crate::tags::validate(conn, ts, allow_new_tags)
+                .map_err(crate::write_rejection::confirm_before_write)?;
             note.front.tags = ts.to_vec();
         }
         if let Some(authority) = authority {
@@ -409,6 +438,9 @@ impl Vault {
         }
         if let Some(relations) = relations {
             note.front.relations = relations;
+        }
+        if let Some(judgment) = judgment {
+            note.front.judgment = judgment;
         }
         if let Some(b) = body {
             note.body = b.to_string();
@@ -427,7 +459,7 @@ impl Vault {
             &format!("note: update {id} (via {client})"),
         )?;
         self.flush_note_exports(conn)?;
-        Ok(())
+        Ok(crate::write_guidance::update_warnings(&before, &note))
     }
 
     /// 製品APIを迂回せずに他モジュールのテストfixtureを作るための専用口。
@@ -445,6 +477,7 @@ impl Vault {
         self.propose(
             &conn,
             NoteProposal {
+                judgment: None,
                 title,
                 body,
                 description,
@@ -794,6 +827,16 @@ fn document_hash(document: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(document.as_bytes()))
 }
 
+// 既存の空ノートは読めるまま、新しく渡された入力だけを拒否する。
+// parse/exportの共通検証へ置くと、無関係なmetadata更新やバックアップまで止まる。
+fn validate_note_text_input(field: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(crate::write_rejection::WriteRejection::InvalidArgument
+            .reject(format!("{field} は空白以外の文字を含める")));
+    }
+    Ok(())
+}
+
 /// タイトル → ファイル名 slug。日本語はそのまま残す(パス=ID、APFS/NTFS で有効)。
 pub fn slugify(title: &str) -> String {
     let mut out = String::new();
@@ -904,6 +947,7 @@ mod tests {
                     .agent_update_note(
                         &conn,
                         NoteUpdate {
+                            judgment: None,
                             id,
                             title: None,
                             body: Some("侵入"),
@@ -950,6 +994,7 @@ mod tests {
                 .agent_update_note(
                     &conn,
                     NoteUpdate {
+                        judgment: None,
                         id: "notes/linked",
                         title: None,
                         body: Some("侵入"),
@@ -1075,6 +1120,7 @@ mod tests {
                 .agent_update_note(
                     &conn,
                     NoteUpdate {
+                        judgment: None,
                         id: &legacy,
                         title: None,
                         body: Some("侵入"),
@@ -1103,6 +1149,7 @@ mod tests {
                 .agent_update_note(
                     &conn,
                     NoteUpdate {
+                        judgment: None,
                         id: &ai,
                         title: Some("AI の知見 v2"),
                         body: None,
@@ -1128,6 +1175,415 @@ mod tests {
         );
     }
 
+    fn text_proposal<'a>(title: &'a str, body: &'a str, tags: &'a [String]) -> NoteProposal<'a> {
+        NoteProposal {
+            judgment: None,
+            title,
+            body,
+            description: None,
+            tags,
+            authority: Authority {
+                namespace: NoteNamespace::Records,
+                role: crate::authority::AuthorityRole::Record,
+                status: crate::authority::AuthorityStatus::Active,
+                scope: "test/text-input".into(),
+            },
+            relations: Vec::new(),
+            allow_new_tags: true,
+            client: "test/text-input",
+        }
+    }
+
+    fn text_write_snapshot(vault: &Vault, conn: &rusqlite::Connection) -> serde_json::Value {
+        let documents: Vec<(String, String)> = conn
+            .prepare("SELECT id, document FROM notes ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        let markdown: Vec<(String, String)> = vault
+            .list_note_files()
+            .unwrap()
+            .into_iter()
+            .map(|(id, path)| (id, fs::read_to_string(path).unwrap()))
+            .collect();
+        let head = Repository::open(&vault.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+        serde_json::json!({
+            "documents": documents,
+            "db_changes": conn.total_changes(),
+            "outbox": crate::note_store::pending_count(conn).unwrap(),
+            "head": head.to_string(),
+            "markdown": markdown,
+            "index": fs::read_to_string(vault.root.join("index.md")).unwrap(),
+            "log": fs::read_to_string(vault.root.join("log.md")).unwrap(),
+        })
+    }
+
+    fn judgment_fixture() -> crate::judgment::Judgment {
+        serde_json::from_value(serde_json::json!({
+            "kind": "decision", "basis": "user_correction",
+            "source": {"reference": "conversation:fixture/turn-2", "excerpt": "反映コマンドは本人が実行する"},
+            "applies_when": "アプリ反映を依頼されたとき",
+            "action": "検証済みコマンドを提示する",
+            "exceptions": ["今回だけAIが実行すると本人が明示した場合"]
+        })).unwrap()
+    }
+
+    #[test]
+    fn judgment_persists_in_db_and_markdown_and_update_can_preserve_or_remove_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let tags = ["known".into()];
+        let judgment = judgment_fixture();
+        let mut proposal = text_proposal("反映担当", "検証と反映の記録", &tags);
+        proposal.judgment = Some(judgment.clone());
+        let id = vault.propose(&conn, proposal).unwrap();
+        for note in [
+            vault.read_note_from_db(&conn, &id).unwrap(),
+            vault.read_note(&id).unwrap(),
+        ] {
+            assert_eq!(note.front.judgment, Some(judgment.clone()));
+        }
+        let mut replacement = judgment.clone();
+        if let crate::judgment::Judgment::Decision { action, .. } = &mut replacement {
+            *action = "本人の実行後に署名と反映内容を検証する".into();
+        }
+        for (change, expected) in [
+            (None, Some(judgment.clone())),
+            (Some(Some(replacement.clone())), Some(replacement)),
+            (Some(None), None),
+        ] {
+            vault
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        id: &id,
+                        title: None,
+                        body: None,
+                        description: Some("別項目だけを更新"),
+                        tags: None,
+                        authority: None,
+                        relations: None,
+                        judgment: change,
+                        allow_new_tags: false,
+                        client: "test/judgment",
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                vault.read_note_from_db(&conn, &id).unwrap().front.judgment,
+                expected
+            );
+            assert_eq!(vault.read_note(&id).unwrap().front.judgment, expected);
+        }
+        assert!(
+            !vault
+                .read_note(&id)
+                .unwrap()
+                .to_file_string()
+                .unwrap()
+                .contains("judgment:")
+        );
+    }
+
+    /// 2026-09-08: 読んだ本人決定を使わなかった事故に備え、出典欠損を本文更新とともに拒否する。
+    #[test]
+    fn invalid_judgment_rejects_the_entire_create_or_update_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let tags = ["known".into()];
+        let id = vault
+            .propose(&conn, text_proposal("元の記録", "変わらない本文", &tags))
+            .unwrap();
+        let before = text_write_snapshot(&vault, &conn);
+        let mut invalid = judgment_fixture();
+        if let crate::judgment::Judgment::Decision { source, .. } = &mut invalid {
+            source.excerpt.clear();
+        }
+        let mut proposal = text_proposal("保存してはいけない", "新規本文", &tags);
+        proposal.judgment = Some(invalid.clone());
+        let create_error = vault.propose(&conn, proposal).unwrap_err();
+        assert_eq!(
+            crate::write_rejection::WriteRejection::from_error(&create_error),
+            Some(crate::write_rejection::WriteRejection::InvalidArgument)
+        );
+        assert_eq!(text_write_snapshot(&vault, &conn), before);
+        let update_error = vault
+            .agent_update_note(
+                &conn,
+                NoteUpdate {
+                    id: &id,
+                    title: Some("保存してはいけない"),
+                    body: Some("保存してはいけない本文"),
+                    description: None,
+                    tags: None,
+                    authority: None,
+                    relations: None,
+                    judgment: Some(Some(invalid)),
+                    allow_new_tags: false,
+                    client: "test/judgment",
+                },
+            )
+            .unwrap_err();
+        assert_eq!(
+            crate::write_rejection::WriteRejection::from_error(&update_error),
+            Some(crate::write_rejection::WriteRejection::InvalidArgument)
+        );
+        assert_eq!(text_write_snapshot(&vault, &conn), before);
+    }
+
+    #[test]
+    fn action_judgment_uses_typed_relations_for_referent_deletion_protection() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let tags = ["known".into()];
+        let mut proposal = text_proposal("採用した判断", "判断の記録", &tags);
+        proposal.judgment = Some(judgment_fixture());
+        let decision = vault.propose(&conn, proposal).unwrap();
+        let uid = vault
+            .read_note_from_db(&conn, &decision)
+            .unwrap()
+            .front
+            .note_uid
+            .unwrap();
+        let mut action = text_proposal("反映の実績", "本人がTerminalで実行した", &tags);
+        action.judgment = Some(serde_json::from_value(serde_json::json!({
+            "kind": "action", "source": {"reference": "conversation:fixture/turn-3", "excerpt": "実行した"},
+            "situation": "アプリ反映", "action": "本人が反映コマンドを実行した", "outcome": "succeeded",
+            "evidence": "user_report", "decision_refs": [uid],
+        })).unwrap());
+        action.relations = vec![NoteRelation {
+            kind: crate::authority::RelationKind::Mentions,
+            target: uid,
+        }];
+        let action_id = vault.propose(&conn, action).unwrap();
+        assert!(
+            vault
+                .read_note_from_db(&conn, &action_id)
+                .unwrap()
+                .front
+                .judgment
+                .is_some()
+        );
+        assert!(
+            vault
+                .agent_delete_note(&conn, &decision, "参照保護の検証", "test/judgment")
+                .is_err()
+        );
+        assert!(crate::note_store::contains(&conn, &decision).unwrap());
+        let before = text_write_snapshot(&vault, &conn);
+        assert!(
+            vault
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        id: &action_id,
+                        title: None,
+                        body: None,
+                        description: None,
+                        tags: None,
+                        authority: None,
+                        relations: Some(Vec::new()),
+                        judgment: None,
+                        allow_new_tags: false,
+                        client: "test/judgment",
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(text_write_snapshot(&vault, &conn), before);
+    }
+
+    #[test]
+    fn judgment_survives_semantic_normalization() {
+        use crate::distillation_executor::{
+            DistillationChange, DistillationTarget, ExecutableOperation, NullableString,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let tags = ["known".into()];
+        let mut proposal = text_proposal("本人の決定", "判断の本文", &tags);
+        proposal.judgment = Some(judgment_fixture());
+        let id = vault.propose(&conn, proposal).unwrap();
+        let before = vault.read_note_from_db(&conn, &id).unwrap();
+        let change = DistillationChange {
+            note: id,
+            input_hash: String::new(),
+            operation: ExecutableOperation::Normalize,
+            reason: "descriptionを補う".into(),
+            target: DistillationTarget {
+                title: NullableString(before.front.title.clone()),
+                body: before.body.clone(),
+                description: NullableString(Some("反映担当を示す決定".into())),
+                tags: before.front.tags.clone(),
+                relations: before.front.relations.clone(),
+            },
+        };
+        let after =
+            crate::distillation_executor::prepare_target(&conn, &before, &change, "test/judgment")
+                .unwrap();
+        assert_eq!(after.front.judgment, before.front.judgment);
+        assert_eq!(
+            Note::parse(&after.to_file_string().unwrap())
+                .unwrap()
+                .front
+                .judgment,
+            before.front.judgment
+        );
+    }
+
+    /// 2026-09-05: 自律起票で空ノートを残さない。MCPとCLIの共通口で書込前に止める。
+    #[test]
+    fn note_text_blank_inputs_leave_db_outbox_and_history_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let tags = ["known".into()];
+        let id = vault
+            .propose(&conn, text_proposal("元のタイトル", "元の本文", &tags))
+            .unwrap();
+        let before = text_write_snapshot(&vault, &conn);
+
+        for blank in ["", "   ", "\r\n\t", "\u{3000}\u{00a0}"] {
+            for (title, body) in [(blank, "置換本文"), ("置換タイトル", blank)] {
+                let error = vault
+                    .propose(&conn, text_proposal(title, body, &tags))
+                    .unwrap_err();
+                assert_eq!(
+                    crate::write_rejection::WriteRejection::from_error(&error),
+                    Some(crate::write_rejection::WriteRejection::InvalidArgument)
+                );
+                assert_eq!(text_write_snapshot(&vault, &conn), before);
+
+                let error = vault
+                    .agent_update_note(
+                        &conn,
+                        NoteUpdate {
+                            judgment: None,
+                            id: &id,
+                            title: Some(title),
+                            body: Some(body),
+                            description: Some("保存しない説明"),
+                            tags: None,
+                            authority: None,
+                            relations: None,
+                            allow_new_tags: false,
+                            client: "test/text-input",
+                        },
+                    )
+                    .unwrap_err();
+                assert_eq!(
+                    crate::write_rejection::WriteRejection::from_error(&error),
+                    Some(crate::write_rejection::WriteRejection::InvalidArgument)
+                );
+                assert_eq!(text_write_snapshot(&vault, &conn), before);
+            }
+        }
+    }
+
+    #[test]
+    fn note_text_nonblank_inputs_keep_title_spacing_and_body_indentation() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let id = vault
+            .propose(
+                &conn,
+                text_proposal(
+                    "  余白を持つ題  ",
+                    "    code();\n\n本文\n",
+                    &["known".into()],
+                ),
+            )
+            .unwrap();
+        let proposed = vault.read_note_from_db(&conn, &id).unwrap();
+        assert_eq!(proposed.front.title.as_deref(), Some("  余白を持つ題  "));
+        assert_eq!(proposed.body, "    code();\n\n本文\n");
+
+        vault
+            .agent_update_note(
+                &conn,
+                NoteUpdate {
+                    judgment: None,
+                    id: &id,
+                    title: Some("\u{3000}変更後の題\u{3000}"),
+                    body: Some("\t変更本文\n"),
+                    description: Some(""),
+                    tags: None,
+                    authority: None,
+                    relations: None,
+                    allow_new_tags: false,
+                    client: "test/text-input",
+                },
+            )
+            .unwrap();
+        let updated = vault.read_note_from_db(&conn, &id).unwrap();
+        assert_eq!(
+            updated.front.title.as_deref(),
+            Some("\u{3000}変更後の題\u{3000}")
+        );
+        assert_eq!(updated.body, "\t変更本文\n");
+        assert_eq!(updated.front.description.as_deref(), Some(""));
+    }
+
+    /// 2026-09-05: 入力拒否を既存文書全体へ広げると、空ノートの読取と手入れまで止まる。
+    #[test]
+    fn note_text_legacy_blank_fields_remain_readable_and_allow_metadata_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+
+        for (index, title) in [None, Some(""), Some("\u{3000} ")].into_iter().enumerate() {
+            let id = format!("notes/legacy-empty-{index}");
+            let mut legacy = agent_note("", " \n\t");
+            legacy.front.title = title.map(str::to_string);
+            legacy.front.tags = vec!["known".into()];
+            // 旧版で既に保存された文書を再現する。現行の入力APIから空文書は作らない。
+            crate::note_store::put(&vault, &conn, &id, &legacy, "fixture", "fixture").unwrap();
+            vault.flush_note_exports(&conn).unwrap();
+            let before = vault.read_note_from_db(&conn, &id).unwrap();
+            assert!(before.body.trim().is_empty());
+            assert_eq!(before.front.title.as_deref(), title);
+            assert_eq!(vault.read_note(&id).unwrap().body, before.body);
+
+            vault
+                .agent_update_note(
+                    &conn,
+                    NoteUpdate {
+                        judgment: None,
+                        id: &id,
+                        title: None,
+                        body: None,
+                        description: Some("既存空ノートの説明"),
+                        tags: None,
+                        authority: None,
+                        relations: None,
+                        allow_new_tags: false,
+                        client: "test/text-input",
+                    },
+                )
+                .unwrap();
+            let updated = vault.read_note_from_db(&conn, &id).unwrap();
+            assert_eq!(updated.front.title, before.front.title);
+            assert_eq!(updated.body, before.body);
+            assert_eq!(
+                updated.front.description.as_deref(),
+                Some("既存空ノートの説明")
+            );
+        }
+    }
+
     #[test]
     fn all_note_write_apis_use_the_same_tag_contract() {
         let dir = tempfile::tempdir().unwrap();
@@ -1139,6 +1595,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: "タグなし",
                         body: "本文",
                         description: None,
@@ -1160,6 +1617,7 @@ mod tests {
             .propose(
                 &conn,
                 NoteProposal {
+                    judgment: None,
                     title: "既存語",
                     body: "本文",
                     description: None,
@@ -1183,6 +1641,7 @@ mod tests {
                 .propose(
                     &conn,
                     NoteProposal {
+                        judgment: None,
                         title: "語彙外",
                         body: "本文",
                         description: None,
@@ -1205,6 +1664,7 @@ mod tests {
                 .agent_update_note(
                     &conn,
                     NoteUpdate {
+                        judgment: None,
                         id: &id,
                         title: None,
                         body: None,

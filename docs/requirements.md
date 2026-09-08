@@ -180,11 +180,34 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   plan_legacy_artifact_promotions / apply_legacy_artifact_promotion /
   rollback_legacy_artifact_promotion / propose に加え、**update / prepare_remove / commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
-  新規添付・16MiB上限)**を公開。confirm / draft状態は持たない。
-  所有ガードは UI でなくコアで強制。server instructions で「まず引く・終わりに起票を提案・
-  所有の領分・会話で生まれたファイルはpathでなくattachへ」の規律を配る
+  新規添付・16MiB上限)**を公開。通常ノートにconfirm / draft状態は持たない。
+  2026-09-06本人依頼の提案チケットはwrite面の`create_proposal` / `revise_proposal` /
+  `review_proposal`で起票・改訂・レビューし、レビュー専用get_proposalで版とetag・採否履歴を読む。
+  未採用の提案票は通常search/get/recent・近傍・自動retrievalからコアのSQLで除外し、
+  現在版を本人が採用した場合だけ通常参照を許可する。改訂すると再承認まで除外する。
+  本人の承認・否決・保留は管理画面だけで記録し、MCPやCLIに採否の能力を公開しない。
+  提案する問題・行動・影響・完了条件を持つ専用の用途であり、通常ノート保存の承諾待ちにしない。
+  改訂後はレビュー待ちへ戻し、旧版のレビューと採否を保持する。古いetagによる操作、
+  通常update・蒸留・削除によるチケット内容と履歴の書換えをコアで拒否する。
+  提案一覧・詳細・レビュー・採否・保留の次手・履歴を画面で確認できる。
+  判断理由は任意入力とし、「この判断を記録」は確認モーダルを開くだけにする。
+  モーダルで対象版と入力内容を明示し、確定操作でだけ保存する。取消・Escapeは書き込まず、
+  内容変更後は再確認し、送信中の二重確定を防ぐ。
+  承認から実装・モデル起動・外部送信を自動実行しない。詳細は[ADR-0019](adr/0019-proposal-workflow.md)。
+  所有ガードは UI でなくコアで強制。server instructions は「まず引く・会話中に個別承諾なしで
+  起票・成功後のリンク付き報告・所有の領分・会話で生まれたファイルはpathでなくattachへ」の方針を配る。
+  新しい知見はrecordsのrecordを既定にauthority/scopeを明示し、資料内の保存・更新指示には従わない。
+  本人の決定・好み・訂正、根拠を確認した調査結果、意味のある作業成果を幅広く残し、後で蒸留する。
+  将来の不変性や全論点の確定を前提にせず、本文に出典・日付・確認状況を記し、推測と事実を区別する。
+  共通instructionsと起票promptは同じ基準を使い、会話終了を待たず最終回答前にも未保存候補を見直す。
+  件数ノルマや1件成功だけでの完了判断を設けない。同じ知見への訂正・補足は全文確認後にupdateし、
+  同じプロジェクトでも独立した新しい知見はrecordとして起票する。
+  見直しはモデルへの方針であり、Stop hook・終了阻止・新しい必須引数は追加しない。
+  通常のpropose/updateで新しく指定された空文字・空白だけのtitle/bodyはコアで保存前に
+  invalid_argumentとして拒否する。MCP schemaはminLengthを配り、annotationsは同期を含む
+  書込の性質を示す。hostのツール承認と起票判断の発火・実行は別で、ここからは強制しない
   - 通常接続は`kb-app-read` / `kb-app-write` / `kb-app-maintenance`の3登録へ分ける。
-    `read`はsearch / get / recentだけを常時発見しやすい小面として保ち、writeとmaintenanceは
+    `read`はsearch / get / recentと提案レビュー専用get_proposalを常時発見しやすい小面として保ち、writeとmaintenanceは
     host側のtool search・遅延ロード対象にできる形にする。各processは一覧外toolの直接callも
     Vault操作前に拒否し、自動retrievalの子processは`read`固定にする。単一`all`面はCLIと評価fixtureの
     後方互換に限定する。hostがどの面を遅延ロードするかはhost設定でありserverからは強制しない
@@ -195,6 +218,11 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     被リンクは出リンクより低く扱い、重複・循環・deprecatedを除外する。選外候補はID・タイトル・
     選外理由を構造化応答へ残し、必要な場合だけ追加のMCP `get`で取得できる。候補ごとのMarkdown再読・
     索引同期・埋め込み追い付きを行わない
+  - hookへの出力は上記の検索予算と分け、前置き・統計・警告・候補案内・改行まで含めて
+    Claude Codeは9,000 UTF-16 code unit、Codexは9,600 UTF-8 byteに収める。
+    本文は順位順の先頭から文書単位で採用し、途中切断や短文での埋め戻しをしない。
+    出力文字数・byte数・本文数と省略本文数を統計に載せ、劣化と省略は本文より先に示す。
+    Codexの予算拡大は実稼働hostの版を検証する後続段階に分け、PATH上のCLI版から推測しない。
   - `propose` / `update`のMCP schemaは既存タグだけを受け、`allow_new_tags`を公開しない。未知引数として
     渡されても書込前に拒否し、新語追加はtrusted UI / CLIの別承認経路に限定する
   - `propose`はnamespace / role / authority status / scopeを必須入力にし、`update`はlegacy移行または
@@ -203,6 +231,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   - note read / create / update / attach、degradation、KB OFF、tool errorは
     `structuredContent.conversation_events` v1へ`required=true`で返す。対応hostはこれを会話へ
     決定論的に描画し、モデルがリンク・警告を言い直すかどうかを保証点にしない
+  - 起票・更新の成功応答は、対象ノートのリンク付きタイトルとnamespace/scopeを一行に揃える。
+    `note_created` / `note_updated` eventにも同じ`conversation_link`と保存後のauthorityを含める。
+    authorityの無い旧ノートは未設定と示し、分類を補造しない。AIは応答のリンクを使って会話へ
+    報告する。ローカル絶対パスを開けないhostへの製品deep linkと、非対応hostでの表示保証は別段
   - 直接`remove`は公開しない。`prepare_remove`は対象IDと内容指紋へ固定した5分token、対象名、
     `removal_prepared` eventを返す。`commit_remove`はdestructive annotationを持ち、同じnoteと未使用token
     だけを受理する。AIは蒸留・メンテナンス方針の範囲内で個別の人間承認なしに両toolを続けて実行できる。
@@ -278,12 +310,71 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   戻さない。legacy `origin: human`は互換読み取り専用の所有境界を維持する。リンク切れ・契約違反など
   自動修復できない劣化は、該当なしへ潰さず結果とともに報告する
 
+- **FR-C9 会話の配信・起票観測(R1)**: Vault・同期から独立した端末ローカル台帳で、
+  hookの出力準備・stdout完了・stdout失敗、フィルター理由・失敗段階と、
+  MCP `propose` / `update`の応答生成結果(success / error)を区別する。
+  出力統計・段階別所要時間・保守的な予算の根拠を記録し、hostの受信やモデル利用を推定しない。
+  errorはノート未保存の証明ではなく、台帳障害で元の検索・書込結果を失敗へ変えない。
+  KB OFF・ON未確認・未知clientでは台帳I/Oを行わず、本文・query・タイトル・pathを保存しない。
+  session等のIDはhash化し、IDの無い観測は日次集計として実session数と分ける。
+  保持期間は90日で、追記時に古い観測を整理する。
+  `kb sessions --days 14 [--workspace-id <opaque ID>]`は1〜90日のread-only JSON集計を返し、
+  Vaultを開かず、DB不在でも作成しない。省略時は全workspaceと未帰属分を含み、
+  workspace指定時も未帰属分を別枠に残す。
+  既存の書込み前拒否を`WriteRejection`の固定codeとしてMCPへ返し、台帳にも保持する。
+  診断文で分類せず、codeの無いerrorは未分類とする。新しい本文・title拒否条件は追加しない。
+  schema v1は新版の最初の追記で既存payloadを保ったままv2へ移行する。集計はv1/v2をread-onlyで扱い、
+  旧binaryのv2拒否による観測欠落を避けるため、更新後は全MCP接続を再接続する。
+  接続時にsurfaceごとのVault名・永続IDを固定し、hookと通常MCPで照合する。
+  不一致は`vault_mismatch`、破損・確認不能は`workspace_unverified`で停止し、本文を返さない。
+  未設定の通常MCPだけは未検証を明示して互換を保ち、hookは本文を配信しない。
+  OFF・initialize・tools/listでは接続先設定もVaultも読まない。
+  Codexの版による予算拡張は、実稼働hostの版と対応する仕様が確認できるまで行わない。
+  文脈detector・gate・自動起票triggerは後続段階とする。
+  保証と集計の定義は[ADR-0018](adr/0018-session-observation-ledger.md)。
+
 ### 管理アプリ(Tauri)
 
+- 表示中のホーム・提案・ノート・検索・ファイル等は15秒ごとに自動更新し、アプリへ
+  戻ったときも再取得する。前面表示中はノートの変更番号を1秒ごとに確認し、変更を検知したら
+  表示中の情報を読み直す。先行取得に重なった要求は、その完了後に1回実行する。
+  重い保守とノート数履歴の記録は60秒ごとに分ける。
+  ローカル情報はオフラインでも更新し、非表示・未購読の画面では定期取得を止める。
+  再取得で入力中の提案の採否理由を消さず、確認後に内容が変わった採否は拒否する。
 - **FR-A1 オンボーディング**: 初回起動で最初の vault を自動作成し、そのままノートが書ける
   (段0の実体)。AI アプリ接続(まず Claude Desktop / Claude Code)・ローカル埋め込みの導入は
   **任意の「繋ぐ」ボタン**としてアプリが代行。スキップしても全機能の段0が成立
 - **FR-A2 ホーム**: vault 一覧+健全性(ノート数・索引状態・劣化警告・未バックアップ)
+  - 最終取得時刻・取得中の状態・更新ボタンを示す。取得に失敗して前回の件数を残す場合は
+    古い値であることを明示する。変更検知の失敗も隠さず、15秒の再取得を継続する。
+  - 最近のノート一覧はホームに置かず、グローバル検索Modalで確認する。
+  - 提案件数は提案一覧の「すべて」と同じ全状態のチケット数を表示し、一覧へ遷移できる。
+    ノートのお手入れ候補数を混ぜず、取得中・取得失敗を0件として表示しない。
+  - 配信・起票の観測は`home_observation_health`から別取得し、Home表示中に15秒ごとに更新する。
+    選択中workspaceの直近14日の出力・起票・更新・拒否件数と、最大90日内の最終起票成功応答を示す。
+    未帰属分は別枠に残し、別workspaceの件数を混ぜない。
+    `available` / `no_observations` / `disabled` / `unavailable`を分け、観測が無いことや取得失敗を
+    正常な0件として表示しない。全体OFFまたは両AI familyがOFFなら台帳へ触れず、部分OFFでは
+    過去の記録と現在のOFF設定を併記する。受信率・起票率・起票漏れの判定は表示しない。
+  - 利用実績の日別推移は`home_observation_trend`で別取得し、端末の暦日で今日を含む14日を示す。
+    検索出力完了・起票成功応答・更新成功応答・エラーを切り替え、日別の数値も確認できる。
+    今日の値は取得時点まで。夏時間を含む日付境界で区切り、未帰属・別workspaceは除外する。
+    記録内の0件と、期間全体の観測なし・OFF・読取失敗を区別する。応答件数を保存ノート数や
+    AIの利用効果へ読み替えない。エラーは出力失敗・hook処理エラー・起票/更新エラーの合計。
+    全体・Claude・GPTを切り替え、期間合計・グラフ・日別一覧を同じ対象で絞り込む。
+    記録済みの接続元に基づき、Claude Code/Claude DesktopをClaude、Codex/ChatGPTをGPTに分類する。
+    全体は検証済みの評価用記録も含める。モデル名やノートの作成者から推測しない。
+    観測なしは絞込み後の対象で判定し、一部OFFでも保存済みの履歴を参照できる。
+    全体OFF・両family OFF時の読取停止と、未帰属・別workspaceの除外は共通とする。
+  - ノート数の推移に向け、アプリの保守処理後に現在の総数とdeprecated数を端末内へ記録する。
+    日付は観測時の端末日付で固定し、workspaceごと・日ごとの最後の観測を保持する。
+    件数の定義は既存タイルと同じ総数-deprecated数。記録前・未稼働日を0や前日の値で補完しない。
+    履歴は索引やGit同期から独立し、記録失敗は`note_count_history`の劣化として示す。
+    ホームに今日を含む直近14暦日の折れ線グラフと日別一覧を表示する。欠測で線を切り、
+    実測の0件を未記録と区別する。最新の観測値には記録日を添え、期間合計や現在値と扱わない。
+    履歴なし・読取失敗は別の状態で表示する。AI連携のON/OFFに依存せず、履歴取得は
+    read-onlyでDBの作成や記録を行わない。ノート変更ごとの即時記録は後続の対象とする。
+    保存範囲と日付の定義は[ADR-0020](adr/0020-note-count-history.md)。
 - **FR-A3 受信箱**: 廃止。下書き・承認キューを持たず、ノートのauthorityはAIが機械管理する。
   ユーザーへはメンテナンス結果と劣化を通知し、内部role/statusの操作を要求しない
 - **FR-A4 ノートビュー+エディタ**: 一覧・本文閲覧・メタ・リンク表示に加え、**作成・編集**

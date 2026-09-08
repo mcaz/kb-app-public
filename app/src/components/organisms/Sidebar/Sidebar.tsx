@@ -1,6 +1,7 @@
 import {
   ChevronLeft,
   ChevronRight,
+  ClipboardCheck,
   House,
   NotebookText,
   Paperclip,
@@ -22,17 +23,29 @@ import { CategoryAccordion } from "./CategoryAccordion";
 import type { NoteCategory } from "@/lib/api";
 
 export interface SidebarProps {
-  categories: NoteCategory[];
+  categories: NoteCategory[] | undefined;
+  categoriesError: string | null;
+  categoriesFetching: boolean;
+  onRetryCategories: () => void;
   onOpenSearch: () => void;
   settingsOpen: boolean;
   onOpenSettings: () => void;
 }
 
 /** 左のナビ。畳むとアイコンだけになり、ホバーでラベルを吹き出す。 */
-export function Sidebar({ categories, onOpenSearch, settingsOpen, onOpenSettings }: SidebarProps) {
+export function Sidebar({
+  categories,
+  categoriesError,
+  categoriesFetching,
+  onRetryCategories,
+  onOpenSearch,
+  settingsOpen,
+  onOpenSettings,
+}: SidebarProps) {
   const { t } = useTranslation();
   const view = useSession((s) => s.view);
   const go = useSession((s) => s.go);
+  const openProposal = useSession((s) => s.openProposal);
   const selectedCategory = useSession((s) => s.selectedCategory);
   const initializeCategory = useSession((s) => s.initializeCategory);
   const selectCategory = useSession((s) => s.selectCategory);
@@ -77,6 +90,9 @@ export function Sidebar({ categories, onOpenSearch, settingsOpen, onOpenSettings
       ) : (
         <CategoryAccordion
           categories={categories}
+          error={categoriesError}
+          isFetching={categoriesFetching}
+          onRetry={onRetryCategories}
           active={view === "notes" && !settingsOpen}
           selectedCategory={selectedCategory}
           onInitializeCategory={initializeCategory}
@@ -100,6 +116,13 @@ export function Sidebar({ categories, onOpenSearch, settingsOpen, onOpenSettings
         active={view === "graph"}
         // ナビからは全体表示(局所グラフの中心を外す)
         onClick={() => focusGraph(null)}
+      />
+      <NavButton
+        icon={ClipboardCheck}
+        label={t("nav.proposals")}
+        collapsed={visuallyCollapsed}
+        active={view === "proposals"}
+        onClick={() => openProposal(null)}
       />
       <NavButton
         icon={Settings}
