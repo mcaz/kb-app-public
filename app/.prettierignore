@@ -5,3 +5,5 @@ src-tauri/target
 src-tauri/gen
 # tauri-specta の生成物(整形しても次の生成で戻る)
 src/lib/bindings.ts
+# 同梱Gitの検証済み資材・対応sourceは生成物。整形でhashを変えない
+src-tauri/git-runtime

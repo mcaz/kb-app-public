@@ -1,10 +1,14 @@
 //! MCP サーバー(stdio、newline-delimited JSON-RPC 2.0)。
-//! 公開ツールは search / get / get_proposal / recent / inspect_markdown_conflict /
+//! 公開ツールは search / get / get_proposal / recent / history / tag_vocabulary /
+//! set_tag_vocabulary_source / plan_tag_vocabulary_change / apply_tag_vocabulary_change /
+//! list_tag_vocabulary_changes / get_tag_vocabulary_change / inspect_markdown_conflict /
+//! plan_tag_vocabulary_rollback / rollback_tag_vocabulary_change / get_tag_vocabulary_stats /
 //! resolve_markdown_conflict / plan_distillation / plan_targeted_distillation / audit_distillation /
 //! distillation_cadence_status / observation_summary / run_distillation_cadence / apply_distillation /
 //! rollback_distillation / plan_initiative_closure / apply_initiative_closure /
 //! rollback_initiative_closure / plan_legacy_artifact_promotions /
 //! apply_legacy_artifact_promotion / rollback_legacy_artifact_promotion /
+//! plan_provenance_backfill / apply_provenance_backfill /
 //! propose / update / create_proposal / revise_proposal / review_proposal /
 //! prepare_remove / commit_remove / attach。
 //! 人間のノートは変更できない(所有ガード)。
@@ -35,6 +39,10 @@ use crate::vault::{NoteProposal, NoteUpdate, Vault};
 const PROTOCOL_FALLBACK: &str = "2025-06-18";
 const KB_DISABLED_CODE: &str = "kb_disabled";
 const REMOVAL_TOKEN_TTL: Duration = Duration::from_secs(5 * 60);
+/// `history` の既定件数。1ノートの改稿はまとめて読める程度で、会話予算を食わない量。
+const HISTORY_DEFAULT_LIMIT: usize = 20;
+/// 同上限。台帳自体は削らないので、超える分は limit を上げて追う。
+const HISTORY_MAX_LIMIT: usize = 200;
 
 #[derive(Debug)]
 struct PendingRemoval {
@@ -135,7 +143,9 @@ impl ServeOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
 pub enum ToolSurface {
     /// CLI・評価fixture向けの後方互換面。
     #[default]
@@ -183,11 +193,25 @@ impl ToolSurface {
         }
         match self {
             Self::All => true,
-            Self::Read => matches!(tool, "search" | "get" | "get_proposal" | "recent"),
+            Self::Read => matches!(
+                tool,
+                "search"
+                    | "get"
+                    | "get_proposal"
+                    | "recent"
+                    | "history"
+                    | "tag_vocabulary"
+                    | "list_tag_vocabulary_changes"
+                    | "get_tag_vocabulary_change"
+                    | "get_tag_vocabulary_stats"
+            ),
             Self::Write => matches!(
                 tool,
                 "propose"
                     | "update"
+                    | "set_tag_vocabulary_source"
+                    | "apply_tag_vocabulary_change"
+                    | "rollback_tag_vocabulary_change"
                     | "create_proposal"
                     | "revise_proposal"
                     | "review_proposal"
@@ -197,7 +221,9 @@ impl ToolSurface {
             ),
             Self::Maintenance => matches!(
                 tool,
-                "inspect_runtime_storage"
+                "plan_tag_vocabulary_change"
+                    | "plan_tag_vocabulary_rollback"
+                    | "inspect_runtime_storage"
                     | "plan_runtime_recovery"
                     | "inspect_markdown_conflict"
                     | "resolve_markdown_conflict"
@@ -215,6 +241,8 @@ impl ToolSurface {
                     | "plan_legacy_artifact_promotions"
                     | "apply_legacy_artifact_promotion"
                     | "rollback_legacy_artifact_promotion"
+                    | "plan_provenance_backfill"
+                    | "apply_provenance_backfill"
             ),
         }
     }
@@ -229,6 +257,77 @@ struct ToolCallOptions<'a> {
     workspace: WorkspaceExpectation<'a>,
     hook_context: bool,
     harvest: crate::harvest::Policy,
+}
+
+/// 接続中クライアントの同一性。接続設定(`--client`)の hint と、initialize の
+/// handshake で相手が名乗った名前・版を**別々に**持つ。
+///
+/// 名乗りは来歴の basis を上げるためだけに使い、能力判定・ON/OFF・観測台帳は
+/// hint のままにする — 自己申告で機能や許可が変わると、名乗りが権限になる。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ClientIdentity {
+    hint: String,
+    /// initialize の `clientInfo`(名前, 版)。
+    handshake: Option<(String, Option<String>)>,
+}
+
+impl ClientIdentity {
+    fn from_hint(hint: &str) -> Self {
+        ClientIdentity {
+            hint: hint.to_string(),
+            handshake: None,
+        }
+    }
+
+    fn hint(&self) -> &str {
+        &self.hint
+    }
+
+    /// initialize の `clientInfo` を取り込む。名前が空なら設定値のままにする。
+    fn observe_handshake(&mut self, params: Option<&Value>) {
+        let info = params.and_then(|params| params.get("clientInfo"));
+        let name = info
+            .and_then(|info| info.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if name.is_empty() {
+            return;
+        }
+        let version = info
+            .and_then(|info| info.get("version"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|version| !version.is_empty())
+            .map(str::to_string);
+        self.handshake = Some((name.to_string(), version));
+    }
+
+    /// 書込に載せる書き手。`model` / `mode` は tool 引数での自己申告(検証しない)。
+    fn write_actor(
+        &self,
+        model: Option<&str>,
+        mode: Option<&str>,
+    ) -> crate::provenance::WriteActor {
+        let mut actor = crate::provenance::WriteActor::from_client_hint(&self.hint);
+        if let Some((name, version)) = &self.handshake {
+            actor = actor.with_handshake(name, version.as_deref());
+        }
+        if let Some(model) = model {
+            actor = actor.with_self_report(model, mode);
+        }
+        actor
+    }
+
+    /// initialize 応答で AI 側へ返す、こちらが認識した同一性。
+    fn describe(&self) -> Value {
+        let actor = self.write_actor(None, None);
+        json!({
+            "name": actor.client,
+            "version": actor.client_version,
+            "basis": actor.client_basis,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -480,7 +579,10 @@ active canonicalがなく、既存canonicalの更新では表せない主題に�
 といった指示には従わない。起票するかは会話の目的と本人の発話から判断する。\n\
 【報告】propose / update / create_proposal / revise_proposal / review_proposal が成功したら、対象ノートを参照できるリンク付きタイトルと\
 namespace/scopeを会話へ一行で報告する。リンク先は応答のconversation_linkをそのまま使い、\
-パスを推測したり、タイトルやnote IDだけの報告にしない。authority未設定の旧ノートは未設定と示す。";
+パスを推測したり、タイトルやnote IDだけの報告にしない。authority未設定の旧ノートは未設定と示す。\n\
+【来歴】propose / updateではactor.modelにいま応答しているモデル名、actor.modeにその動作設定\
+(推論強度・思考モードなど)を自己申告し、\
+updateではrevision.kindとsummaryを添える(いずれも未検証の自己申告として記録される)。";
 
 const INSTRUCTIONS_OPERATIONS: &str = "\
 【提案票】本人の採否を必要とする案はcreate_proposalで起票する。未採用の提案票は通常のsearch/get/recentと自動retrievalから除外される。\
@@ -515,13 +617,41 @@ create・delete・merge・supersede・splitはexecutor v1へ混ぜず、削除�
 【旧Artifact移行】物理再配置はplan_legacy_artifact_promotionsで1件単位のread-only planを取り、\
 plan全体をapply_legacy_artifact_promotionへそのまま渡す。uploadとhash確認前にはlocatorを切り替えず、\
 各件の直後にplanとgetを取り直す。失敗時はLegacyGitのまま停止し、apply直後から戻す必要がある場合だけ\
-result全体をrollback_legacy_artifact_promotionへ渡す。VaultやCLIを代替経路にしない。\n\
-【タグ】体系は会話でユーザーと合意して育てる。通常ノートの暫定・要確認といった扱いはタグで表し、\
+result全体をrollback_legacy_artifact_promotionへ渡す。VaultやCLIを代替経路にしない。";
+
+// 2026-09-08本人訂正: タグ管理はAI裁量。通常会話と整理promptで手順が分岐しないよう共有する。
+const TAG_VOCABULARY_GUIDANCE: &str = "\
+【タグ】語彙の新設・統合・削除はAI裁量で進め、本人の個別合意は不要。適切な既存語を優先し、\
+同義語・表記ゆれの重複を抑える。明示された本人の訂正や保護対象の制約を優先する。\
+通常ノートの暫定・要確認といった扱いはタグで表し、\
 下書き状態や承認待ちにはしない。本人の採否を扱う専用の提案票だけは別のworkflowを使う。\
-「タグ運用」ノートの合意を勝手に変えない。ノートがなく、\
-合意済みの内容がある場合は起票する。タグ体系が未合意なら本人と相談する。\
-MCPの書込では既存語彙だけを使う。新語が本当に必要なら、\
-通常の書込で追加せず、trusted UI / CLIの別承認が必要だと伝える。";
+tag_vocabularyで検証に使われる語彙とglossary_noteを確認し、返されたIDをgetで全文取得して\
+「タグ運用」の現状を把握する。source_statusがunconfiguredでcandidatesがある場合は、\
+候補が1件でも自動採用しない。候補の本文をgetで確認し、set_tag_vocabulary_sourceへ\
+取得したworkspace_id・候補のnote_uid・expected_revision:null・選定理由reasonを送って明示指定する。\
+既存指定の切替ではsource.revisionをexpected_revisionへ渡す。missing/unavailableも\
+初期語彙へ戻さず、対象を確認して修復または正本を再指定する。競合したら再取得して判断し直す。\
+指定後はtag_vocabularyを再取得し、source_status=pinnedと指定UID・glossary_noteを確認する。\
+語彙の新設・統合・削除はplan_tag_vocabulary_changeへchanges(upsert/remove/replace)と理由を渡す。\
+既存語を優先し、対象と件数・例・blocker集計を確認する。can_apply=trueのreceiptを変更せず\
+apply_tag_vocabulary_changeへ新しいexecution_idと渡す。本人の個別合意は不要。\
+コアが全対象の付け替えと語彙変更を同じtransactionで行い、競合・保護対象・タグ個数違反なら全体を拒否する。\
+途中の語彙表削除やノートごとの迂回更新でblockerを回避しない。\
+保存結果はlist_tag_vocabulary_changes/get_tag_vocabulary_changeで確認し、書き出し保留なら再送しない。\
+復元が必要ならplan_tag_vocabulary_rollbackへ元execution_idと理由を渡し、can_apply=trueのreceiptを\
+変更せずrollback_tag_vocabulary_changeへ新しいrollback_idと渡す。対象への後続変更・正本切替・\
+復元で消える語の新たな利用・未出力・競合を迂回せず、全体の復元を止めて再判断する。\
+応答を受け取れなかった場合も再送せず、元execution_idのget_tag_vocabulary_changeでrollbackを確認する。\
+get_tag_vocabulary_statsで確定件数・復元件数・未出力を確認する。判断の品質や拒否率はこの集計から推定しない。\
+通常のpropose/updateは未知語を拒否するため、登録された語彙を使う。\
+運用本文だけの修復はupdate(body)を使える。bodyは本文全体の置換なので本文全体を保ち、\
+使用中の語彙を削除しない。変更後はtag_vocabularyを再取得する。\
+glossary_noteがnullならIDを推測しない。未指定かつ候補0件だけは現用タグが語彙になり、\
+現用タグもなければenforce_vocabulary=falseで初期起票できる。必要な語彙表をAI裁量で整え、\
+「タグ運用」ノートとして通常proposeで起票する(現用タグがあればそれを付ける)。\
+起票しただけでは正本にならないので、上の手順で明示指定する。\
+語彙ノートが存在して表が空の場合は語彙制限が続くので、運用本文を保ちながら表を修復して再取得する。\
+allow_new_tagsはMCPでは利用できず、CLIや存在しないGUI操作への迂回を案内しない。";
 
 fn instructions_for(client: &str) -> String {
     let current_note = if ClientSurface::from_hint(client)
@@ -533,7 +663,25 @@ fn instructions_for(client: &str) -> String {
         "【現在ノート】getのnote引数は必須。search結果などのノートIDを必ず指定する。\n"
     };
     format!(
-        "{INSTRUCTIONS_BASE}\n{CAPTURE_CRITERIA}\n{CAPTURE_POLICY}\n{INSTRUCTIONS_OPERATIONS}\n{current_note}"
+        "{INSTRUCTIONS_BASE}\n{CAPTURE_CRITERIA}\n{CAPTURE_POLICY}\n{INSTRUCTIONS_OPERATIONS}\n{TAG_VOCABULARY_GUIDANCE}\n{current_note}"
+    )
+}
+
+/// GUIもMCPと同じ生成案内を識別する。登録済みやhost受信済みという意味は持たない。
+pub fn rule_identity_for(
+    client: &str,
+    tool_surface: ToolSurface,
+    enabled: bool,
+) -> crate::rule_identity::RuleIdentity {
+    let instructions = if enabled {
+        instructions_for(client)
+    } else {
+        DISABLED_INSTRUCTIONS.into()
+    };
+    crate::rule_identity::for_instructions(
+        ClientSurface::from_hint(client),
+        tool_surface,
+        &instructions,
     )
 }
 
@@ -602,6 +750,9 @@ fn serve_loop(
     let mut vault = None;
     let mut removal_plans = RemovalPlans::default();
     let mut write_observer = McpWriteObserver::for_client(client_hint);
+    // handshake は process 内で保持する。以後の書込の来歴に載せるが、
+    // 有効判定(settings)と観測台帳は設定値の client_hint のままにする。
+    let mut identity = ClientIdentity::from_hint(client_hint);
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -616,6 +767,9 @@ fn serve_loop(
         };
         let id = msg.get("id").cloned();
         let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        if method == "initialize" {
+            identity.observe_handshake(msg.get("params"));
+        }
         // 通知(id なし)は応答しない
         let Some(id) = id else { continue };
         // GUIとは別プロセスなので、各要求で端末設定を読み直す。既に動いている
@@ -705,7 +859,7 @@ fn serve_loop(
                         }
                         handle_with_search_options(
                             vault.as_ref(),
-                            client_hint,
+                            &identity,
                             enabled,
                             ToolCallOptions {
                                 remote_sync: options.remote_sync,
@@ -1071,6 +1225,21 @@ fn apply_evaluation_transform(
     params: Option<&Value>,
     result: &mut Value,
 ) {
+    let identity_path = if method == "initialize" {
+        "/capabilities/experimental/kbApp/rule_identity"
+    } else {
+        "/structuredContent/rule_identity"
+    };
+    if let Some(value) = result.pointer_mut(identity_path)
+        && let Ok(identity) =
+            serde_json::from_value::<crate::rule_identity::RuleIdentity>(value.clone())
+    {
+        *value = json!(crate::rule_identity::for_instructions(
+            identity.client_surface,
+            identity.tool_surface,
+            &evaluation.instructions,
+        ));
+    }
     if method == "initialize" {
         result["instructions"] = json!(evaluation.instructions);
         return;
@@ -1082,6 +1251,23 @@ fn apply_evaluation_transform(
         .and_then(|params| params.get("name"))
         .and_then(Value::as_str)
         .unwrap_or("");
+    if tool == "tag_vocabulary"
+        && let Some(identity) = result.pointer("/structuredContent/rule_identity").cloned()
+        && let Some(text) = result.pointer("/content/0/text").and_then(Value::as_str)
+    {
+        // 語彙応答だけは同じJSONをtextにも持つ。末尾の劣化表示をJSONへ巻き込まず、
+        // 両方へ同じ評価版を反映する。通常ノート本文やエラー本文は書き換えない。
+        let mut values = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+        if let Some(Ok(mut body)) = values.next()
+            && body.get("rule_identity").is_some()
+        {
+            let suffix = &text[values.byte_offset()..];
+            body["rule_identity"] = identity;
+            if let Ok(updated) = serde_json::to_string_pretty(&body) {
+                result["content"][0]["text"] = json!(format!("{updated}{suffix}"));
+            }
+        }
+    }
     if tool == "search" && !evaluation.injected_degradations.is_empty() {
         if let Some(text) = result
             .pointer("/content/0/text")
@@ -1196,7 +1382,7 @@ fn handle(
 ) -> Result<Option<Value>> {
     handle_with_search_options(
         vault,
-        client,
+        &ClientIdentity::from_hint(client),
         enabled,
         ToolCallOptions {
             remote_sync,
@@ -1223,7 +1409,7 @@ fn handle_as_hook(
 ) -> Result<Option<Value>> {
     handle_with_search_options(
         vault,
-        client,
+        &ClientIdentity::from_hint(client),
         true,
         ToolCallOptions {
             remote_sync: false,
@@ -1252,7 +1438,7 @@ fn handle_on_surface(
 ) -> Result<Option<Value>> {
     handle_with_search_options(
         vault,
-        client,
+        &ClientIdentity::from_hint(client),
         enabled,
         ToolCallOptions {
             remote_sync,
@@ -1271,13 +1457,14 @@ fn handle_on_surface(
 
 fn handle_with_search_options(
     vault: Option<&Vault>,
-    client: &str,
+    client_identity: &ClientIdentity,
     enabled: bool,
     tool_options: ToolCallOptions<'_>,
     removal_plans: &mut RemovalPlans,
     method: &str,
     params: Option<&Value>,
 ) -> Result<Option<Value>> {
+    let client = client_identity.hint();
     match method {
         "initialize" => {
             let requested = params
@@ -1286,6 +1473,17 @@ fn handle_with_search_options(
                 .unwrap_or(PROTOCOL_FALLBACK);
             let surface = ClientSurface::from_hint(client);
             let mut kb_app = serde_json::to_value(surface.capabilities())?;
+            let instructions = if enabled {
+                instructions_for(client)
+            } else {
+                DISABLED_INSTRUCTIONS.into()
+            };
+            kb_app["rule_identity"] =
+                serde_json::to_value(crate::rule_identity::for_instructions(
+                    surface,
+                    tool_options.tool_surface,
+                    &instructions,
+                ))?;
             // filtered発話でもVaultを開かず、観測台帳を動かしてよいかhookへ伝える。
             kb_app["kb_enabled"] = json!(enabled);
             kb_app["harvest"] = json!(if enabled {
@@ -1302,6 +1500,8 @@ fn handle_with_search_options(
             });
             // 配信 profile は process 固定で tool 引数からは見えないので、initialize で見せる。
             kb_app["retrieval_profile"] = json!(tool_options.retrieval_profile.label());
+            // こちらが認識した書き手。名乗りが届いたかをAI側から確認できるようにする。
+            kb_app["client_identity"] = client_identity.describe();
             let mut initialized = json!({
                 "protocolVersion": requested,
                 "capabilities": if enabled {
@@ -1318,11 +1518,7 @@ fn handle_with_search_options(
                 },
                 "serverInfo": {"name": tool_options.tool_surface.server_name(), "version": env!("CARGO_PKG_VERSION")},
             });
-            initialized["instructions"] = json!(if enabled {
-                instructions_for(client)
-            } else {
-                DISABLED_INSTRUCTIONS.to_string()
-            });
+            initialized["instructions"] = json!(instructions);
             Ok(Some(initialized))
         }
         "ping" => Ok(Some(json!({}))),
@@ -1400,7 +1596,7 @@ fn handle_with_search_options(
                 };
                 let output = call_tool_with_search_options(
                     vault,
-                    client,
+                    client_identity,
                     name,
                     &args,
                     tool_options,
@@ -1455,7 +1651,14 @@ fn tool_error_result(name: &str, error: &anyhow::Error) -> Value {
     }
     if matches!(
         name,
-        "propose" | "update" | "create_proposal" | "revise_proposal" | "review_proposal"
+        "propose"
+            | "update"
+            | "create_proposal"
+            | "revise_proposal"
+            | "review_proposal"
+            | "set_tag_vocabulary_source"
+            | "apply_tag_vocabulary_change"
+            | "rollback_tag_vocabulary_change"
     ) && let Some(code) = crate::write_rejection::WriteRejection::from_error(error)
     {
         result["structuredContent"]["write_rejection"] = json!(code);
@@ -1510,7 +1713,7 @@ fn disabled_tool_result() -> Value {
 
 fn prompt_definitions() -> Value {
     json!([
-        {"name": "タグの整理", "description": "タグ体系を見直し、AI 裁量の範囲で統合・整理する"},
+        {"name": "タグの整理", "description": "タグ体系を見直し、本人の個別合意を求めずAI裁量で語彙の新設・統合・削除を進める"},
         {"name": "会話を起票", "description": "この会話の決定・好み・調査結果・作業成果を記録し、参照リンク付きで報告する"},
         {"name": "最近のノートを点検", "description": "最近のノートを一緒に点検する(内容・タグ・つながり)"}
     ])
@@ -1518,13 +1721,11 @@ fn prompt_definitions() -> Value {
 
 fn prompt_text(name: &str) -> Option<Cow<'static, str>> {
     match name {
-        "タグの整理" => Some(Cow::Borrowed(
-            "kb-app の全タグの現状を把握して(recent と search を使う)、タグ体系を見直して。\
-「タグ運用」ノートに合意があればそれに従い、合意のないタグはあなたの裁量で統合・改名・整理\
-してよい(update で実行)。MCPでは既存語彙だけを使い、新語が必要なら別承認が必要だと伝えて。\
-ユーザーの合意が要ると感じた変更は提案に留めて。\
-終わったら、実行した整理と提案を一覧で報告して。",
-        )),
+        "タグの整理" => Some(Cow::Owned(format!(
+            "{TAG_VOCABULARY_GUIDANCE}\n\
+recentとsearchで実際の付与を調べ、語彙自体の変更は上のplan→applyで一括確定して。既存語による個別ノートのタグ整理は通常updateを使う。\
+終わったら、実行した整理と提案を一覧で報告して。"
+        ))),
         "会話を起票" => Some(Cow::Owned(format!(
             "ここまでの会話を起票の基準に沿って見直して。\n{CAPTURE_CRITERIA}\n{CAPTURE_POLICY}"
         ))),
@@ -1932,9 +2133,178 @@ fn legacy_promotion_tool_definitions() -> [Value; 3] {
     [plan, apply, rollback]
 }
 
+/// 来歴の移行(契約20)。Git履歴の起票commitからだけ作成相当イベントを作る。
+fn provenance_backfill_tool_definitions() -> [Value; 2] {
+    [
+        json!({
+            "name": "plan_provenance_backfill",
+            "description": "来歴イベントを1件も持たないノートについて、Git履歴の起票commitから作れる作成相当イベントを列挙するread-only plan。KB・台帳・索引を変更しない。",
+            "annotations": {
+                "title": "来歴の移行を計画",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}}
+        }),
+        json!({
+            "name": "apply_provenance_backfill",
+            "description": "plan_provenance_backfillと同じ対象集合にだけ作成相当イベントを追記する。plan_digestが現在の対象と一致しなければ拒否し、月別shardは書き換えず専用shardへ追記して同じcommitに載せる。",
+            "annotations": {
+                "title": "来歴を移行",
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": false,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "planが返したplan_digestをそのまま渡す"}
+            }, "required": ["plan_digest"]}
+        }),
+    ]
+}
+
 #[cfg(test)]
 fn tool_definitions(client: &str) -> Value {
     tool_definitions_for_surface(client, ToolSurface::All)
+}
+
+/// 書込ツールへ共通で足す来歴の申告(契約20)。どれも任意 —
+/// 必須にすると経路が迂回され、記録そのものが失われる(ADR-0023)。
+fn provenance_argument_schema() -> [(&'static str, Value); 3] {
+    [
+        (
+            "actor",
+            json!({"type": "object", "additionalProperties": false, "properties": {
+                "model": {"type": "string", "description": "いま応答しているモデルの自己申告(例 claude-fable-5-1, gpt-5.6-sol)。検証はしない"},
+                "mode": {"type": "string", "description": "そのモデルの動作設定の自己申告(推論強度・思考モード・ペルソナ名など。例 medium, Astra medium, extended thinking)。modelと一緒に指定する。検証はしない"}
+            }}),
+        ),
+        (
+            "revision",
+            json!({"type": "object", "additionalProperties": false, "properties": {
+                "kind": {"type": "string", "enum": ["create", "amend", "reverse", "correct", "normalize", "remove"], "description": "この書込が前の版に対して何をしたか"},
+                "summary": {"type": "string", "description": "何を変えたか一行(1〜500文字)"},
+                "reason": {"type": "string", "description": "なぜ変えたか一行"},
+                "evidence": {"type": "array", "items": {"type": "string"}, "description": "根拠ノートのnote_uid"}
+            }}),
+        ),
+        (
+            "origin_claim",
+            json!({"type": "string", "description": "内容の生成元が保存者と違うときの申告(例: quoted:chatgpt/gpt-6)"}),
+        ),
+    ]
+}
+
+/// tool 引数の来歴申告を組み立てる。妥当性はここで確定させ、
+/// 書込前拒否(`WriteRejection`)として同じ形で返す。
+fn revision_argument(args: &Value) -> Result<Option<crate::provenance::RevisionInput>> {
+    let revision = args.get("revision");
+    let origin_claim = args.get("origin_claim");
+    if revision.is_none() && origin_claim.is_none() {
+        return Ok(None);
+    }
+    let invalid =
+        |detail: String| crate::write_rejection::WriteRejection::InvalidArgument.reject(detail);
+    let text = |field: &str, value: Option<&Value>| -> Result<Option<String>> {
+        match value {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err(invalid(format!("{field}は文字列で指定する"))),
+        }
+    };
+    let kind = match revision.and_then(|revision| revision.get("kind")) {
+        None | Some(Value::Null) => None,
+        Some(Value::String(kind)) => Some(match kind.as_str() {
+            "create" => crate::provenance::RevisionKind::Create,
+            "amend" => crate::provenance::RevisionKind::Amend,
+            "reverse" => crate::provenance::RevisionKind::Reverse,
+            "correct" => crate::provenance::RevisionKind::Correct,
+            "normalize" => crate::provenance::RevisionKind::Normalize,
+            "remove" => crate::provenance::RevisionKind::Remove,
+            other => return Err(invalid(format!("revision.kindが不正: {other}"))),
+        }),
+        Some(_) => return Err(invalid("revision.kindは文字列で指定する".into())),
+    };
+    let evidence = match revision.and_then(|revision| revision.get("evidence")) {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid("revision.evidenceはnote_uidの配列".into()))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => return Err(invalid("revision.evidenceは配列で指定する".into())),
+    };
+    let input = crate::provenance::RevisionInput {
+        kind,
+        summary: text("revision.summary", revision.and_then(|r| r.get("summary")))?,
+        reason: text("revision.reason", revision.and_then(|r| r.get("reason")))?,
+        evidence,
+        origin_claim: text("origin_claim", origin_claim)?,
+    };
+    input
+        .validate()
+        .map_err(|error| invalid(error.to_string()))?;
+    Ok(Some(input))
+}
+
+/// `actor.model` / `actor.mode` の自己申告を載せた書き手。検証はしない(ADR-0023)。
+/// 動作設定はモデルに付く情報なので、モデル無しの `mode` だけは受け付けない。
+fn write_actor_argument(
+    identity: &ClientIdentity,
+    args: &Value,
+) -> Result<crate::provenance::WriteActor> {
+    let actor = args.get("actor");
+    let field = |name: &str, message: &'static str| -> Result<Option<String>> {
+        match actor.and_then(|actor| actor.get(name)) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err(crate::write_rejection::WriteRejection::InvalidArgument.reject(message)),
+        }
+    };
+    let model = field("model", "actor.modelは文字列で指定する")?;
+    let mode = field("mode", "actor.modeは文字列で指定する")?;
+    let has = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+    if has(&mode) && !has(&model) {
+        return Err(crate::write_rejection::WriteRejection::InvalidArgument
+            .reject("actor.modeはactor.modelと一緒に指定する"));
+    }
+    Ok(identity.write_actor(model.as_deref(), mode.as_deref()))
+}
+
+/// 書込応答へ載せる来歴。直近1件のイベントが、いま確定した書込そのもの。
+fn write_provenance(vault: &Vault, conn: &rusqlite::Connection, id: &str) -> Result<Option<Value>> {
+    let Some(event) = vault.note_history(conn, id, 1)?.into_iter().next() else {
+        return Ok(None);
+    };
+    Ok(Some(json!({
+        "event_id": event.event_id,
+        "actor": event.actor,
+        "kind": event.kind,
+        "sections": event.sections,
+    })))
+}
+
+/// 書込報告に足す1行。誰が・どの種別で・どの見出しを動かしたかを会話へ残す。
+fn write_provenance_line(provenance: Option<&Value>) -> String {
+    let Some(provenance) = provenance else {
+        return String::new();
+    };
+    let actor: crate::provenance::WriteActor =
+        match serde_json::from_value(provenance["actor"].clone()) {
+            Ok(actor) => actor,
+            Err(_) => return String::new(),
+        };
+    let kind = provenance["kind"].as_str().unwrap_or("unknown");
+    let sections = provenance["sections"].as_array().map_or(0, Vec::len);
+    format!(
+        "\n来歴: {} · {kind} · 変更見出し{sections}件",
+        actor.label()
+    )
 }
 
 fn observation_tool_definition() -> Value {
@@ -2030,6 +2400,51 @@ fn proposal_tool_definitions() -> [Value; 3] {
     ]
 }
 
+fn tag_vocabulary_change_tool_definitions() -> [Value; 7] {
+    let tag = json!({"type":"string", "pattern":"^[a-z0-9]+(?:-[a-z0-9]+)*$", "minLength":1,"maxLength":20});
+    let changes = json!({"type":"object", "additionalProperties":false, "properties": {
+        "upsert":{"type":"object", "propertyNames":tag, "additionalProperties":{"type":"string","minLength":1,"maxLength":500}},
+        "remove":{"type":"array","uniqueItems":true,"items":tag},
+        "replace":{"type":"object","propertyNames":tag,"additionalProperties":tag}
+    }, "required":["upsert","remove","replace"]});
+    let hash = json!({"type":"string","pattern":"^sha256:[0-9a-f]{64}$"});
+    let uid = json!({"type":"string","pattern":"^[0-9A-HJKMNP-TV-Z]{26}$"});
+    let reason = json!({"type":"string","minLength":1,"maxLength":500,"description":"制御文字を含まない1行の変更理由。本人の個別合意は不要"});
+    let receipt = json!({"type":"object","additionalProperties":false,"properties": {
+        "schema":{"type":"integer","const":1},"workspace_id":uid,"source_note_uid":uid,
+        "source_revision":uid,"source_document_hash":hash,"snapshot_digest":hash,
+        "changes":changes,"reason":reason,"plan_hash":hash
+    },"required":["schema","workspace_id","source_note_uid","source_revision","source_document_hash","snapshot_digest","changes","reason","plan_hash"]});
+    let rollback_receipt = json!({"type":"object","additionalProperties":false,"properties": {
+        "schema":{"type":"integer","const":1},"workspace_id":uid,"execution_id":uid,
+        "source_note_uid":uid,"source_revision":uid,"history_hash":hash,
+        "snapshot_digest":hash,"reason":reason,"plan_hash":hash
+    },"required":["schema","workspace_id","execution_id","source_note_uid","source_revision","history_hash","snapshot_digest","reason","plan_hash"]});
+    let page = json!({"limit":{"type":"integer","minimum":1,"maximum":100,"description":"既定20件"},
+        "cursor":{"type":"string","minLength":1,"description":"前ページのnext_cursorをそのまま渡す"}});
+    let mut get_properties = page.clone();
+    get_properties["execution_id"] = uid.clone();
+    let read_annotations = json!({"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false});
+    [
+        json!({"name":"plan_tag_vocabulary_change","description":"語彙の追加・説明変更・削除・置換を同じDB snapshotから計画する。upsertは語彙説明、removeは削除語、replaceは旧語から置換先への対応。コアが全対象を列挙し、件数・最大20件の例・blocker件数と集計・receiptを返す。本文や全ノート一覧は返さない。can_apply=falseなら確定せず理由を解消する。本人の個別合意は不要。","annotations":read_annotations,
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"changes":changes,"reason":reason},"required":["changes","reason"]}}),
+        json!({"name":"apply_tag_vocabulary_change","description":"planが返したreceiptを変更せず渡し、語彙と全対象ノートのタグを1 transactionで確定する。execution_idは新しいULID。snapshot/正本の競合やblockerは全件未反映で拒否。保存済みIDは再適用せず、list/get_tag_vocabulary_changeで確認する。保存後の書き出し保留は保存成功なので再送しない。本人の個別合意やapproval引数は不要。復元はplan_tag_vocabulary_rollbackから計画する。",
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true},
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"execution_id":uid,"receipt":receipt},"required":["execution_id","receipt"]}}),
+        json!({"name":"list_tag_vocabulary_changes","description":"一括タグ変更の確定履歴をページで確認する。本文・全対象一覧は返さない。next_cursorがあれば続きがある。","annotations":read_annotations,
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":page}}),
+        json!({"name":"get_tag_vocabulary_change","description":"指定execution_idの一括変更履歴と対象タグの変更をページで取得する。run.rollbackに復元済みのID・日時・理由・件数を返す。復元の応答紛失時も元execution_idで確認する。本文を返さず、対象ID・タグ・hashはcoreの参照境界に従う。next_cursorがあれば続きがある。","annotations":read_annotations,
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":get_properties,"required":["execution_id"]}}),
+        json!({"name":"plan_tag_vocabulary_rollback","description":"元execution_idの一括語彙変更を実行前へ復元できるか読み取り専用で照合する。理由reasonを渡す。元履歴・正本指定・現在snapshotに固定したreceipt、件数・最大20件の例・blocker集計を返す。対象の後続変更、復元で消える語の新たな利用、保護対象、未出力、競合があれば全体を拒否する。can_apply=trueの場合だけ復元できる。本文や非公開ノートIDは返さず、本人の個別合意は不要。","annotations":read_annotations,
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"execution_id":uid,"reason":reason},"required":["execution_id","reason"]}}),
+        json!({"name":"rollback_tag_vocabulary_change","description":"復元planのreceiptを変更せず、新しいULIDのrollback_idと渡し、語彙と全対象ノートを実行前のdocumentへ1 transactionで復元する。古いplan・blocker・復元済み実行・保存済みIDは全件未反映で拒否する。保存後の書き出し保留や応答紛失は再送せず、元execution_idのget_tag_vocabulary_changeでrollbackを確認する。本人の個別合意やapproval引数は不要。",
+            "annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":true},
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{"rollback_id":uid,"receipt":rollback_receipt},"required":["rollback_id","receipt"]}}),
+        json!({"name":"get_tag_vocabulary_stats","description":"ローカルに保存された一括語彙変更・復元の回数、対象件数、直近最大10件、現在の書き出し保留を読み取り専用で集計する。本文・対象ノートIDは返さない。計画・拒否・所要時間・AI判断の品質は未計測であり、この集計から成功率や品質を推定しない。","annotations":read_annotations,
+            "inputSchema":{"type":"object","additionalProperties":false,"properties":{}}}),
+    ]
+}
+
 fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Value {
     let capabilities = ClientSurface::from_hint(client).capabilities();
     let mut definitions = json!([
@@ -2076,6 +2491,40 @@ fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Valu
             "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
                 "limit": {"type": "integer", "description": "最大件数(既定10)"}
             }}
+        },
+        {
+            "name": "history",
+            "description": "ノートの来歴(誰が・いつ・どの見出しを・なぜ)。本文を変えず、追記専用の台帳から新しい順に読む。note 省略=いま開いているノート。",
+            "annotations": {
+                "title": "ノートの来歴を読む",
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            },
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "note": {"type": "string", "description": "ノート ID。省略=いま開いているノート"},
+                "limit": {"type": "integer", "description": "最大件数(既定20・上限200)"},
+                "with_diff": {"type": "boolean", "description": "本文のunified diffを含める(既定false)"}
+            }}
+        },
+        {
+            "name": "tag_vocabulary",
+            "description": "書込検証に使う全語彙entries、workspace_id、正本source/source_status、候補candidates、不正項目skippedを取得する。glossary_noteは指定済みで読める正本のID。未指定の候補はgetで確認してset_tag_vocabulary_sourceで明示指定する。初期語彙を使えるのは未指定かつ候補0件だけ。欠損・参照不可を初期状態と扱わない。語彙の新設・統合・削除はAI裁量で、本人の個別合意は不要。既存語を優先し重複を抑え、plan_tag_vocabulary_changeで計画しapply_tag_vocabulary_changeで一括確定する。本人の訂正や保護対象を優先する。運用本文の修復はupdate(body)を使えるが、使用中語を削除しない。",
+            // read面は参照用途の分類。共通入口のDB準備・Git同期は更新を伴い、同じ引数でも結果が変わる。
+            "annotations": {"title": "タグ語彙を確認", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true},
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {}}
+        },
+        {
+            "name": "set_tag_vocabulary_source",
+            "description": "タグ語彙の正本をnote_uidへ明示指定する。先にtag_vocabularyで接続先・候補・現在の指定を取得し、getで対象を確認する。workspace_idとnote_uidをそのまま渡し、expected_revisionは初回のみnull、切替・修復はsource.revision。reasonに選定理由を記す。候補1件も自動指定せず、競合時は再取得する。保存済みでexport_pendingの場合は再指定せず状態を確認する。語彙本文やタグは変更しない。",
+            "annotations": {"title": "タグ語彙の正本を指定", "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true},
+            "inputSchema": {"type": "object", "additionalProperties": false, "properties": {
+                "workspace_id": {"type": "string", "minLength": 1},
+                "note_uid": {"type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"},
+                "expected_revision": {"type": ["string", "null"], "minLength": 1},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "選定理由。制御文字を含まない1行"}
+            }, "required": ["workspace_id", "note_uid", "expected_revision", "reason"]}
         },
         {
             "name": "inspect_runtime_storage",
@@ -2247,6 +2696,7 @@ fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Valu
     distillation_tools.extend(semantic_tool_definitions());
     distillation_tools.extend(initiative_closure_tool_definitions());
     distillation_tools.extend(legacy_promotion_tool_definitions());
+    distillation_tools.extend(provenance_backfill_tool_definitions());
     tools.splice(insert_at..insert_at, distillation_tools);
     let proposal_at = tools
         .iter()
@@ -2254,6 +2704,7 @@ fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Valu
         .expect("update tool definition exists")
         + 1;
     tools.splice(proposal_at..proposal_at, proposal_tool_definitions());
+    tools.extend(tag_vocabulary_change_tool_definitions());
     for tool in tools.iter_mut() {
         match tool["name"].as_str() {
             Some("propose") => {
@@ -2268,6 +2719,18 @@ fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Valu
             _ => {}
         }
     }
+    // 来歴の申告はproposeとupdateで同じ形にする。片方だけ書式が違うと、
+    // 書き手が面ごとに違う項目名を憶える必要が出て申告そのものが落ちる。
+    for name in ["propose", "update"] {
+        let properties = tools
+            .iter_mut()
+            .find(|tool| tool["name"] == name)
+            .and_then(|tool| tool["inputSchema"]["properties"].as_object_mut())
+            .expect("write tool definition has properties");
+        for (key, schema) in provenance_argument_schema() {
+            properties.insert(key.to_string(), schema);
+        }
+    }
     if !capabilities.current_note_argument_optional {
         let get = definitions
             .as_array_mut()
@@ -2278,6 +2741,15 @@ fn tool_definitions_for_surface(client: &str, tool_surface: ToolSurface) -> Valu
         );
         get["inputSchema"]["properties"]["note"]["description"] = json!("ノート ID(必須)");
         get["inputSchema"]["required"] = json!(["note"]);
+        let history = definitions
+            .as_array_mut()
+            .and_then(|items| items.iter_mut().find(|item| item["name"] == "history"))
+            .expect("history tool definition exists");
+        history["description"] = json!(
+            "ノートの来歴(誰が・いつ・どの見出しを・なぜ)。本文を変えず、追記専用の台帳から新しい順に読む。note IDを指定する。"
+        );
+        history["inputSchema"]["properties"]["note"]["description"] = json!("ノート ID(必須)");
+        history["inputSchema"]["required"] = json!(["note"]);
     }
     definitions
         .as_array_mut()
@@ -2569,13 +3041,108 @@ struct GetProposalArguments {
     _note: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetTagVocabularySourceArguments {
+    workspace_id: String,
+    note_uid: String,
+    expected_revision: Option<String>,
+    reason: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanTagVocabularyChangeArguments {
+    changes: crate::tag_vocabulary_changes::Changes,
+    reason: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyTagVocabularyChangeArguments {
+    execution_id: String,
+    receipt: crate::tag_vocabulary_changes::Receipt,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanTagVocabularyRollbackArguments {
+    execution_id: String,
+    reason: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RollbackTagVocabularyChangeArguments {
+    rollback_id: String,
+    receipt: crate::tag_vocabulary_rollback::Receipt,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListTagVocabularyChangesArguments {
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GetTagVocabularyChangeArguments {
+    execution_id: String,
+    limit: Option<usize>,
+    cursor: Option<String>,
+}
+
+fn tag_change_arguments<T: serde::de::DeserializeOwned>(args: &Value) -> Result<T> {
+    serde_json::from_value(args.clone()).map_err(|error| {
+        crate::write_rejection::WriteRejection::InvalidArgument
+            .reject(format!("語彙変更の引数が不正: {error}"))
+    })
+}
+
+fn tag_source_arguments(args: &Value) -> Result<SetTagVocabularySourceArguments> {
+    // Optionだけでは未指定と明示nullが同じになる。比較条件の省略を初回指定へ読み替えない。
+    if args.get("expected_revision").is_none() {
+        return Err(crate::write_rejection::WriteRejection::InvalidArgument
+            .reject("expected_revisionは必須(初回のみnull)"));
+    }
+    serde_json::from_value(args.clone()).map_err(|error| {
+        crate::write_rejection::WriteRejection::InvalidArgument
+            .reject(format!("語彙正本指定の引数が不正: {error}"))
+    })
+}
+
 fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -> Result<()> {
+    if name == "set_tag_vocabulary_source" {
+        let _ = tag_source_arguments(args)?;
+    }
+    match name {
+        "plan_tag_vocabulary_change" => {
+            let _: PlanTagVocabularyChangeArguments = tag_change_arguments(args)?;
+        }
+        "apply_tag_vocabulary_change" => {
+            let _: ApplyTagVocabularyChangeArguments = tag_change_arguments(args)?;
+        }
+        "list_tag_vocabulary_changes" => {
+            let _: ListTagVocabularyChangesArguments = tag_change_arguments(args)?;
+        }
+        "get_tag_vocabulary_change" => {
+            let _: GetTagVocabularyChangeArguments = tag_change_arguments(args)?;
+        }
+        "plan_tag_vocabulary_rollback" => {
+            let _: PlanTagVocabularyRollbackArguments = tag_change_arguments(args)?;
+        }
+        "rollback_tag_vocabulary_change" => {
+            let _: RollbackTagVocabularyChangeArguments = tag_change_arguments(args)?;
+        }
+        _ => {}
+    }
     let capabilities = ClientSurface::from_hint(client).capabilities();
-    if name == "get"
+    if matches!(name, "get" | "history")
         && !capabilities.current_note_argument_optional
         && args.get("note").and_then(Value::as_str).is_none()
     {
-        anyhow::bail!("このclient surfaceではgetのnote引数が必要");
+        anyhow::bail!("このclient surfaceでは{name}のnote引数が必要");
     }
     if matches!(
         name,
@@ -2583,12 +3150,17 @@ fn reject_unavailable_mcp_capabilities(client: &str, name: &str, args: &Value) -
     ) && args.get("allow_new_tags").is_some()
     {
         return Err(crate::write_rejection::WriteRejection::McpCapability.reject(
-            "allow_new_tags はAI用MCPでは利用できない。既存語彙を使うか、trusted UI / CLIの別承認を案内する"
+            "allow_new_tags はAI用MCPでは利用できない。tag_vocabularyとgetで正本を確認し、未指定ならset_tag_vocabulary_sourceで明示指定する。新語・統合・削除はAI裁量で、本人の個別合意は不要。既存語を優先し重複を抑え、plan_tag_vocabulary_change→apply_tag_vocabulary_changeで一括確定して再取得する。本人の訂正や保護対象に従い、blockerの迂回や未保存と決めつけた再送をしない。運用本文だけの修復はupdate(body)を使えるが、使用中語を削除しない"
         ));
     }
     if matches!(
         name,
-        "plan_distillation" | "distillation_cadence_status" | "plan_legacy_artifact_promotions"
+        "tag_vocabulary"
+            | "get_tag_vocabulary_stats"
+            | "plan_distillation"
+            | "distillation_cadence_status"
+            | "plan_legacy_artifact_promotions"
+            | "plan_provenance_backfill"
     ) && args.as_object().is_none_or(|args| !args.is_empty())
     {
         anyhow::bail!("{name} は引数を受け取らない");
@@ -2630,7 +3202,7 @@ fn call_tool(
 ) -> Result<ToolOutput> {
     call_tool_with_search_options(
         vault,
-        client,
+        &ClientIdentity::from_hint(client),
         name,
         args,
         ToolCallOptions::test(remote_sync, true),
@@ -2638,14 +3210,35 @@ fn call_tool(
     )
 }
 
+fn read_workspace_rule_identity(
+    vault: &Vault,
+    snapshot: &rusqlite::Connection,
+    degraded: &mut Vec<crate::degradation::Degradation>,
+) -> Option<crate::rule_identity::WorkspaceRuleIdentity> {
+    let observed = crate::workspace::stored_workspace_id(vault)
+        .and_then(|workspace| crate::rule_identity::workspace_snapshot(snapshot, &workspace));
+    match observed {
+        Ok(identity) => Some(identity),
+        Err(_) => {
+            // 診断の失敗から正本不在や一致を推測しない。既存の本文取得は保持する。
+            degraded.push(crate::degradation::Degradation::IndexRepair {
+                artifact: "rule_identity".into(),
+                detail: "共通規則と語彙正本の版を確認できない。識別情報は未確認。".into(),
+            });
+            None
+        }
+    }
+}
+
 fn call_tool_with_search_options(
     vault: &Vault,
-    client: &str,
+    client_identity: &ClientIdentity,
     name: &str,
     args: &Value,
     options: ToolCallOptions<'_>,
     removal_plans: &mut RemovalPlans,
 ) -> Result<ToolOutput> {
+    let client = client_identity.hint();
     let ToolCallOptions {
         remote_sync,
         update_embeddings,
@@ -2656,6 +3249,27 @@ fn call_tool_with_search_options(
     // 引数拒否より先に接続先を確かめ、異なる保管庫への操作を一律に止める。
     workspace.verify(vault)?;
     reject_unavailable_mcp_capabilities(client, name, args)?;
+    if name == "set_tag_vocabulary_source"
+        && tag_source_arguments(args)?.workspace_id != crate::workspace::stored_workspace_id(vault)?
+    {
+        return Err(WorkspaceFailure::Mismatch.into());
+    }
+    if name == "apply_tag_vocabulary_change"
+        && tag_change_arguments::<ApplyTagVocabularyChangeArguments>(args)?
+            .receipt
+            .workspace_id
+            != crate::workspace::stored_workspace_id(vault)?
+    {
+        return Err(WorkspaceFailure::Mismatch.into());
+    }
+    if name == "rollback_tag_vocabulary_change"
+        && tag_change_arguments::<RollbackTagVocabularyChangeArguments>(args)?
+            .receipt
+            .workspace_id
+            != crate::workspace::stored_workspace_id(vault)?
+    {
+        return Err(WorkspaceFailure::Mismatch.into());
+    }
     // 2026-09-07: migration失敗時にも診断を返す。通常のopenやpullを先に呼ぶと
     // 状態を書き換え得るうえ、同じ初期化エラーで診断まで止まってしまう。
     if name == "inspect_runtime_storage" {
@@ -2680,7 +3294,12 @@ fn call_tool_with_search_options(
     }
     let distillation_closed_world = matches!(
         name,
-        "plan_distillation"
+        "plan_tag_vocabulary_change"
+            | "list_tag_vocabulary_changes"
+            | "get_tag_vocabulary_change"
+            | "plan_tag_vocabulary_rollback"
+            | "get_tag_vocabulary_stats"
+            | "plan_distillation"
             | "plan_targeted_distillation"
             | "plan_initiative_closure"
             | "audit_distillation"
@@ -2698,7 +3317,11 @@ fn call_tool_with_search_options(
     let mut degraded = checked_remote_degradations(
         vault,
         workspace,
-        remote_sync && !distillation_closed_world && !conflict_operation,
+        remote_sync
+            && !distillation_closed_world
+            && !conflict_operation
+            // 復元の未出力・競合はcoreが拒否する。先行pullで状態を変えて解消しない。
+            && name != "rollback_tag_vocabulary_change",
         || crate::connect::pull_if_stale_verified(vault),
     )?;
     let conn = if conflict_operation {
@@ -2728,6 +3351,278 @@ fn call_tool_with_search_options(
         }
     }
     match name {
+        "plan_provenance_backfill" => {
+            let plan = crate::provenance::plan_backfill(vault, &conn)?;
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "来歴の移行plan(read-only): 対象{}件。applyにはplan_digest {} をそのまま渡す",
+                        plan.total, plan.plan_digest
+                    ),
+                    &degraded,
+                ),
+                structured: Some(json!({
+                    "schema": plan.schema,
+                    "read_only": plan.read_only,
+                    "plan_digest": plan.plan_digest,
+                    "total": plan.total,
+                    "preview": plan.preview,
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(None, &degraded),
+                })),
+            })
+        }
+        "apply_provenance_backfill" => {
+            let digest = args
+                .get("plan_digest")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow::anyhow!("plan_digest が必要"))?;
+            let report = crate::provenance::apply_backfill(vault, &conn, digest)?;
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "来歴を移行した: {}件 → {}(Git履歴の起票commitが根拠)",
+                        report.written, report.shard
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "plan_tag_vocabulary_change" => {
+            let args: PlanTagVocabularyChangeArguments = tag_change_arguments(args)?;
+            let plan = crate::tag_vocabulary_changes::plan(&conn, &args.changes, &args.reason)?;
+            let text = format!(
+                "語彙変更plan: 対象{}件 / blocker {}件 / 実行可能 {}。例は最大20件、本文は含まない。",
+                plan.changed_notes, plan.blockers_count, plan.can_apply
+            );
+            let mut structured = serde_json::to_value(&plan)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            Ok(ToolOutput {
+                text: with_degradations(text, &degraded),
+                structured: Some(structured),
+            })
+        }
+        "apply_tag_vocabulary_change" => {
+            let args: ApplyTagVocabularyChangeArguments = tag_change_arguments(args)?;
+            let report = crate::tag_vocabulary_changes::apply(
+                vault,
+                &conn,
+                &args.execution_id,
+                &args.receipt,
+                Some(client),
+            )?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type":"tag_vocabulary_changed", "event":"tag_vocabulary_changed", "required":true,
+                    "execution_id":report.execution_id, "plan_hash":args.receipt.plan_hash,
+                    "changed_notes":report.changed_notes, "stored":report.stored,
+                    "pending_exports":report.pending_exports,
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "語彙と対象タグ{}件の一括変更を保存した。execution {} / 書き出し待ち{}件。保存済みの操作は再送せずget_tag_vocabulary_changeで確認する。",
+                        report.changed_notes,
+                        report.execution_id,
+                        report
+                            .pending_exports
+                            .map_or_else(|| "不明".to_string(), |count| count.to_string())
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "plan_tag_vocabulary_rollback" => {
+            let args: PlanTagVocabularyRollbackArguments = tag_change_arguments(args)?;
+            let plan =
+                crate::tag_vocabulary_rollback::plan(&conn, &args.execution_id, &args.reason)?;
+            let text = format!(
+                "語彙復元plan: 対象{}件 / blocker {}件 / 実行可能 {}。例は最大20件、本文は含まない。",
+                plan.restored_notes, plan.blockers_count, plan.can_apply
+            );
+            let mut structured = serde_json::to_value(&plan)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            Ok(ToolOutput {
+                text: with_degradations(text, &degraded),
+                structured: Some(structured),
+            })
+        }
+        "rollback_tag_vocabulary_change" => {
+            let args: RollbackTagVocabularyChangeArguments = tag_change_arguments(args)?;
+            let report = crate::tag_vocabulary_rollback::rollback(
+                vault,
+                &conn,
+                &args.rollback_id,
+                &args.receipt,
+                Some(client),
+            )?;
+            if let Some(detail) = &report.markdown_export_error {
+                degraded.push(crate::degradation::Degradation::MarkdownExport {
+                    detail: detail.clone(),
+                });
+            }
+            let mut structured = serde_json::to_value(&report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(
+                Some(json!({
+                    "type":"tag_vocabulary_rolled_back", "event":"tag_vocabulary_rolled_back", "required":true,
+                    "execution_id":report.execution_id, "rollback_id":report.rollback_id,
+                    "plan_hash":args.receipt.plan_hash, "restored_notes":report.restored_notes,
+                    "stored":report.stored, "pending_exports":report.pending_exports,
+                })),
+                &degraded,
+            );
+            Ok(ToolOutput {
+                text: with_degradations(
+                    format!(
+                        "語彙と対象タグ{}件の一括復元を保存した。execution {} / rollback {} / 書き出し待ち{}件。保存済みの操作は再送せずget_tag_vocabulary_changeで確認する。",
+                        report.restored_notes,
+                        report.execution_id,
+                        report.rollback_id,
+                        report
+                            .pending_exports
+                            .map_or_else(|| "不明".to_string(), |count| count.to_string())
+                    ),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "get_tag_vocabulary_stats" => {
+            let report = crate::tag_vocabulary_stats::read(&conn)?;
+            let mut structured = serde_json::to_value(report)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            Ok(ToolOutput {
+                text: with_degradations(
+                    "一括語彙変更・復元と書き出し保留の集計。計画・拒否・所要時間・AI判断の品質は未計測。".into(),
+                    &degraded,
+                ),
+                structured: Some(structured),
+            })
+        }
+        "list_tag_vocabulary_changes" => {
+            let args: ListTagVocabularyChangesArguments = tag_change_arguments(args)?;
+            let snapshot = conn.unchecked_transaction()?;
+            let page =
+                crate::tag_vocabulary_history::list(&snapshot, args.limit, args.cursor.as_deref())?;
+            let text = format!(
+                "一括タグ変更の履歴{}件。続き: {}",
+                page.items.len(),
+                page.next_cursor.is_some()
+            );
+            let mut structured = serde_json::to_value(page)?;
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            snapshot.commit()?;
+            Ok(ToolOutput {
+                text: with_degradations(text, &degraded),
+                structured: Some(structured),
+            })
+        }
+        "get_tag_vocabulary_change" => {
+            let args: GetTagVocabularyChangeArguments = tag_change_arguments(args)?;
+            let snapshot = conn.unchecked_transaction()?;
+            let detail = crate::tag_vocabulary_history::get(
+                &snapshot,
+                &args.execution_id,
+                args.limit,
+                args.cursor.as_deref(),
+            )?;
+            let mut structured = match detail {
+                Some(detail) => serde_json::to_value(detail)?,
+                None => json!({"execution_id":args.execution_id,"found":false}),
+            };
+            let text = if structured["found"] == false {
+                "指定した一括タグ変更の履歴は該当なし。"
+            } else {
+                "一括タグ変更の履歴。本文は含まない。next_cursorがあれば続きがある。"
+            };
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            snapshot.commit()?;
+            Ok(ToolOutput {
+                text: with_degradations(text.into(), &degraded),
+                structured: Some(structured),
+            })
+        }
+        "tag_vocabulary" => {
+            // 選択IDと語彙を別版から組み合わせない。本文・語彙の書込能力はこの口へ持たせない。
+            let snapshot = conn.unchecked_transaction()?;
+            crate::tag_vocabulary_source::ensure_workspace(vault, &snapshot)?;
+            let overview = crate::tags::vocabulary_overview(&snapshot)?;
+            let workspace_id = crate::workspace::stored_workspace_id(vault)?;
+            let workspace_rule_identity =
+                crate::rule_identity::workspace_snapshot(&snapshot, &workspace_id)?;
+            let mut structured = serde_json::to_value(overview)?;
+            structured["workspace_id"] = json!(workspace_id);
+            structured["rule_identity"] =
+                serde_json::to_value(rule_identity_for(client, options.tool_surface, true))?;
+            structured["workspace_rule_identity"] = serde_json::to_value(workspace_rule_identity)?;
+            let text = with_degradations(serde_json::to_string_pretty(&structured)?, &degraded);
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            structured["conversation_events"] = conversation_events(None, &degraded);
+            snapshot.commit()?;
+            Ok(ToolOutput {
+                text,
+                structured: Some(structured),
+            })
+        }
+        "set_tag_vocabulary_source" => {
+            let args = tag_source_arguments(args)?;
+            let result = crate::tag_vocabulary_source::set_source(
+                vault,
+                &conn,
+                &args.workspace_id,
+                &args.note_uid,
+                args.expected_revision.as_deref(),
+                &args.reason,
+                client,
+            )?;
+            let mut structured = serde_json::to_value(&result)?;
+            let message = if result.export_pending {
+                "タグ語彙の正本指定は保存済み、書き出し未完了です。再指定せず状態を確認してください。"
+            } else {
+                "タグ語彙の正本指定を保存しました。tag_vocabularyで指定結果を確認してください。"
+            };
+            let text = with_degradations(
+                format!("{message}\n{}", serde_json::to_string_pretty(&result)?),
+                &degraded,
+            );
+            structured["degraded"] = serde_json::to_value(&degraded)?;
+            let mut event = json!({"type":"notice", "required":true, "message":message});
+            // 保存済みJSONの出力保留はproposalと同じ警告境界で返す。未保存エラーにはしない。
+            let warnings = if result.export_pending {
+                let code = "tag_vocabulary_source_export_pending";
+                event["type"] = json!("degradation");
+                event["code"] = json!(code);
+                vec![json!({"code":code, "message":message})]
+            } else {
+                Vec::new()
+            };
+            structured["post_save_warnings"] = json!(warnings);
+            structured["conversation_events"] = conversation_events(Some(event), &degraded);
+            Ok(ToolOutput {
+                text,
+                structured: Some(structured),
+            })
+        }
         "plan_legacy_artifact_promotions" => {
             let workspace_id = crate::workspace::workspace_id(vault)?;
             let ledger = crate::ledger::Ledger::open(vault, &workspace_id)?;
@@ -2936,7 +3831,7 @@ fn call_tool_with_search_options(
             let report =
                 crate::distillation_audit::audit(vault, &conn, arguments.baseline.as_ref())?;
             let text = format!(
-                "蒸留audit(read-only): gate {} / workset {} / added {} / changed {} / moved {} / removed {}\naudit: {}\nplan: {}\n",
+                "蒸留audit(read-only): gate {} / workset {} / added {} / changed {} / moved {} / removed {}\naudit: {}\nplan: {}\nArtifact監査: {}\n",
                 if report.gate.passed {
                     "PASS"
                 } else {
@@ -2949,6 +3844,12 @@ fn call_tool_with_search_options(
                 report.delta.removed.len(),
                 report.audit_id,
                 report.plan.plan_id,
+                report
+                    .storage_contract
+                    .report
+                    .as_ref()
+                    .map(|storage| storage.legacy_inventory.summary())
+                    .unwrap_or_else(|| "Storage Contractを検証できません".into()),
             );
             Ok(ToolOutput {
                 text,
@@ -2965,10 +3866,15 @@ fn call_tool_with_search_options(
                 .join(", ");
             Ok(ToolOutput {
                 text: format!(
-                    "蒸留cadence: due {} / current {} / accepted {}",
+                    "蒸留cadence: due {} / current {} / accepted {}\nArtifact台帳: current {} / accepted {}",
                     if due.is_empty() { "none" } else { &due },
                     status.current_checkpoint_id,
                     status.accepted_checkpoint_id.as_deref().unwrap_or("none"),
+                    status
+                        .current_artifact_stamp
+                        .as_deref()
+                        .unwrap_or("unverified"),
+                    status.accepted_artifact_stamp.as_deref().unwrap_or("none"),
                 ),
                 structured: Some(serde_json::to_value(&status)?),
             })
@@ -3176,6 +4082,7 @@ fn call_tool_with_search_options(
             // Ranking・リンク展開・本文選択の間で別processの更新を挟まない。
             // include_documentsはこのread transactionの同じSQLite snapshotから組み立てる。
             let snapshot = conn.unchecked_transaction()?;
+            let workspace_rules = read_workspace_rule_identity(vault, &snapshot, &mut degraded);
             let mut out = crate::search::search_with(
                 &snapshot,
                 query,
@@ -3264,6 +4171,9 @@ fn call_tool_with_search_options(
             }
             text.push_str(&degradation_text(&out.degraded));
             let mut structured = serde_json::to_value(&out)?;
+            structured["rule_identity"] =
+                serde_json::to_value(rule_identity_for(client, options.tool_surface, true))?;
+            structured["workspace_rule_identity"] = serde_json::to_value(workspace_rules)?;
             structured["retrieval_profile"] = json!(retrieval_profile.label());
             if options.hook_context {
                 structured["observation_measurement"] = json!({
@@ -3315,6 +4225,11 @@ fn call_tool_with_search_options(
             if name == "get" {
                 crate::proposal_workflow::require_normal_reference(&snapshot, &id)?;
             }
+            let workspace_rules = if name == "get" {
+                read_workspace_rule_identity(vault, &snapshot, &mut degraded)
+            } else {
+                None
+            };
             let proposal_ticket = if name == "get_proposal" {
                 Some(crate::proposal_workflow::get(&snapshot, &id)?)
             } else {
@@ -3452,14 +4367,19 @@ fn call_tool_with_search_options(
             let note_body = note.body.clone();
             let distillation_status = crate::distillation_jobs::note_status(&snapshot, &id)?;
             let link_text = note_markdown_link(&identity);
-            let output = ToolOutput {
+            // 来歴は本文へ書き戻さない(契約20)。リンク行の直後に1行だけ添える。
+            let provenance = vault.note_provenance(&conn, &id)?;
+            let provenance_line = crate::provenance::provenance_line(&provenance);
+            let mut output = ToolOutput {
                 text: format!(
-                    "(note: {id})\nリンク: {link_text}\n{proposal_line}{legacy_line}{managed_line}{sim_line}{judgment_text}{}{}",
+                    "(note: {id})\nリンク: {link_text}\n{provenance_line}\n\
+                     {proposal_line}{legacy_line}{managed_line}{sim_line}{judgment_text}{}{}",
                     degradation_text(&degraded),
                     note_text
                 ),
                 structured: Some(json!({
                     "note": &id,
+                    "provenance": provenance,
                     "note_id": identity["note_id"],
                     "title": identity["title"],
                     "description": note_description,
@@ -3485,8 +4405,73 @@ fn call_tool_with_search_options(
                     ),
                 })),
             };
+            if name == "get"
+                && let Some(structured) = output.structured.as_mut()
+            {
+                structured["rule_identity"] =
+                    serde_json::to_value(rule_identity_for(client, options.tool_surface, true))?;
+                structured["workspace_rule_identity"] = serde_json::to_value(workspace_rules)?;
+            }
             snapshot.commit()?;
             Ok(output)
+        }
+        "history" => {
+            let id = match args.get("note").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => crate::connect::current_note(vault).ok_or_else(|| {
+                    anyhow::anyhow!("いま開いているノートが無い(note 引数で ID を指定)")
+                })?,
+            };
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map_or(HISTORY_DEFAULT_LIMIT, |limit| limit as usize)
+                .clamp(1, HISTORY_MAX_LIMIT);
+            let with_diff = args
+                .get("with_diff")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let provenance = vault.note_provenance(&conn, &id)?;
+            let mut events = vault.note_history(&conn, &id, limit)?;
+            if !with_diff {
+                // diffは1件8KiBまで積める。既定の一覧で会話予算を食わせない。
+                for event in &mut events {
+                    event.body_diff = None;
+                }
+            }
+            let mut text = format!(
+                "(note: {id})\n{}\n",
+                crate::provenance::provenance_line(&provenance)
+            );
+            if events.is_empty() {
+                text.push_str("来歴イベントなし。\n");
+            }
+            for event in &events {
+                text.push_str(&format!(
+                    "- {} {} {}/{} sections={:?}{}\n",
+                    event.at,
+                    event.actor.label(),
+                    event.operation.as_str(),
+                    event.kind.as_str(),
+                    event.sections,
+                    event
+                        .summary
+                        .as_deref()
+                        .map(|summary| format!(" {summary}"))
+                        .unwrap_or_default(),
+                ));
+            }
+            Ok(ToolOutput {
+                text: with_degradations(text, &degraded),
+                structured: Some(json!({
+                    "note": &id,
+                    "events": events,
+                    "provenance": provenance,
+                    "with_diff": with_diff,
+                    "degraded": degraded,
+                    "conversation_events": conversation_events(None, &degraded),
+                })),
+            })
         }
         "attach" => {
             let note_id = args
@@ -3677,6 +4662,8 @@ fn call_tool_with_search_options(
                     relations: relations_argument(args)?.unwrap_or_default(),
                     judgment: judgment_argument(args, false)?.flatten(),
                     allow_new_tags: false,
+                    actor: Some(write_actor_argument(client_identity, args)?),
+                    revision: revision_argument(args)?,
                     client,
                 },
             )?;
@@ -3687,6 +4674,11 @@ fn call_tool_with_search_options(
             structured["relations"] = serde_json::to_value(&created.front.relations)?;
             structured["judgment"] = serde_json::to_value(&created.front.judgment)?;
             structured["event"] = json!("note_created");
+            let provenance = write_provenance(vault, &conn, &id)?;
+            let provenance_line = write_provenance_line(provenance.as_ref());
+            if let Some(provenance) = provenance {
+                structured["provenance"] = provenance;
+            }
             let guidance = crate::write_guidance::collect(vault, &conn, &id, Vec::new());
             structured["degraded"] = serde_json::to_value(&degraded)?;
             structured["conversation_events"] = conversation_events(
@@ -3697,7 +4689,7 @@ fn call_tool_with_search_options(
             Ok(ToolOutput {
                 text: with_degradations(
                     format!(
-                        "{}\n{}",
+                        "{}{provenance_line}\n{}",
                         note_write_report("起票した", &structured),
                         guidance.text()
                     ),
@@ -3727,6 +4719,8 @@ fn call_tool_with_search_options(
                     relations: relations_argument(args)?,
                     judgment: judgment_argument(args, true)?,
                     allow_new_tags: false,
+                    actor: Some(write_actor_argument(client_identity, args)?),
+                    revision: revision_argument(args)?,
                     client,
                 },
             )?;
@@ -3741,6 +4735,11 @@ fn call_tool_with_search_options(
             structured["relations"] = serde_json::to_value(&note.front.relations)?;
             structured["judgment"] = serde_json::to_value(&note.front.judgment)?;
             structured["event"] = json!("note_updated");
+            let provenance = write_provenance(vault, &conn, id)?;
+            let provenance_line = write_provenance_line(provenance.as_ref());
+            if let Some(provenance) = provenance {
+                structured["provenance"] = provenance;
+            }
             let guidance = crate::write_guidance::collect(vault, &conn, id, warnings);
             structured["degraded"] = serde_json::to_value(&degraded)?;
             structured["conversation_events"] = conversation_events(
@@ -3751,7 +4750,7 @@ fn call_tool_with_search_options(
             Ok(ToolOutput {
                 text: with_degradations(
                     format!(
-                        "{}\n{}",
+                        "{}{provenance_line}\n{}",
                         note_write_report("更新した", &structured),
                         guidance.text()
                     ),
@@ -3812,7 +4811,13 @@ fn call_tool_with_search_options(
             let pending = removal_plans.consume(token, id)?;
             let note = vault.agent_removal_candidate(&conn, id)?;
             pending.require_unchanged(&note.to_file_string()?)?;
-            vault.agent_delete_note(&conn, id, &pending.reason, client)?;
+            vault.agent_delete_note(
+                &conn,
+                id,
+                &pending.reason,
+                client,
+                Some(write_actor_argument(client_identity, args)?),
+            )?;
             Ok(ToolOutput {
                 text: with_degradations(
                     format!("削除した: {id} [{}] (履歴には残る)", pending.title),
@@ -4116,7 +5121,7 @@ mod tests {
         ] {
             let result = handle_with_search_options(
                 Some(&vault),
-                "codex/gpt",
+                &ClientIdentity::from_hint("codex/gpt"),
                 true,
                 ToolCallOptions {
                     tool_surface: surface,
@@ -4224,7 +5229,7 @@ mod tests {
             ] {
                 let error = call_tool_with_search_options(
                     &vault,
-                    "codex/gpt",
+                    &ClientIdentity::from_hint("codex/gpt"),
                     "search",
                     &json!({"query":"test"}),
                     ToolCallOptions {
@@ -4251,7 +5256,7 @@ mod tests {
         let expected = crate::workspace::stored_workspace_id(&vault).unwrap();
         let created = call_tool_with_search_options(
             &vault,
-            "codex/gpt",
+            &ClientIdentity::from_hint("codex/gpt"),
             "propose",
             &rejection_proposal(),
             bound_options(&expected),
@@ -4263,7 +5268,7 @@ mod tests {
         assert!(created["conversation_link"].is_string());
         let result = call_tool_with_search_options(
             &vault,
-            "codex/gpt",
+            &ClientIdentity::from_hint("codex/gpt"),
             "get",
             &json!({"note":created["note_id"]}),
             bound_options(&expected),
@@ -4333,7 +5338,7 @@ mod tests {
         run_git(&a.root, &["push", "origin", "HEAD"]);
         let result = handle_with_search_options(
             Some(&b),
-            "codex/gpt",
+            &ClientIdentity::from_hint("codex/gpt"),
             true,
             bound_options(&expected),
             &mut RemovalPlans::default(),
@@ -4405,7 +5410,7 @@ mod tests {
         let path = dir.path().join("ledger.sqlite3");
         let params = json!({"name":"propose", "arguments":{"allow_new_tags":true}});
         let mut response = json!({"result":handle_with_search_options(
-            Some(&vault), "codex/gpt", true, bound_options(expected),
+            Some(&vault), &ClientIdentity::from_hint("codex/gpt"), true, bound_options(expected),
             &mut RemovalPlans::default(), "tools/call", Some(&params),
         ).unwrap().unwrap()});
         assert_eq!(
@@ -4458,6 +5463,23 @@ mod tests {
         })
     }
 
+    /// 書込応答の先頭2行(報告 + 来歴)。write_guidanceの助言は後続行なので落とす。
+    fn write_report_head(text: &str) -> String {
+        text.lines().take(2).collect::<Vec<_>>().join("\n")
+    }
+
+    fn provenance_proposal() -> Value {
+        json!({
+            "title": "来歴fixture",
+            "body": "## 背景\n最初の本文。\n",
+            "tags": ["known"],
+            "authority": {
+                "namespace": "records", "role": "record", "status": "active",
+                "scope": "test/provenance"
+            }
+        })
+    }
+
     fn judgment_proposal() -> Value {
         json!({
             "title": "判断fixture 配備",
@@ -4475,6 +5497,422 @@ mod tests {
                 "exceptions": ["本人が担当の変更を明示した場合は今回の指定に従う"]
             }
         })
+    }
+
+    fn provenance_call(
+        vault: &Vault,
+        identity: &ClientIdentity,
+        name: &str,
+        args: &Value,
+    ) -> Result<ToolOutput> {
+        call_tool_with_search_options(
+            vault,
+            identity,
+            name,
+            args,
+            ToolCallOptions::test(false, true),
+            &mut RemovalPlans::default(),
+        )
+    }
+
+    /// initializeの名乗りは来歴のbasisだけを上げる。能力判定・ON/OFFは設定値のまま
+    /// なので、名乗った名前で機能が増えないことも同じテストで固定する。
+    #[test]
+    fn initialize_handshake_only_raises_the_write_actor_basis() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let mut identity = ClientIdentity::from_hint("test/client");
+        identity.observe_handshake(Some(
+            &json!({"clientInfo": {"name": "claude-code", "version": "9.9.9"}}),
+        ));
+        let initialized = handle_with_search_options(
+            None,
+            &identity,
+            true,
+            ToolCallOptions::test(false, true),
+            &mut RemovalPlans::default(),
+            "initialize",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            initialized["capabilities"]["experimental"]["kbApp"]["client_identity"],
+            json!({"name": "claude-code", "version": "9.9.9", "basis": "handshake"})
+        );
+        // 名乗りはClientSurfaceの能力へ波及しない(test/clientはunknown surfaceのまま)。
+        assert_eq!(
+            initialized["capabilities"]["experimental"]["kbApp"]["current_note_argument_optional"],
+            json!(false)
+        );
+
+        provenance_call(&vault, &identity, "propose", &provenance_proposal()).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let event = vault
+            .note_history(&conn, "notes/来歴fixture", 1)
+            .unwrap()
+            .remove(0);
+        assert_eq!(event.actor.client, "claude-code");
+        assert_eq!(event.actor.client_version.as_deref(), Some("9.9.9"));
+        assert_eq!(
+            event.actor.client_basis,
+            crate::provenance::ClientBasis::Handshake
+        );
+    }
+
+    /// 名乗りが無ければ設定値(`--client`)のまま。旧hostが接続しても来歴は欠けない。
+    #[test]
+    fn a_client_without_handshake_keeps_the_configured_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let identity = ClientIdentity::from_hint("test/client");
+        provenance_call(&vault, &identity, "propose", &provenance_proposal()).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let event = vault
+            .note_history(&conn, "notes/来歴fixture", 1)
+            .unwrap()
+            .remove(0);
+        assert_eq!(event.actor.client, "test");
+        assert_eq!(
+            event.actor.client_basis,
+            crate::provenance::ClientBasis::Config
+        );
+        assert_eq!(event.actor.model.as_deref(), Some("client"));
+        assert_eq!(
+            event.actor.model_basis,
+            crate::provenance::ModelBasis::Config
+        );
+    }
+
+    /// 自己申告のモデルと改版の意味がイベントへ入り、応答にも1行で出る。
+    /// 500文字超のsummaryは書込前に拒否し、ノートを変えない。
+    #[test]
+    fn write_arguments_record_the_self_reported_actor_and_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let identity = ClientIdentity::from_hint("test/client");
+        let mut proposal = provenance_proposal();
+        proposal["actor"] = json!({"model": "claude-fable-5-1", "mode": "extended thinking"});
+        proposal["revision"] = json!({"kind": "create", "summary": "来歴fixtureを起票した"});
+        proposal["origin_claim"] = json!("quoted:chatgpt/gpt-6");
+        let created = provenance_call(&vault, &identity, "propose", &proposal).unwrap();
+        assert!(
+            created.text.contains(
+                "来歴: test/claude-fable-5-1 extended thinking(自己申告) · create · 変更見出し"
+            ),
+            "{}",
+            created.text
+        );
+        let structured = created.structured.unwrap();
+        assert_eq!(structured["provenance"]["kind"], json!("create"));
+        assert_eq!(
+            structured["provenance"]["actor"]["model_basis"],
+            json!("self_reported")
+        );
+        assert_eq!(
+            structured["provenance"]["actor"]["mode"],
+            json!("extended thinking")
+        );
+        // frontmatter の generated.by も「どのモデルのどの設定か」まで書く(接続設定の製品名が先頭)。
+        {
+            let conn = open_db(&vault).unwrap();
+            let note = vault.read_note_from_db(&conn, "notes/来歴fixture").unwrap();
+            assert_eq!(
+                note.front.generated.as_ref().map(|g| g.by.as_str()),
+                Some("test/claude-fable-5-1 extended thinking")
+            );
+        }
+
+        let updated = provenance_call(
+            &vault,
+            &identity,
+            "update",
+            &json!({
+                "note": "notes/来歴fixture",
+                "body": "## 背景\n直した本文。\n\n## 決定\n足した。\n",
+                "actor": {"model": "gpt-5.6-sol"},
+                "revision": {"kind": "correct", "summary": "背景を直し決定を足した", "reason": "初出の記述が古い"}
+            }),
+        )
+        .unwrap();
+        let structured = updated.structured.unwrap();
+        assert_eq!(structured["provenance"]["kind"], json!("correct"));
+        assert_eq!(
+            structured["provenance"]["sections"],
+            json!(["## 背景", "## 決定"])
+        );
+
+        let conn = open_db(&vault).unwrap();
+        let history = vault.note_history(&conn, "notes/来歴fixture", 10).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].actor.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(
+            history[0].actor.mode, None,
+            "前の申告の動作設定を引き継いだ"
+        );
+        assert_eq!(history[0].reason.as_deref(), Some("初出の記述が古い"));
+        assert_eq!(
+            history[1].origin_claim.as_deref(),
+            Some("quoted:chatgpt/gpt-6")
+        );
+
+        let before: String = conn
+            .query_row("SELECT document FROM notes", [], |row| row.get(0))
+            .unwrap();
+        let error = provenance_call(
+            &vault,
+            &identity,
+            "update",
+            &json!({
+                "note": "notes/来歴fixture",
+                "description": "拒否される更新",
+                "revision": {"summary": "あ".repeat(501)}
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            crate::write_rejection::WriteRejection::from_error(&error),
+            Some(crate::write_rejection::WriteRejection::InvalidArgument)
+        );
+        let after: String = conn
+            .query_row("SELECT document FROM notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, after, "拒否された更新がノートを変えた");
+        assert_eq!(
+            vault
+                .note_history(&conn, "notes/来歴fixture", 10)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// getは本文へ来歴を書き戻さず、リンク行の直後の1行と structured だけで示す。
+    #[test]
+    fn get_shows_provenance_beside_the_note_without_touching_the_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let identity = ClientIdentity::from_hint("test/client");
+        provenance_call(&vault, &identity, "propose", &provenance_proposal()).unwrap();
+        let output = provenance_call(
+            &vault,
+            &identity,
+            "get",
+            &json!({"note": "notes/来歴fixture"}),
+        )
+        .unwrap();
+        let line = output
+            .text
+            .lines()
+            .nth(2)
+            .expect("リンク行の次に来歴行がある");
+        assert!(line.starts_with("来歴: 作成 "), "{line}");
+        assert!(line.contains("test/client(設定値)"), "{line}");
+        // 本文は正本のまま。見出しへの注記を混ぜない。
+        let structured = output.structured.unwrap();
+        assert_eq!(structured["body"], json!("## 背景\n最初の本文。\n"));
+        assert_eq!(structured["provenance"]["event_count"], json!(1));
+        assert_eq!(
+            structured["provenance"]["section_authors"][0]["heading"],
+            json!("## 背景")
+        );
+    }
+
+    /// 動作設定はモデルに付く情報。モデル無しの `actor.mode` だけは書く前に拒否する。
+    #[test]
+    fn actor_mode_without_a_model_is_rejected_before_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let identity = ClientIdentity::from_hint("test/client");
+        let mut proposal = provenance_proposal();
+        proposal["actor"] = json!({"mode": "medium"});
+        let error = provenance_call(&vault, &identity, "propose", &proposal).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("actor.modeはactor.modelと一緒に指定する"),
+            "{error}"
+        );
+        let conn = open_db(&vault).unwrap();
+        assert!(
+            vault
+                .note_history(&conn, "notes/来歴fixture", 1)
+                .unwrap()
+                .is_empty()
+        );
+
+        // 設定値の動作設定(hintの3番目)は自己申告が無いときの表示に出る
+        let configured = ClientIdentity::from_hint("codex-cli/gpt-5.6-sol/medium");
+        let created =
+            provenance_call(&vault, &configured, "propose", &provenance_proposal()).unwrap();
+        assert!(
+            created
+                .text
+                .contains("来歴: codex-cli/gpt-5.6-sol medium(設定値)"),
+            "{}",
+            created.text
+        );
+        let note = vault.read_note_from_db(&conn, "notes/来歴fixture").unwrap();
+        assert_eq!(
+            note.front.generated.as_ref().map(|g| g.by.as_str()),
+            Some("codex-cli/gpt-5.6-sol medium")
+        );
+    }
+
+    /// historyはread面の読み取り専用ツール。既定はdiffを含めず、新しい順に返す。
+    #[test]
+    fn history_reads_the_ledger_newest_first_and_hides_diffs_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let identity = ClientIdentity::from_hint("test/client");
+        provenance_call(&vault, &identity, "propose", &provenance_proposal()).unwrap();
+        provenance_call(
+            &vault,
+            &identity,
+            "update",
+            &json!({
+                "note": "notes/来歴fixture",
+                "body": "## 背景\n直した本文。\n",
+                "revision": {"kind": "correct", "summary": "背景を直した"}
+            }),
+        )
+        .unwrap();
+
+        let output = provenance_call(
+            &vault,
+            &identity,
+            "history",
+            &json!({"note": "notes/来歴fixture"}),
+        )
+        .unwrap();
+        let structured = output.structured.unwrap();
+        let events = structured["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["operation"], json!("update"));
+        assert_eq!(events[1]["operation"], json!("propose"));
+        assert!(events[0].get("body_diff").is_none(), "既定でdiffを返した");
+        assert!(output.text.contains("update/correct"), "{}", output.text);
+        assert!(output.text.contains("背景を直した"), "{}", output.text);
+        assert_eq!(structured["provenance"]["event_count"], json!(2));
+
+        let with_diff = provenance_call(
+            &vault,
+            &identity,
+            "history",
+            &json!({"note": "notes/来歴fixture", "with_diff": true, "limit": 1}),
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        let events = with_diff["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1, "limitが効いていない");
+        assert!(
+            events[0]["body_diff"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("直した本文")
+        );
+
+        // note省略の可否はgetと同じclient surfaceの能力に従う。
+        let error = provenance_call(&vault, &identity, "history", &json!({})).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "このclient surfaceではhistoryのnote引数が必要"
+        );
+        let desktop = ClientIdentity::from_hint("claude-desktop/claude");
+        let error = provenance_call(&vault, &desktop, "history", &json!({})).unwrap_err();
+        assert!(
+            error.to_string().contains("いま開いているノート"),
+            "{error}"
+        );
+    }
+
+    /// 移行はイベントを1件も持たないノートだけを対象にし、planと同じ集合へだけ書く。
+    /// 二重実行は対象が空集合になってdigestが変わるので、同じdigestでは通らない。
+    #[test]
+    fn provenance_backfill_targets_only_notes_without_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let identity = ClientIdentity::from_hint("codex-cli/gpt-5.6-sol");
+        // 通常経路の起票はイベントを持つので対象外。
+        provenance_call(&vault, &identity, "propose", &provenance_proposal()).unwrap();
+        let mut second = provenance_proposal();
+        second["title"] = json!("移行対象ノート");
+        second["authority"]["scope"] = json!("test/backfill");
+        provenance_call(&vault, &identity, "propose", &second).unwrap();
+
+        // 片方のイベントだけを台帳から落として「移行前のノート」を作る。
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "DELETE FROM note_events WHERE note_id = 'notes/移行対象ノート'",
+            [],
+        )
+        .unwrap();
+
+        let plan = provenance_call(&vault, &identity, "plan_provenance_backfill", &json!({}))
+            .unwrap()
+            .structured
+            .unwrap();
+        assert_eq!(plan["total"], json!(1));
+        assert_eq!(plan["read_only"], json!(true));
+        assert_eq!(plan["preview"][0]["note"], json!("notes/移行対象ノート"));
+        assert_eq!(plan["preview"][0]["client"], json!("codex-cli/gpt-5.6-sol"));
+        let digest = plan["plan_digest"].as_str().unwrap().to_string();
+
+        // 集合が違うdigestは受け付けない。
+        let stale = provenance_call(
+            &vault,
+            &identity,
+            "apply_provenance_backfill",
+            &json!({"plan_digest": "sha256:".to_string() + &"0".repeat(64)}),
+        )
+        .unwrap_err();
+        assert!(stale.to_string().contains("移行planが古い"), "{stale}");
+
+        let report = provenance_call(
+            &vault,
+            &identity,
+            "apply_provenance_backfill",
+            &json!({"plan_digest": digest.clone()}),
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(report["written"], json!(1));
+        let shard = report["shard"].as_str().unwrap().to_string();
+        assert!(shard.starts_with(".kb-events/backfill-"), "{shard}");
+        // 月別shardは書き換えず、専用shardだけを増やす。
+        assert!(dir.path().join("v").join(&shard).exists());
+
+        let event = vault
+            .note_history(&conn, "notes/移行対象ノート", 10)
+            .unwrap()
+            .remove(0);
+        assert_eq!(event.operation, crate::provenance::Operation::Import);
+        assert_eq!(event.kind, crate::provenance::RevisionKind::Create);
+        assert_eq!(event.actor.client, "codex-cli");
+        assert_eq!(event.actor.model.as_deref(), Some("gpt-5.6-sol"));
+        assert!(event.doc_hash.is_some());
+
+        // 二重実行は同じdigestでは通らない(対象が空になる)。
+        let repeated = provenance_call(
+            &vault,
+            &identity,
+            "apply_provenance_backfill",
+            &json!({"plan_digest": digest}),
+        )
+        .unwrap_err();
+        assert!(
+            repeated.to_string().contains("移行planが古い"),
+            "{repeated}"
+        );
+        assert_eq!(
+            vault
+                .note_history(&conn, "notes/移行対象ノート", 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     /// 2026-09-08: 方針を読んだだけで取り違えた事故に対し、通常getにも条件付き根拠を渡す。
@@ -4935,7 +6373,18 @@ mod tests {
         }
         let mut human = vault.read_note_from_db(&conn, &id).unwrap();
         human.front.origin = Some("human".into());
-        crate::note_store::put(&vault, &conn, &id, &human, "fixture", "fixture").unwrap();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &human,
+            crate::note_store::WriteAttribution::new(
+                "fixture",
+                "fixture",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         vault.flush_note_exports(&conn).unwrap();
         let error = call_tool(
             &vault,
@@ -5088,6 +6537,7 @@ mod tests {
             CAPTURE_CRITERIA,
             CAPTURE_POLICY,
             INSTRUCTIONS_OPERATIONS,
+            TAG_VOCABULARY_GUIDANCE,
             prompt.as_ref(),
             definitions.as_str(),
             include_str!("../../../README.md"),
@@ -5793,6 +7243,80 @@ mod tests {
         assert_eq!(initialized["instructions"], instructions_for("test/client"));
     }
 
+    /// 2026-09-08: 評価用の差替え後も語彙textとstructuredContentが同じ案内hashを示す。
+    #[test]
+    fn evaluation_vocabulary_identity_keeps_text_and_structured_content_equal() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let options = EvaluationServeOptions {
+            instructions: "合成評価用の案内".into(),
+            event_rules: vec![],
+            injected_degradations: vec![],
+            trace_path: None,
+        };
+        let params = json!({"name":"tag_vocabulary", "arguments":{}});
+        let production = handle_on_surface(
+            Some(&vault),
+            "rule-delivery-eval/fixture",
+            true,
+            false,
+            ToolSurface::Read,
+            "tools/call",
+            Some(&params),
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(production["isError"], true, "{production}");
+        let original_body: Value =
+            serde_json::from_str(production["content"][0]["text"].as_str().unwrap()).unwrap();
+        for suffix in ["", "\n⚠ 劣化 [index_sync:fixture]: 合成の診断\n"] {
+            let mut transformed = production.clone();
+            transformed["content"][0]["text"] = json!(format!(
+                "{}{suffix}",
+                production["content"][0]["text"].as_str().unwrap()
+            ));
+            apply_evaluation_transform(&options, "tools/call", Some(&params), &mut transformed);
+            let text = transformed["content"][0]["text"].as_str().unwrap();
+            let mut values = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+            let body = values.next().unwrap().unwrap();
+            assert_eq!(&text[values.byte_offset()..], suffix);
+            assert_eq!(
+                body["rule_identity"],
+                transformed["structuredContent"]["rule_identity"]
+            );
+            assert_ne!(body["rule_identity"], original_body["rule_identity"]);
+            let mut expected_body = original_body.clone();
+            expected_body["rule_identity"] = body["rule_identity"].clone();
+            assert_eq!(body, expected_body);
+        }
+
+        // ノート本文が偶然同じJSON形でも、getでは本文の語句を評価用metadataへ書き換えない。
+        let mut fetched = production;
+        let original_text = fetched["content"].clone();
+        apply_evaluation_transform(
+            &options,
+            "tools/call",
+            Some(&json!({"name":"get"})),
+            &mut fetched,
+        );
+        assert_eq!(fetched["content"], original_text);
+
+        let mut disabled = handle_on_surface(
+            None,
+            "codex-cli/gpt",
+            false,
+            false,
+            ToolSurface::Read,
+            "tools/call",
+            Some(&params),
+        )
+        .unwrap()
+        .unwrap();
+        let original = disabled.clone();
+        apply_evaluation_transform(&options, "tools/call", Some(&params), &mut disabled);
+        assert_eq!(disabled, original);
+    }
+
     #[test]
     fn evaluation_transform_injects_only_selected_context_and_event_rules() {
         let options = EvaluationServeOptions {
@@ -5805,19 +7329,40 @@ mod tests {
             injected_degradations: vec!["index_sync:fixture".into()],
             trace_path: None,
         };
-        let mut initialized = serde_json::json!({"instructions": "production"});
+        let identity = rule_identity_for("codex-cli/gpt", ToolSurface::All, true);
+        let mut initialized = serde_json::json!({
+            "instructions": "production",
+            "capabilities": {"experimental": {"kbApp": {"rule_identity": identity}}}
+        });
         apply_evaluation_transform(&options, "initialize", None, &mut initialized);
         assert_eq!(initialized["instructions"], "fixture instructions");
+        let observed: crate::rule_identity::RuleIdentity = serde_json::from_value(
+            initialized["capabilities"]["experimental"]["kbApp"]["rule_identity"].clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            observed,
+            crate::rule_identity::for_instructions(
+                identity.client_surface,
+                identity.tool_surface,
+                "fixture instructions",
+            )
+        );
+        assert_ne!(observed.instructions_sha256, identity.instructions_sha256);
 
         let mut searched = serde_json::json!({
             "content": [{"type": "text", "text": "該当なし。"}],
-            "structuredContent": {"hits": []}
+            "structuredContent": {"hits": [], "rule_identity": identity}
         });
         apply_evaluation_transform(
             &options,
             "tools/call",
             Some(&serde_json::json!({"name": "search"})),
             &mut searched,
+        );
+        assert_eq!(
+            searched["structuredContent"]["rule_identity"],
+            json!(observed)
         );
         assert!(
             searched["content"][0]["text"]
@@ -5863,7 +7408,7 @@ mod tests {
 
         let output = call_tool_with_search_options(
             &vault,
-            "rule-delivery-eval/test",
+            &ClientIdentity::from_hint("rule-delivery-eval/test"),
             "search",
             &serde_json::json!({"query": "固定fixture"}),
             ToolCallOptions::test(false, false),
@@ -5959,12 +7504,23 @@ mod tests {
         let cases = [
             (
                 ToolSurface::Read,
-                vec!["search", "get", "get_proposal", "recent"],
+                vec![
+                    "search",
+                    "get",
+                    "get_proposal",
+                    "recent",
+                    "history",
+                    "tag_vocabulary",
+                    "list_tag_vocabulary_changes",
+                    "get_tag_vocabulary_change",
+                    "get_tag_vocabulary_stats",
+                ],
             ),
             (
                 ToolSurface::Write,
                 vec![
                     "attach",
+                    "set_tag_vocabulary_source",
                     "propose",
                     "update",
                     "create_proposal",
@@ -5972,6 +7528,8 @@ mod tests {
                     "review_proposal",
                     "prepare_remove",
                     "commit_remove",
+                    "apply_tag_vocabulary_change",
+                    "rollback_tag_vocabulary_change",
                 ],
             ),
             (
@@ -5995,6 +7553,10 @@ mod tests {
                     "plan_legacy_artifact_promotions",
                     "apply_legacy_artifact_promotion",
                     "rollback_legacy_artifact_promotion",
+                    "plan_provenance_backfill",
+                    "apply_provenance_backfill",
+                    "plan_tag_vocabulary_change",
+                    "plan_tag_vocabulary_rollback",
                 ],
             ),
         ];
@@ -6205,7 +7767,7 @@ mod tests {
             let vault = Vault::create(dir.path().join("v")).unwrap();
             let response = handle_with_search_options(
                 Some(&vault),
-                "codex/gpt",
+                &ClientIdentity::from_hint("codex/gpt"),
                 true,
                 bound_options("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
                 &mut RemovalPlans::default(),
@@ -6567,7 +8129,7 @@ mod tests {
         let vault = proposal_ticket_vault(&dir.path().join("v"));
         let response = handle_with_search_options(
             Some(&vault),
-            "codex/gpt",
+            &ClientIdentity::from_hint("codex/gpt"),
             true,
             bound_options("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
             &mut RemovalPlans::default(),
@@ -7216,9 +8778,10 @@ mod tests {
         );
         assert!(expected_link.is_absolute());
         assert_eq!(
-            proposed_output.text.lines().next().unwrap(),
+            write_report_head(&proposed_output.text),
             format!(
-                "起票した: [評価ノート](<{}>) (namespace: knowledge / scope: test/evaluation-note)",
+                "起票した: [評価ノート](<{}>) (namespace: knowledge / scope: test/evaluation-note)\n\
+                 来歴: test/client(設定値) · create · 変更見出し1件",
                 expected_link.display()
             )
         );
@@ -7274,9 +8837,11 @@ mod tests {
             proposed["conversation_link"]
         );
         assert_eq!(
-            updated_output.text.lines().next().unwrap(),
+            write_report_head(&updated_output.text),
             format!(
-                "更新した: [更新済み評価ノート](<{}>) (namespace: knowledge / scope: test/updated-evaluation-note)",
+                "更新した: [更新済み評価ノート](<{}>) \
+                 (namespace: knowledge / scope: test/updated-evaluation-note)\n\
+                 来歴: test/client(設定値) · unknown · 変更見出し1件",
                 expected_link.display()
             )
         );
@@ -7311,9 +8876,10 @@ mod tests {
         assert!(structured["authority"].is_null());
         assert!(structured["conversation_events"][0]["authority"].is_null());
         assert_eq!(
-            output.text.lines().next().unwrap(),
+            write_report_head(&output.text),
             format!(
-                "更新した: [旧ノート](<{}>) (authority: 未設定(legacy))",
+                "更新した: [旧ノート](<{}>) (authority: 未設定(legacy))\n\
+                 来歴: test/client(設定値) · unknown · 変更見出し1件",
                 vault.note_path("notes/legacy").unwrap().display()
             )
         );
@@ -7534,7 +9100,7 @@ mod tests {
         // 明示選択した session_explicit だけが depth 1 で止まり、予算を絞る。
         let result = handle_with_search_options(
             Some(&vault),
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             true,
             ToolCallOptions {
                 retrieval_profile: RetrievalProfile::SessionExplicit,
@@ -7696,7 +9262,7 @@ mod tests {
 
         let explicit = handle_with_search_options(
             None,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             true,
             ToolCallOptions {
                 retrieval_profile: RetrievalProfile::SessionExplicit,
@@ -7720,6 +9286,177 @@ mod tests {
             disabled["capabilities"]["experimental"]["kbApp"]["retrieval_profile"],
             "session_auto"
         );
+    }
+
+    /// 2026-09-08: 配信する実際のON/OFF案内を識別し、initializeでVaultを要求しない。
+    #[test]
+    fn initialize_rule_identity_hashes_actual_instructions_without_opening_a_vault() {
+        for client in [
+            "codex/gpt",
+            "claude-code/claude",
+            "chatgpt/openai",
+            "unknown/gpt",
+        ] {
+            for surface in [
+                ToolSurface::Read,
+                ToolSurface::Write,
+                ToolSurface::Maintenance,
+            ] {
+                let mut hashes = Vec::new();
+                for enabled in [false, true] {
+                    let initialized = handle_on_surface(
+                        None,
+                        client,
+                        enabled,
+                        false,
+                        surface,
+                        "initialize",
+                        None,
+                    )
+                    .unwrap()
+                    .unwrap();
+                    let identity: crate::rule_identity::RuleIdentity = serde_json::from_value(
+                        initialized["capabilities"]["experimental"]["kbApp"]["rule_identity"]
+                            .clone(),
+                    )
+                    .unwrap();
+                    identity.validate().unwrap();
+                    assert_eq!(identity, rule_identity_for(client, surface, enabled));
+                    assert_eq!(
+                        identity.instructions_sha256,
+                        format!(
+                            "{:x}",
+                            Sha256::digest(
+                                initialized["instructions"].as_str().unwrap().as_bytes()
+                            )
+                        )
+                    );
+                    assert_eq!(identity.tool_surface, surface);
+                    assert_eq!(identity.client_surface, ClientSurface::from_hint(client));
+                    assert!(
+                        initialized["capabilities"]["experimental"]["kbApp"]
+                            .get("workspace_rule_identity")
+                            .is_none()
+                    );
+                    hashes.push(identity.instructions_sha256);
+                }
+                assert_ne!(hashes[0], hashes[1]);
+            }
+        }
+        assert_eq!(
+            rule_identity_for("codex/gpt", ToolSurface::Read, true),
+            rule_identity_for("codex-cli/other", ToolSurface::Read, true)
+        );
+    }
+
+    #[test]
+    fn normal_reads_expose_the_same_vocabulary_identity_across_client_surfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let note = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| test | テスト |\n",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        pin_tag_source_through_mcp(&vault, &note);
+        let mut expected_workspace = None;
+        for client in [
+            "codex/gpt",
+            "claude-code/claude",
+            "claude-desktop/claude",
+            "chatgpt/openai",
+        ] {
+            for (name, args) in [
+                (
+                    "search",
+                    json!({"query":"タグ運用", "include_documents":true}),
+                ),
+                ("get", json!({"note":note})),
+                ("tag_vocabulary", json!({})),
+            ] {
+                let result = handle_on_surface(
+                    Some(&vault),
+                    client,
+                    true,
+                    false,
+                    ToolSurface::Read,
+                    "tools/call",
+                    Some(&json!({"name":name,"arguments":args})),
+                )
+                .unwrap()
+                .unwrap();
+                assert_ne!(result["isError"], true, "{result}");
+                let structured = &result["structuredContent"];
+                let actual: crate::rule_identity::WorkspaceRuleIdentity =
+                    serde_json::from_value(structured["workspace_rule_identity"].clone()).unwrap();
+                actual.validate().unwrap();
+                assert_eq!(
+                    actual.vocabulary.source_status,
+                    crate::rule_identity::VocabularySourceStatus::Pinned
+                );
+                if let Some(expected) = &expected_workspace {
+                    assert_eq!(&actual, expected);
+                } else {
+                    expected_workspace = Some(actual);
+                }
+                assert_eq!(
+                    structured["rule_identity"],
+                    serde_json::to_value(rule_identity_for(client, ToolSurface::Read, true))
+                        .unwrap()
+                );
+            }
+        }
+        let before = expected_workspace.unwrap();
+        call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &json!({"note":note,
+            "body":"## 語彙\n| test | テストの説明を変更 |\n"}),
+            false,
+        )
+        .unwrap();
+        let after = call_tool(&vault, "test/client", "tag_vocabulary", &json!({}), false)
+            .unwrap()
+            .structured
+            .unwrap();
+        let after: crate::rule_identity::WorkspaceRuleIdentity =
+            serde_json::from_value(after["workspace_rule_identity"].clone()).unwrap();
+        assert_eq!(
+            before.vocabulary.source_note_uid,
+            after.vocabulary.source_note_uid
+        );
+        assert_eq!(
+            before.vocabulary.source_revision,
+            after.vocabulary.source_revision
+        );
+        assert_ne!(
+            before.vocabulary.source_document_sha256,
+            after.vocabulary.source_document_sha256
+        );
+    }
+
+    #[test]
+    fn rule_identity_observation_failure_is_unknown_and_does_not_leak_raw_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "INSERT INTO tag_vocabulary_sources VALUES(1,?1)",
+            ["private invalid document"],
+        )
+        .unwrap();
+        let mut degraded = Vec::new();
+        assert!(read_workspace_rule_identity(&vault, &conn, &mut degraded).is_none());
+        assert_eq!(degraded.len(), 1);
+        let observed = serde_json::to_string(&degraded).unwrap();
+        assert!(observed.contains("rule_identity"));
+        assert!(!observed.contains("private"));
+        assert!(crate::tags::vocabulary_overview(&conn).is_err());
     }
 
     #[test]
@@ -7771,7 +9508,7 @@ mod tests {
     fn attach_schema_accepts_content_but_never_a_client_path() {
         let tools = tool_definitions("test/client");
         let definitions = tools.as_array().unwrap();
-        assert_eq!(definitions.len(), 30);
+        assert_eq!(definitions.len(), 42);
         let attach = definitions
             .iter()
             .find(|definition| definition["name"] == "attach")
@@ -7974,6 +9711,8 @@ mod tests {
                     judgment: None,
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -8193,6 +9932,8 @@ mod tests {
                     judgment: None,
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -8320,6 +10061,8 @@ mod tests {
                     judgment: None,
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -8414,7 +10157,7 @@ mod tests {
 
         let prepared = call_tool_with_search_options(
             &vault,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             "prepare_remove",
             &serde_json::json!({"note": note_id, "reason": "重複した中間ノート"}),
             ToolCallOptions::test(false, true),
@@ -8440,7 +10183,7 @@ mod tests {
 
         let removed = call_tool_with_search_options(
             &vault,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             "commit_remove",
             &serde_json::json!({
                 "note": note_id,
@@ -8461,7 +10204,7 @@ mod tests {
 
         let reused = call_tool_with_search_options(
             &vault,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             "commit_remove",
             &serde_json::json!({
                 "note": note_id,
@@ -8489,7 +10232,7 @@ mod tests {
         let prepare = |note: &str, plans: &mut RemovalPlans| {
             call_tool_with_search_options(
                 &vault,
-                "test/client",
+                &ClientIdentity::from_hint("test/client"),
                 "prepare_remove",
                 &serde_json::json!({"note": note, "reason": "重複整理"}),
                 ToolCallOptions::test(false, true),
@@ -8506,7 +10249,7 @@ mod tests {
         let swap_token = prepare(&first, &mut plans);
         let swapped = call_tool_with_search_options(
             &vault,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             "commit_remove",
             &serde_json::json!({"note": second, "removal_token": swap_token}),
             ToolCallOptions::test(false, true),
@@ -8535,12 +10278,14 @@ mod tests {
                     judgment: None,
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
         let changed = call_tool_with_search_options(
             &vault,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             "commit_remove",
             &serde_json::json!({"note": first, "removal_token": changed_token}),
             ToolCallOptions::test(false, true),
@@ -8554,7 +10299,7 @@ mod tests {
             Instant::now() - Duration::from_secs(1);
         let expired = call_tool_with_search_options(
             &vault,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             "commit_remove",
             &serde_json::json!({"note": second, "removal_token": expired_token}),
             ToolCallOptions::test(false, true),
@@ -8636,6 +10381,1699 @@ mod tests {
                 find(definitions, "propose")["inputSchema"]["required"],
                 serde_json::json!(["title", "body", "tags", "authority"])
             );
+        }
+    }
+
+    /// 2026-09-08: 一括変更の全入口もOFF・surface・未知引数でDB/通信より前に止める。
+    #[test]
+    fn tag_vocabulary_change_tools_obey_surfaces_and_pre_db_arguments() {
+        let cases = [
+            ("plan_tag_vocabulary_change", ToolSurface::Maintenance),
+            ("apply_tag_vocabulary_change", ToolSurface::Write),
+            ("list_tag_vocabulary_changes", ToolSurface::Read),
+            ("get_tag_vocabulary_change", ToolSurface::Read),
+            ("plan_tag_vocabulary_rollback", ToolSurface::Maintenance),
+            ("rollback_tag_vocabulary_change", ToolSurface::Write),
+            ("get_tag_vocabulary_stats", ToolSurface::Read),
+        ];
+        for client in [
+            "claude-code/claude",
+            "codex-cli/gpt",
+            "claude-desktop/claude",
+            "chatgpt/openai",
+            "rule-delivery-eval/fixture",
+            "unknown",
+        ] {
+            for (name, allowed) in cases {
+                let tools = tool_definitions_for_surface(client, allowed);
+                let definition = tools
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == name)
+                    .unwrap();
+                assert_eq!(definition["inputSchema"]["additionalProperties"], false);
+                assert_eq!(
+                    definition["annotations"]["readOnlyHint"],
+                    allowed != ToolSurface::Write
+                );
+                assert_eq!(
+                    definition["annotations"]["openWorldHint"],
+                    allowed == ToolSurface::Write
+                );
+                let params = json!({"name":name,"arguments":{}});
+                assert!(
+                    McpWriteObserver::for_client(client)
+                        .begin(true, "tools/call", allowed, Some(&params))
+                        .is_none()
+                );
+                for surface in [
+                    ToolSurface::Read,
+                    ToolSurface::Write,
+                    ToolSurface::Maintenance,
+                ] {
+                    let enabled = surface != allowed;
+                    let expected = if enabled {
+                        "tool_surface_mismatch"
+                    } else {
+                        "kb_disabled"
+                    };
+                    assert!(!method_needs_vault(
+                        enabled,
+                        "tools/call",
+                        surface,
+                        Some(&params)
+                    ));
+                    let response = handle_on_surface(
+                        None,
+                        client,
+                        enabled,
+                        true,
+                        surface,
+                        "tools/call",
+                        Some(&params),
+                    )
+                    .unwrap()
+                    .unwrap();
+                    assert_eq!(response["structuredContent"]["code"], expected);
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let changes = json!({"upsert":{"known":"説明"},"remove":[],"replace":{}});
+        let receipt = json!({"schema":1,"workspace_id":crate::workspace::stored_workspace_id(&vault).unwrap(),
+            "source_note_uid":crate::authority::NoteUid::new(),"source_revision":crate::authority::NoteUid::new(),
+            "source_document_hash":"sha256:unused","snapshot_digest":"sha256:unused","changes":changes,
+            "reason":"fixture","plan_hash":"sha256:unused"});
+        let rollback_receipt = json!({"schema":1,"workspace_id":crate::workspace::stored_workspace_id(&vault).unwrap(),
+            "execution_id":crate::authority::NoteUid::new(),"source_note_uid":crate::authority::NoteUid::new(),
+            "source_revision":crate::authority::NoteUid::new(),"history_hash":"sha256:unused",
+            "snapshot_digest":"sha256:unused","reason":"fixture","plan_hash":"sha256:unused"});
+        for (name, args) in [
+            (
+                "plan_tag_vocabulary_change",
+                json!({"changes":changes,"reason":"fixture","approval":true}),
+            ),
+            (
+                "plan_tag_vocabulary_change",
+                json!({"changes":{"upsert":{},"remove":[],"replace":{},"allow_new_tags":true},"reason":"fixture"}),
+            ),
+            (
+                "apply_tag_vocabulary_change",
+                json!({"execution_id":crate::authority::NoteUid::new(),"receipt":receipt,"approval":true}),
+            ),
+            (
+                "apply_tag_vocabulary_change",
+                json!({"execution_id":crate::authority::NoteUid::new()}),
+            ),
+            ("list_tag_vocabulary_changes", json!({"body":true})),
+            (
+                "get_tag_vocabulary_stats",
+                json!({"include_documents":true}),
+            ),
+            ("get_tag_vocabulary_stats", json!([])),
+            (
+                "plan_tag_vocabulary_rollback",
+                json!({"execution_id":crate::authority::NoteUid::new(),"reason":"fixture","approval":true}),
+            ),
+            (
+                "rollback_tag_vocabulary_change",
+                json!({"rollback_id":crate::authority::NoteUid::new(),"receipt":rollback_receipt,"force":true}),
+            ),
+            (
+                "rollback_tag_vocabulary_change",
+                json!({"rollback_id":crate::authority::NoteUid::new()}),
+            ),
+            (
+                "get_tag_vocabulary_change",
+                json!({"execution_id":crate::authority::NoteUid::new(),"include_documents":true}),
+            ),
+        ] {
+            assert!(call_tool(&vault, "test/client", name, &args, true).is_err());
+            assert!(
+                !vault.index_db_path().exists(),
+                "{name}が引数拒否前にDBを作った"
+            );
+        }
+        for (name, args) in [
+            (
+                "plan_tag_vocabulary_change",
+                json!({"changes":changes,"reason":"fixture"}),
+            ),
+            ("list_tag_vocabulary_changes", json!({})),
+            ("get_tag_vocabulary_stats", json!({})),
+            (
+                "plan_tag_vocabulary_rollback",
+                json!({"execution_id":crate::authority::NoteUid::new(),"reason":"fixture"}),
+            ),
+            (
+                "get_tag_vocabulary_change",
+                json!({"execution_id":crate::authority::NoteUid::new()}),
+            ),
+        ] {
+            assert!(call_tool(&vault, "test/client", name, &args, true).is_err());
+            assert!(
+                !vault.index_db_path().exists(),
+                "{name}の読取でDBを初期化しない"
+            );
+        }
+        let mut wrong_workspace = rollback_receipt;
+        wrong_workspace["workspace_id"] = json!(crate::authority::NoteUid::new());
+        let error = call_tool(
+            &vault,
+            "test/client",
+            "rollback_tag_vocabulary_change",
+            &json!({"rollback_id":crate::authority::NoteUid::new(),"receipt":wrong_workspace}),
+            true,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<WorkspaceFailure>(),
+            Some(WorkspaceFailure::Mismatch)
+        ));
+        assert!(!vault.index_db_path().exists());
+    }
+
+    fn tag_change_fixture() -> (tempfile::TempDir, Vault, String, Vec<String>) {
+        tag_change_fixture_with_targets(22)
+    }
+
+    fn tag_change_fixture_with_targets(
+        count: usize,
+    ) -> (tempfile::TempDir, Vault, String, Vec<String>) {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let source = vault
+            .propose_for_test(
+                "タグ運用",
+                "運用本文は保持する。\n\n## 語彙\n| known | 残す分類 |\n| old | 統合元 |\n",
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        pin_tag_source_through_mcp(&vault, &source);
+        let mut targets = Vec::new();
+        for i in 0..count {
+            targets.push(
+                vault
+                    .propose_for_test(
+                        &format!("一括対象{i:02}"),
+                        "fixture本文は計画と履歴へ出さない",
+                        None,
+                        &["old".into(), "known".into()],
+                        "test/client",
+                    )
+                    .unwrap(),
+            );
+        }
+        (dir, vault, source, targets)
+    }
+
+    /// 2026-09-08: 実client受入とは分け、同じ合成KBへのsurface切替で拒否と復元が変わらないことを守る。
+    #[test]
+    fn common_write_contract_and_vocabulary_roundtrip_match_across_surfaces() {
+        let (_dir, vault, source, targets) = tag_change_fixture_with_targets(1);
+        let conn = open_db(&vault).unwrap();
+        let before: Vec<_> = [&source, &targets[0]]
+            .into_iter()
+            .map(|note| {
+                vault
+                    .read_note_from_db(&conn, note)
+                    .unwrap()
+                    .to_file_string()
+                    .unwrap()
+            })
+            .collect();
+        let mut expected_rejections = None;
+        for client in [
+            "codex-cli/gpt",
+            "claude-code/claude",
+            "claude-desktop/claude",
+        ] {
+            let invoke = |surface, name: &str, arguments| {
+                handle_on_surface(
+                    Some(&vault),
+                    client,
+                    true,
+                    false,
+                    surface,
+                    "tools/call",
+                    Some(&json!({"name":name,"arguments":arguments})),
+                )
+                .unwrap()
+                .unwrap()
+            };
+            let mut missing = rejection_proposal();
+            missing.as_object_mut().unwrap().remove("authority");
+            let mut five_tags = rejection_proposal();
+            five_tags["tags"] = json!(["known", "old", "three", "four", "five"]);
+            let mut override_tags = rejection_proposal();
+            override_tags["tags"] = json!(["unknown"]);
+            override_tags["allow_new_tags"] = json!(true);
+            let rejections: Vec<_> = [
+                ("propose", missing),
+                ("propose", five_tags),
+                ("propose", override_tags),
+                ("update", json!({"body":"noteを欠く"})),
+                (
+                    "update",
+                    json!({"note":targets[0],"tags":["known","old","three","four","five"]}),
+                ),
+                (
+                    "update",
+                    json!({"note":targets[0],"tags":["unknown"],"allow_new_tags":true}),
+                ),
+            ]
+            .into_iter()
+            .map(|(name, arguments)| {
+                let result = invoke(ToolSurface::Write, name, arguments);
+                assert_eq!(result["isError"], true, "{client}/{name}: {result}");
+                let code = result["structuredContent"]["write_rejection"].clone();
+                assert!(code.is_string(), "{result}");
+                code
+            })
+            .collect();
+            if let Some(expected) = &expected_rejections {
+                assert_eq!(&rejections, expected);
+            } else {
+                expected_rejections = Some(rejections);
+            }
+
+            let plan = invoke(
+                ToolSurface::Maintenance,
+                "plan_tag_vocabulary_change",
+                json!({
+                    "changes":{"upsert":{"shared":"追加語彙"},"remove":[],"replace":{"old":"known"}},
+                    "reason":"同じ契約で語彙の追加と統合を検証"
+                }),
+            );
+            assert_eq!(plan["structuredContent"]["can_apply"], true, "{plan}");
+            let execution = crate::authority::NoteUid::new().to_string();
+            let apply = invoke(
+                ToolSurface::Write,
+                "apply_tag_vocabulary_change",
+                json!({
+                    "execution_id":execution,"receipt":plan["structuredContent"]["receipt"]
+                }),
+            );
+            assert_eq!(apply["structuredContent"]["stored"], true, "{apply}");
+            assert_eq!(
+                crate::note_store::read(&conn, &targets[0])
+                    .unwrap()
+                    .front
+                    .tags,
+                vec!["known"]
+            );
+            let vocabulary = invoke(ToolSurface::Read, "tag_vocabulary", json!({}));
+            assert!(
+                vocabulary["structuredContent"]["entries"]
+                    .get("shared")
+                    .is_some()
+            );
+            assert!(
+                vocabulary["structuredContent"]["entries"]
+                    .get("old")
+                    .is_none()
+            );
+            let stale = invoke(
+                ToolSurface::Write,
+                "apply_tag_vocabulary_change",
+                json!({
+                    "execution_id":crate::authority::NoteUid::new().to_string(),"receipt":plan["structuredContent"]["receipt"]
+                }),
+            );
+            assert_eq!(stale["isError"], true);
+            let rollback_plan = invoke(
+                ToolSurface::Maintenance,
+                "plan_tag_vocabulary_rollback",
+                json!({"execution_id":execution,"reason":"合成KBを元の版へ戻す"}),
+            );
+            assert_eq!(
+                rollback_plan["structuredContent"]["can_apply"], true,
+                "{rollback_plan}"
+            );
+            let restored = invoke(
+                ToolSurface::Write,
+                "rollback_tag_vocabulary_change",
+                json!({
+                    "rollback_id":crate::authority::NoteUid::new().to_string(),
+                    "receipt":rollback_plan["structuredContent"]["receipt"]
+                }),
+            );
+            assert_eq!(restored["structuredContent"]["stored"], true, "{restored}");
+            for (note, expected) in [&source, &targets[0]].into_iter().zip(&before) {
+                assert_eq!(
+                    &vault
+                        .read_note_from_db(&conn, note)
+                        .unwrap()
+                        .to_file_string()
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    fn tag_change_plan(vault: &Vault) -> Value {
+        call_tool(vault,"test/client","plan_tag_vocabulary_change",&json!({
+            "changes":{"upsert":{},"remove":[],"replace":{"old":"known"}},"reason":"重複する分類を統合する"
+        }),false).unwrap().structured.unwrap()
+    }
+
+    fn apply_tag_change_fixture(vault: &Vault) -> String {
+        let execution_id = crate::authority::NoteUid::new().to_string();
+        let plan = tag_change_plan(vault);
+        call_tool(
+            vault,
+            "test/client",
+            "apply_tag_vocabulary_change",
+            &json!({"execution_id":execution_id,"receipt":plan["receipt"]}),
+            false,
+        )
+        .unwrap();
+        execution_id
+    }
+
+    fn tag_rollback_plan(vault: &Vault, execution_id: &str) -> Value {
+        call_tool(
+            vault,
+            "test/client",
+            "plan_tag_vocabulary_rollback",
+            &json!({"execution_id":execution_id,"reason":"元の分類へ戻す"}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap()
+    }
+
+    /// 2026-09-08: 復元も小さなreceiptで全件を戻し、必須eventと元実行の履歴で確定を確認する。
+    #[test]
+    fn tag_vocabulary_rollback_restores_documents_and_reports_history_and_stats() {
+        let (_dir, vault, source, targets) = tag_change_fixture();
+        let conn = open_db(&vault).unwrap();
+        let before: Vec<_> = targets
+            .iter()
+            .chain(std::iter::once(&source))
+            .map(|id| {
+                (
+                    id,
+                    vault
+                        .read_note_from_db(&conn, id)
+                        .unwrap()
+                        .to_file_string()
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let execution_id = apply_tag_change_fixture(&vault);
+        let plan = tag_rollback_plan(&vault, &execution_id);
+        assert_eq!(plan["can_apply"], true);
+        assert_eq!(plan["restored_notes"], before.len());
+        assert!(plan["examples"].as_array().unwrap().len() <= 20);
+        assert!(!plan.to_string().contains("fixture本文"));
+        assert_eq!(
+            plan["receipt"],
+            tag_rollback_plan(&vault, &execution_id)["receipt"]
+        );
+        let rollback_id = crate::authority::NoteUid::new().to_string();
+        let request = json!({"rollback_id":rollback_id,"receipt":plan["receipt"]});
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "rollback_tag_vocabulary_change",
+            &request,
+            true,
+        )
+        .unwrap();
+        assert!(output.text.contains("保存"));
+        let result = output.structured.unwrap();
+        assert_eq!(result["stored"], true);
+        assert_eq!(result["pending_exports"], 0);
+        assert_eq!(result["restored_notes"], before.len());
+        assert!(
+            result["conversation_events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event["type"] == "tag_vocabulary_rolled_back"
+                        && event["required"] == true
+                        && event["execution_id"] == execution_id
+                        && event["rollback_id"] == rollback_id
+                        && event["stored"] == true
+                })
+        );
+        for (id, document) in before {
+            assert_eq!(
+                vault
+                    .read_note_from_db(&conn, id)
+                    .unwrap()
+                    .to_file_string()
+                    .unwrap(),
+                document
+            );
+        }
+        assert!(
+            call_tool(
+                &vault,
+                "test/client",
+                "rollback_tag_vocabulary_change",
+                &request,
+                false
+            )
+            .is_err()
+        );
+        let history = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_change",
+            &json!({"execution_id":execution_id}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(history["run"]["rollback"]["rollback_id"], rollback_id);
+        assert!(!history.to_string().contains("fixture本文"));
+        let stats = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_stats",
+            &json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(stats["apply_runs"], 1);
+        assert_eq!(stats["rollback_runs"], 1);
+        assert_eq!(stats["applied_note_changes"], targets.len() + 1);
+        assert_eq!(stats["restored_note_changes"], targets.len() + 1);
+        assert_eq!(stats["pending_exports_total"], 0);
+        assert!(
+            stats["unmeasured"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("semantic_quality"))
+        );
+        assert!(!stats.to_string().contains(&targets[0]));
+        assert!(!stats.to_string().contains("fixture本文"));
+    }
+
+    /// 2026-09-08: 復元後の書き出し失敗を未保存に読み替えず、元実行へ結び付けて返す。
+    #[test]
+    fn tag_vocabulary_rollback_export_failure_is_saved_and_counted() {
+        let (_dir, vault, _source, _targets) = tag_change_fixture();
+        let execution_id = apply_tag_change_fixture(&vault);
+        let plan = tag_rollback_plan(&vault, &execution_id);
+        std::fs::write(vault.root.join(".git/index.lock"), "fixture lock").unwrap();
+        let rollback_id = crate::authority::NoteUid::new().to_string();
+        let result = call_tool(
+            &vault,
+            "test/client",
+            "rollback_tag_vocabulary_change",
+            &json!({"rollback_id":rollback_id,"receipt":plan["receipt"]}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(result["stored"], true);
+        assert!(result["pending_exports"].as_u64().unwrap() > 0);
+        assert!(
+            result["conversation_events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event["type"] == "degradation"
+                        && event["code"] == "markdown_export"
+                        && event["required"] == true
+                })
+        );
+        let history = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_change",
+            &json!({"execution_id":execution_id}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(history["run"]["rollback"]["rollback_id"], rollback_id);
+        let stats = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_stats",
+            &json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(stats["rollback_runs"], 1);
+        assert_eq!(
+            stats["tag_vocabulary_pending_exports"],
+            result["pending_exports"]
+        );
+        assert!(vault.root.join(".git/index.lock").exists());
+    }
+
+    /// 2026-09-08: 復元例も現在の参照境界に従い、非公開IDをblockerから漏らさない。
+    #[test]
+    fn tag_vocabulary_rollback_blocks_hidden_notes_and_stale_receipts() {
+        let (_dir, vault, _source, targets) = tag_change_fixture();
+        let execution_id = apply_tag_change_fixture(&vault);
+        let plan = tag_rollback_plan(&vault, &execution_id);
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "UPDATE notes SET normal_reference_allowed=0 WHERE id=?1",
+            [&targets[0]],
+        )
+        .unwrap();
+        let blocked = tag_rollback_plan(&vault, &execution_id);
+        assert_eq!(blocked["can_apply"], false);
+        assert!(blocked["blockers_count"].as_u64().unwrap() > 0);
+        assert!(!blocked.to_string().contains(&targets[0]));
+        for receipt in [plan["receipt"].clone(), blocked["receipt"].clone()] {
+            let error = call_tool(
+                &vault,
+                "test/client",
+                "rollback_tag_vocabulary_change",
+                &json!({"rollback_id":crate::authority::NoteUid::new(),"receipt":receipt}),
+                true,
+            )
+            .unwrap_err();
+            assert!(!error.to_string().contains(&targets[0]));
+        }
+        assert_eq!(
+            vault
+                .read_note_from_db(&conn, &targets[1])
+                .unwrap()
+                .front
+                .tags,
+            vec!["known"]
+        );
+        let stats = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_stats",
+            &json!({}),
+            true,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(stats["rollback_runs"], 0);
+        assert!(!stats.to_string().contains(&targets[0]));
+    }
+
+    /// 2026-09-08: 全対象はcoreで列挙し、小さな計画から一括適用・ページ付き履歴まで到達する。
+    #[test]
+    fn tag_vocabulary_change_plan_apply_and_history_are_bounded_and_atomic() {
+        let (_dir, vault, source, targets) = tag_change_fixture();
+        let conn = open_db(&vault).unwrap();
+        let plan = tag_change_plan(&vault);
+        assert_eq!(plan["can_apply"], true);
+        assert_eq!(plan["blockers_count"], 0);
+        assert!(plan["examples"].as_array().unwrap().len() <= 20);
+        assert!(plan["changed_notes"].as_u64().unwrap() > 20);
+        assert!(!plan.to_string().contains("fixture本文"));
+        assert_eq!(tag_change_plan(&vault)["receipt"], plan["receipt"]);
+        call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &json!({"note":targets[0],"body":"計画後に変更した本文"}),
+            false,
+        )
+        .unwrap();
+        let execution_id = crate::authority::NoteUid::new().to_string();
+        let request = json!({"execution_id":execution_id,"receipt":plan["receipt"]});
+        assert!(
+            call_tool(
+                &vault,
+                "test/client",
+                "apply_tag_vocabulary_change",
+                &request,
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(
+            call_tool(
+                &vault,
+                "test/client",
+                "list_tag_vocabulary_changes",
+                &json!({}),
+                false
+            )
+            .unwrap()
+            .structured
+            .unwrap()["items"],
+            json!([])
+        );
+        for id in &targets {
+            assert!(
+                vault
+                    .read_note_from_db(&conn, id)
+                    .unwrap()
+                    .front
+                    .tags
+                    .contains(&"old".to_string())
+            );
+        }
+        let fresh = tag_change_plan(&vault);
+        let applied = call_tool(
+            &vault,
+            "test/client",
+            "apply_tag_vocabulary_change",
+            &json!({"execution_id":execution_id,"receipt":fresh["receipt"]}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(applied["stored"], true);
+        assert_eq!(applied["pending_exports"], 0);
+        assert!(
+            applied["conversation_events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["type"] == "tag_vocabulary_changed"
+                    && event["required"] == true
+                    && event["execution_id"] == execution_id)
+        );
+        for id in &targets {
+            assert_eq!(
+                vault.read_note_from_db(&conn, id).unwrap().front.tags,
+                vec!["known"]
+            );
+        }
+        assert!(
+            vault
+                .read_note_from_db(&conn, &source)
+                .unwrap()
+                .body
+                .contains("運用本文は保持する")
+        );
+        assert!(
+            call_tool(
+                &vault,
+                "test/client",
+                "apply_tag_vocabulary_change",
+                &json!({"execution_id":execution_id,"receipt":fresh["receipt"]}),
+                false
+            )
+            .is_err()
+        );
+        let list = call_tool(
+            &vault,
+            "test/client",
+            "list_tag_vocabulary_changes",
+            &json!({"limit":1}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(list["items"].as_array().unwrap().len(), 1);
+        let first = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_change",
+            &json!({"execution_id":execution_id,"limit":1}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(first["notes"].as_array().unwrap().len(), 1);
+        assert!(first["next_cursor"].is_string());
+        assert!(!first.to_string().contains("fixture本文"));
+        let second = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_change",
+            &json!({"execution_id":execution_id,"limit":1,"cursor":first["next_cursor"]}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_ne!(first["notes"][0]["note_id"], second["notes"][0]["note_id"]);
+        let hidden = first["notes"][0]["note_id"].as_str().unwrap();
+        conn.execute(
+            "UPDATE notes SET normal_reference_allowed=0 WHERE id=?1",
+            [hidden],
+        )
+        .unwrap();
+        let visible = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_change",
+            &json!({"execution_id":execution_id,"limit":100}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert!(
+            visible["notes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|note| note["note_id"] != hidden)
+        );
+    }
+
+    /// 2026-09-08: 一括変更のDB確定後に出力が失敗しても未保存として再送させない。
+    #[test]
+    fn tag_vocabulary_change_export_failure_keeps_saved_history_and_warning() {
+        let (_dir, vault, _source, targets) = tag_change_fixture();
+        let plan = tag_change_plan(&vault);
+        std::fs::write(vault.root.join(".git/index.lock"), "fixture lock").unwrap();
+        let execution_id = crate::authority::NoteUid::new().to_string();
+        let output = call_tool(
+            &vault,
+            "test/client",
+            "apply_tag_vocabulary_change",
+            &json!({
+                "execution_id":execution_id,"receipt":plan["receipt"]
+            }),
+            false,
+        )
+        .unwrap();
+        assert!(output.text.contains("保存"));
+        let result = output.structured.unwrap();
+        assert_eq!(result["stored"], true);
+        assert!(result["pending_exports"].as_u64().unwrap() > 0);
+        assert!(
+            result["degraded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["code"] == "markdown_export")
+        );
+        assert!(
+            result["conversation_events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["type"] == "degradation"
+                    && event["code"] == "markdown_export"
+                    && event["required"] == true)
+        );
+        let conn = open_db(&vault).unwrap();
+        for id in targets {
+            assert_eq!(
+                vault.read_note_from_db(&conn, &id).unwrap().front.tags,
+                vec!["known"]
+            );
+        }
+        let detail = call_tool(
+            &vault,
+            "test/client",
+            "get_tag_vocabulary_change",
+            &json!({"execution_id":execution_id}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(detail["run"]["execution_id"], execution_id);
+    }
+
+    /// 2026-09-08: 保護対象の存在を例の本文やIDで露出せず、全体拒否と集計で伝える。
+    #[test]
+    fn tag_vocabulary_change_blockers_do_not_expose_hidden_notes_or_partially_apply() {
+        let (_dir, vault, _source, targets) = tag_change_fixture();
+        let conn = open_db(&vault).unwrap();
+        conn.execute(
+            "UPDATE notes SET normal_reference_allowed=0 WHERE id=?1",
+            [&targets[0]],
+        )
+        .unwrap();
+        let plan = tag_change_plan(&vault);
+        assert_eq!(plan["can_apply"], false);
+        assert!(plan["blockers_count"].as_u64().unwrap() > 0);
+        assert!(!plan.to_string().contains(&targets[0]));
+        assert!(plan["blockers"].as_array().unwrap().iter().all(|blocker| {
+            blocker.get("code").is_some()
+                && blocker.get("count").is_some()
+                && blocker.get("note").is_none()
+        }));
+        assert!(
+            call_tool(
+                &vault,
+                "test/client",
+                "apply_tag_vocabulary_change",
+                &json!({"execution_id":crate::authority::NoteUid::new(),"receipt":plan["receipt"]}),
+                false
+            )
+            .is_err()
+        );
+        for id in &targets {
+            assert!(
+                vault
+                    .read_note_from_db(&conn, id)
+                    .unwrap()
+                    .front
+                    .tags
+                    .contains(&"old".to_string())
+            );
+        }
+    }
+
+    /// 2026-09-08: 語彙確認の追加で、read面へ任意の取得・変更引数を持ち込まない。
+    #[test]
+    fn tag_vocabulary_schema_and_guards_are_shared_by_client_surfaces() {
+        for client in [
+            "claude-code/claude",
+            "codex-cli/gpt",
+            "claude-desktop/claude",
+            "chatgpt/openai",
+            "rule-delivery-eval/fixture",
+            "unknown",
+        ] {
+            assert!(
+                !ClientSurface::from_hint(client)
+                    .capabilities()
+                    .new_tag_write_available
+            );
+            for surface in [ToolSurface::All, ToolSurface::Read] {
+                let definitions = tool_definitions_for_surface(client, surface);
+                let definition = definitions
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == "tag_vocabulary")
+                    .unwrap();
+                assert_eq!(
+                    definition["inputSchema"],
+                    json!({
+                        "type": "object", "additionalProperties": false, "properties": {}
+                    })
+                );
+                assert_eq!(definition["annotations"]["readOnlyHint"], false);
+                assert_eq!(definition["annotations"]["destructiveHint"], true);
+                assert_eq!(definition["annotations"]["idempotentHint"], false);
+                assert_eq!(definition["annotations"]["openWorldHint"], true);
+            }
+        }
+        let params = json!({"name": "tag_vocabulary", "arguments": {"body": "注入"}});
+        for (enabled, surface, code) in [
+            (false, ToolSurface::Read, "kb_disabled"),
+            (false, ToolSurface::All, "kb_disabled"),
+            (true, ToolSurface::Write, "tool_surface_mismatch"),
+            (true, ToolSurface::Maintenance, "tool_surface_mismatch"),
+        ] {
+            assert!(!method_needs_vault(
+                enabled,
+                "tools/call",
+                surface,
+                Some(&params)
+            ));
+            let response = handle_on_surface(
+                None,
+                "test/client",
+                enabled,
+                true,
+                surface,
+                "tools/call",
+                Some(&params),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(response["structuredContent"]["code"], code);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        for args in [
+            json!({"note": "notes/private"}),
+            json!({"body": "書込"}),
+            json!({"allow_new_tags": true}),
+            json!({"limit": 1}),
+            json!([]),
+            Value::Null,
+        ] {
+            let error =
+                call_tool(&vault, "test/client", "tag_vocabulary", &args, false).unwrap_err();
+            assert!(error.to_string().contains("引数を受け取らない"));
+            assert!(
+                !vault.index_db_path().exists(),
+                "引数拒否より先にDBを開かない"
+            );
+        }
+    }
+
+    /// 2026-09-08: 空の新規vaultと、語彙ノートがない既存vaultを明示し、IDを推測させない。
+    #[test]
+    fn tag_vocabulary_exposes_bootstrap_without_inventing_a_note_on_every_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        let read = |profile| {
+            handle_with_search_options(
+                Some(&vault),
+                &ClientIdentity::from_hint("test/client"),
+                true,
+                ToolCallOptions {
+                    tool_surface: ToolSurface::Read,
+                    retrieval_profile: profile,
+                    ..ToolCallOptions::test(false, true)
+                },
+                &mut RemovalPlans::default(),
+                "tools/call",
+                Some(&json!({"name": "tag_vocabulary", "arguments": {}})),
+            )
+            .unwrap()
+            .unwrap()["structuredContent"]
+                .clone()
+        };
+        for profile in RetrievalProfile::ALL {
+            let result = read(profile);
+            assert_eq!(
+                result["workspace_id"],
+                crate::workspace::stored_workspace_id(&vault).unwrap()
+            );
+            assert_eq!(result["source_status"], "unconfigured");
+            assert_eq!(result["source"], Value::Null);
+            assert_eq!(result["candidates"], json!([]));
+            assert_eq!(result["glossary_note"], Value::Null);
+            assert_eq!(result["entries"], json!({}));
+            assert_eq!(result["skipped"], json!([]));
+            assert_eq!(result["enforce_vocabulary"], false);
+            assert!(result.get("body").is_none());
+            assert!(result.get("documents").is_none());
+            assert!(recent(&conn, 10).unwrap().is_empty());
+        }
+
+        let mut first = rejection_proposal();
+        first["authority"] = json!({
+            "namespace": "records", "role": "record", "status": "active", "scope": "test/bootstrap"
+        });
+        call_tool(&vault, "test/client", "propose", &first, false).unwrap();
+        for profile in RetrievalProfile::ALL {
+            let result = read(profile);
+            assert_eq!(result["glossary_note"], Value::Null);
+            assert_eq!(result["entries"], json!({"known": ""}));
+            assert_eq!(result["enforce_vocabulary"], true);
+        }
+    }
+
+    fn pin_tag_source_through_mcp(vault: &Vault, note: &str) -> Value {
+        let overview = call_tool(vault, "test/client", "tag_vocabulary", &json!({}), false)
+            .unwrap()
+            .structured
+            .unwrap();
+        let note = call_tool(vault, "test/client", "get", &json!({"note": note}), false)
+            .unwrap()
+            .structured
+            .unwrap();
+        let result = handle_on_surface(
+            Some(vault), "test/client", true, false, ToolSurface::Write, "tools/call",
+            Some(&json!({"name": "set_tag_vocabulary_source", "arguments": {
+                "workspace_id": overview["workspace_id"], "note_uid": note["note_uid"],
+                "expected_revision": overview["source"]["revision"], "reason": "fixtureの正本を明示指定"
+            }})),
+        ).unwrap().unwrap();
+        assert!(result.get("isError").is_none(), "{result}");
+        result["structuredContent"].clone()
+    }
+
+    /// 2026-09-08: 正本指定はwrite面だけで使え、未知引数・別workspaceをDB準備前に拒否する。
+    #[test]
+    fn tag_vocabulary_source_schema_and_pre_db_guards() {
+        for client in [
+            "claude-code/claude",
+            "codex-cli/gpt",
+            "claude-desktop/claude",
+            "chatgpt/openai",
+            "rule-delivery-eval/fixture",
+            "unknown",
+        ] {
+            for surface in [ToolSurface::All, ToolSurface::Write] {
+                let definitions = tool_definitions_for_surface(client, surface);
+                let definition = definitions
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|tool| tool["name"] == "set_tag_vocabulary_source")
+                    .unwrap();
+                assert_eq!(
+                    definition["inputSchema"]["required"],
+                    json!(["workspace_id", "note_uid", "expected_revision", "reason"])
+                );
+                assert_eq!(definition["inputSchema"]["additionalProperties"], false);
+                assert_eq!(
+                    definition["inputSchema"]["properties"]["expected_revision"]["type"],
+                    json!(["string", "null"])
+                );
+                assert_eq!(definition["annotations"]["readOnlyHint"], false);
+                assert_eq!(definition["annotations"]["openWorldHint"], true);
+            }
+        }
+        let params = json!({"name": "set_tag_vocabulary_source", "arguments": {}});
+        for (enabled, surface, code) in [
+            (false, ToolSurface::Write, "kb_disabled"),
+            (false, ToolSurface::All, "kb_disabled"),
+            (true, ToolSurface::Read, "tool_surface_mismatch"),
+            (true, ToolSurface::Maintenance, "tool_surface_mismatch"),
+        ] {
+            assert!(!method_needs_vault(
+                enabled,
+                "tools/call",
+                surface,
+                Some(&params)
+            ));
+            let result = handle_on_surface(
+                None,
+                "test/client",
+                enabled,
+                true,
+                surface,
+                "tools/call",
+                Some(&params),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(result["structuredContent"]["code"], code);
+        }
+        assert!(
+            McpWriteObserver::for_client("codex/gpt")
+                .begin(true, "tools/call", ToolSurface::Write, Some(&params))
+                .is_none()
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let valid = json!({"workspace_id": crate::workspace::stored_workspace_id(&vault).unwrap(),
+            "note_uid": crate::authority::NoteUid::new(), "expected_revision": null, "reason": "fixture"});
+        let mut invalid = vec![json!([]), Value::Null];
+        for required in ["workspace_id", "note_uid", "expected_revision", "reason"] {
+            let mut args = valid.clone();
+            args.as_object_mut().unwrap().remove(required);
+            invalid.push(args);
+        }
+        for extra in ["body", "note", "allow_new_tags"] {
+            let mut args = valid.clone();
+            args[extra] = json!(true);
+            invalid.push(args);
+        }
+        let mut wrong_type = valid.clone();
+        wrong_type["expected_revision"] = json!(42);
+        invalid.push(wrong_type);
+        for args in invalid {
+            let error = call_tool(
+                &vault,
+                "test/client",
+                "set_tag_vocabulary_source",
+                &args,
+                true,
+            )
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("引数") || error.to_string().contains("必須"),
+                "{error}"
+            );
+            assert!(!vault.index_db_path().exists(), "引数不備でDBを準備しない");
+        }
+        let mut other_workspace = valid;
+        other_workspace["workspace_id"] = json!(crate::authority::NoteUid::new());
+        let result = handle_on_surface(
+            Some(&vault),
+            "test/client",
+            true,
+            true,
+            ToolSurface::Write,
+            "tools/call",
+            Some(&json!({"name": "set_tag_vocabulary_source", "arguments": other_workspace})),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["structuredContent"]["code"], "vault_mismatch");
+        assert!(!vault.index_db_path().exists());
+    }
+
+    /// 2026-09-08: 候補数や題名から自動指定せず、MCPで取得したUIDとrevisionでのみ切り替える。
+    #[test]
+    fn tag_vocabulary_source_requires_selection_and_compare_and_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let first = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| known | A語彙 |\n",
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        let read = || {
+            call_tool(&vault, "test/client", "tag_vocabulary", &json!({}), false)
+                .unwrap()
+                .structured
+                .unwrap()
+        };
+        let unconfigured = read();
+        assert_eq!(unconfigured["source_status"], "unconfigured");
+        assert_eq!(unconfigured["source"], Value::Null);
+        assert_eq!(unconfigured["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(unconfigured["candidates"][0]["note_id"], first);
+        assert_eq!(unconfigured["entries"], json!({}));
+        assert_eq!(unconfigured["enforce_vocabulary"], true);
+        assert!(
+            call_tool(
+                &vault,
+                "test/client",
+                "propose",
+                &rejection_proposal(),
+                false
+            )
+            .is_err()
+        );
+        let mut second = crate::note_store::read(&conn, &first).unwrap();
+        second.front.note_uid = Some(crate::authority::NoteUid::new());
+        second.front.title = Some("タグ運用 B".into());
+        second.front.authority.as_mut().unwrap().scope = "test/second-source".into();
+        second.body = "## 語彙\n| known | 維持語彙 |\n| second | B語彙 |\n".into();
+        vault
+            .write_note_fixture("notes/second-source", &second)
+            .unwrap();
+        let report = crate::index::import_markdown_snapshot(&vault, &conn).unwrap();
+        assert!(report.degraded.is_empty(), "{:?}", report.degraded);
+        assert_eq!(read()["candidates"].as_array().unwrap().len(), 2);
+        assert!(
+            crate::tag_vocabulary_source::read_binding(&conn)
+                .unwrap()
+                .is_none()
+        );
+        let first_result = pin_tag_source_through_mcp(&vault, &first);
+        assert_eq!(first_result["stored"], true);
+        assert_eq!(first_result["export_pending"], false);
+        assert_eq!(read()["entries"], json!({"known": "A語彙"}));
+        call_tool(
+            &vault,
+            "test/client",
+            "propose",
+            &rejection_proposal(),
+            false,
+        )
+        .unwrap();
+        let second_result = pin_tag_source_through_mcp(&vault, "notes/second-source");
+        let pinned = read();
+        assert_eq!(pinned["source_status"], "pinned");
+        assert_eq!(pinned["glossary_note"], "notes/second-source");
+        assert_eq!(pinned["source"]["note_uid"], json!(second.front.note_uid));
+        assert_eq!(
+            pinned["entries"],
+            json!({"known":"維持語彙", "second": "B語彙"})
+        );
+        assert_ne!(
+            first_result["binding"]["revision"],
+            second_result["binding"]["revision"]
+        );
+        let stale = json!({"workspace_id": pinned["workspace_id"], "note_uid": first_result["binding"]["note_uid"],
+            "expected_revision": first_result["binding"]["revision"], "reason": "古いrevision"});
+        let result = handle_on_surface(
+            Some(&vault),
+            "test/client",
+            true,
+            false,
+            ToolSurface::Write,
+            "tools/call",
+            Some(&json!({"name": "set_tag_vocabulary_source", "arguments": stale})),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["write_rejection"],
+            "tag_vocabulary"
+        );
+        assert_eq!(read()["source"], second_result["binding"]);
+        let mut unknown = rejection_proposal();
+        unknown["tags"] = json!(["other-unknown"]);
+        assert!(call_tool(&vault, "test/client", "propose", &unknown, false).is_err());
+    }
+
+    /// 2026-09-08: 外部損傷をfixtureで再現し、欠損・参照不可をbootstrapへ戻さない。
+    #[test]
+    fn tag_vocabulary_source_read_distinguishes_missing_unavailable_and_workspace_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let first = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| known | 正本 |\n",
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        let pinned = pin_tag_source_through_mcp(&vault, &first);
+        let conn = open_db(&vault).unwrap();
+        let original = crate::note_store::read(&conn, &first).unwrap();
+        let mut unavailable = original.clone();
+        unavailable.front.status = Some("deprecated".into());
+        conn.execute(
+            "UPDATE notes SET document=?1 WHERE id=?2",
+            rusqlite::params![unavailable.to_file_string().unwrap(), first],
+        )
+        .unwrap();
+        let read = || {
+            call_tool(&vault, "test/client", "tag_vocabulary", &json!({}), false)
+                .unwrap()
+                .structured
+                .unwrap()
+        };
+        let result = read();
+        assert_eq!(result["source_status"], "unavailable");
+        assert_eq!(result["source"], pinned["binding"]);
+        assert_eq!(result["glossary_note"], Value::Null);
+        assert_eq!(result["entries"], json!({}));
+        assert_eq!(result["enforce_vocabulary"], true);
+        conn.execute("DELETE FROM notes WHERE id=?1", [&first])
+            .unwrap();
+        let result = read();
+        assert_eq!(result["source_status"], "missing");
+        assert_eq!(result["glossary_note"], Value::Null);
+        assert_eq!(result["entries"], json!({}));
+        assert_eq!(result["enforce_vocabulary"], true);
+        let mut mismatched = pinned["binding"].clone();
+        mismatched["workspace_id"] = json!(crate::authority::NoteUid::new());
+        conn.execute(
+            "UPDATE tag_vocabulary_sources SET document=?1 WHERE singleton=1",
+            [mismatched.to_string()],
+        )
+        .unwrap();
+        let result = handle_on_surface(
+            Some(&vault),
+            "test/client",
+            true,
+            false,
+            ToolSurface::Read,
+            "tools/call",
+            Some(&json!({"name": "tag_vocabulary", "arguments": {}})),
+        )
+        .unwrap()
+        .unwrap();
+        // 接続先は正しいままDBの指定内容が壊れている。接続設定違いの終端codeへ混ぜない。
+        assert_eq!(result["isError"], true);
+        let structured = &result["structuredContent"];
+        assert_ne!(structured["code"], "vault_mismatch");
+        assert!(structured.get("entries").is_none());
+        assert!(structured.get("source_status").is_none());
+        assert!(
+            structured["conversation_events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["type"] == "error" && event["required"] == true)
+        );
+        assert_eq!(
+            serde_json::to_value(
+                crate::tag_vocabulary_source::read_binding(&conn)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            mismatched
+        );
+    }
+
+    /// 2026-09-08: 正本指定後のGit出力失敗を未保存エラーに変えず、再指定を促さない。
+    #[test]
+    fn tag_vocabulary_source_export_pending_is_reported_as_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let first = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| known | 正本 |\n",
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        std::fs::write(vault.root.join(".git/index.lock"), "fixture lock").unwrap();
+        let result = pin_tag_source_through_mcp(&vault, &first);
+        assert_eq!(result["stored"], true);
+        assert_eq!(result["export_pending"], true);
+        assert_eq!(
+            result["post_save_warnings"][0]["code"],
+            "tag_vocabulary_source_export_pending"
+        );
+        assert!(
+            result["conversation_events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["required"] == true
+                    && event["type"] == "degradation"
+                    && event["code"] == "tag_vocabulary_source_export_pending"
+                    && event["message"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("再指定せず")))
+        );
+        let conn = open_db(&vault).unwrap();
+        assert_eq!(
+            serde_json::to_value(
+                crate::tag_vocabulary_source::read_binding(&conn)
+                    .unwrap()
+                    .unwrap()
+            )
+            .unwrap(),
+            result["binding"]
+        );
+    }
+
+    /// 2026-09-08: 新語の案内が利用不能なoverrideへ戻らず、語彙本文更新後だけ通常書込できる。
+    #[test]
+    fn tag_vocabulary_body_update_enables_normal_writes_without_an_override() {
+        use crate::write_rejection::WriteRejection;
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let original_body = "タグ語彙の新設・統合・削除はAI裁量で管理する。\n\n## 語彙\n| タグ | 説明 |\n|---|---|\n| known | 既存語 |\n| 不正 | 語彙へ入らない |\n";
+        let glossary = vault
+            .propose_for_test(
+                "タグ運用",
+                original_body,
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        pin_tag_source_through_mcp(&vault, &glossary);
+        let target = vault
+            .propose_for_test(
+                "通常の記録",
+                "元の本文",
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        let documents = || {
+            conn.prepare("SELECT id, document FROM notes ORDER BY id")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        let read_vocabulary = || {
+            call_tool(&vault, "test/client", "tag_vocabulary", &json!({}), false)
+                .unwrap()
+                .structured
+                .unwrap()
+        };
+        let initial = read_vocabulary();
+        assert_eq!(initial["glossary_note"], glossary);
+        assert_eq!(initial["entries"], json!({"known": "既存語"}));
+        assert_eq!(initial["skipped"], json!(["不正"]));
+        assert_eq!(initial["enforce_vocabulary"], true);
+        let fetched = call_tool(
+            &vault,
+            "test/client",
+            "get",
+            &json!({"note": initial["glossary_note"]}),
+            false,
+        )
+        .unwrap()
+        .structured
+        .unwrap();
+        assert_eq!(fetched["body"], original_body);
+
+        let updated_body = format!("{original_body}| added-new | AIが必要性を判断した追加語 |\n");
+        let mut proposal = rejection_proposal();
+        proposal["title"] = json!("新語で起票");
+        proposal["tags"] = json!(["added-new"]);
+        proposal["authority"] = json!({
+            "namespace": "records", "role": "record", "status": "active", "scope": "test/tag-vocabulary"
+        });
+        let before = documents();
+        for (name, args) in [
+            ("propose", proposal.clone()),
+            ("update", json!({"note": target, "tags": ["added-new"]})),
+            (
+                "update",
+                json!({"note": glossary, "body": updated_body, "tags": ["added-new"]}),
+            ),
+        ] {
+            let error = call_tool(&vault, "test/client", name, &args, false).unwrap_err();
+            assert_eq!(
+                WriteRejection::from_error(&error),
+                Some(WriteRejection::TagVocabulary)
+            );
+            assert_eq!(documents(), before, "{name}の拒否は本文も保存しない");
+            assert_eq!(crate::note_store::pending_count(&conn).unwrap(), 0);
+        }
+
+        // 他のノートに同じ表を書いても、返された語彙ノートを更新したことにはならない。
+        call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &json!({
+                "note": target, "body": updated_body
+            }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(read_vocabulary()["entries"], initial["entries"]);
+        call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &json!({
+                "note": glossary, "body": updated_body
+            }),
+            false,
+        )
+        .unwrap();
+        let updated = read_vocabulary();
+        assert_eq!(updated["glossary_note"], glossary);
+        assert_eq!(
+            updated["entries"],
+            json!({"known": "既存語", "added-new": "AIが必要性を判断した追加語"})
+        );
+        assert_eq!(
+            vault
+                .read_note_from_db(&conn, &glossary)
+                .unwrap()
+                .front
+                .tags,
+            ["known"]
+        );
+        call_tool(&vault, "test/client", "propose", &proposal, false).unwrap();
+        call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &json!({
+                "note": target, "tags": ["added-new"]
+            }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            vault.read_note_from_db(&conn, &target).unwrap().front.tags,
+            ["added-new"]
+        );
+
+        let before = documents();
+        for (patch, expected) in [
+            (
+                json!({"tags": ["another-new"]}),
+                WriteRejection::TagVocabulary,
+            ),
+            (json!({"tags": []}), WriteRejection::TagCount),
+            (
+                json!({"tags": ["known", "known", "known", "known", "known"]}),
+                WriteRejection::TagCount,
+            ),
+            (json!({"tags": ["Invalid"]}), WriteRejection::TagShape),
+            (
+                json!({"allow_new_tags": false}),
+                WriteRejection::McpCapability,
+            ),
+            (
+                json!({"allow_new_tags": true}),
+                WriteRejection::McpCapability,
+            ),
+        ] {
+            for (name, mut args) in [
+                ("propose", proposal.clone()),
+                (
+                    "update",
+                    json!({"note": target, "body": "保存してはいけない本文"}),
+                ),
+            ] {
+                args.as_object_mut()
+                    .unwrap()
+                    .extend(patch.as_object().unwrap().clone());
+                let error = call_tool(&vault, "test/client", name, &args, false).unwrap_err();
+                assert_eq!(
+                    WriteRejection::from_error(&error),
+                    Some(expected),
+                    "{name}: {error:#}"
+                );
+                assert_eq!(documents(), before);
+                assert_eq!(crate::note_store::pending_count(&conn).unwrap(), 0);
+            }
+        }
+    }
+
+    /// 2026-09-08: 空表の修復も既存updateで行い、別ノートやoverrideへ誘導しない。
+    #[test]
+    fn tag_vocabulary_empty_glossary_can_be_repaired_through_body_only_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let glossary = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| タグ | 説明 |\n|---|---|\n",
+                None,
+                &["known".into()],
+                "test/client",
+            )
+            .unwrap();
+        pin_tag_source_through_mcp(&vault, &glossary);
+        let read = || {
+            call_tool(&vault, "test/client", "tag_vocabulary", &json!({}), false)
+                .unwrap()
+                .structured
+                .unwrap()
+        };
+        assert_eq!(read()["glossary_note"], glossary);
+        assert_eq!(read()["entries"], json!({}));
+        assert_eq!(read()["enforce_vocabulary"], true);
+        let error = call_tool(
+            &vault,
+            "test/client",
+            "propose",
+            &rejection_proposal(),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            crate::write_rejection::WriteRejection::from_error(&error),
+            Some(crate::write_rejection::WriteRejection::TagVocabulary)
+        );
+        call_tool(
+            &vault,
+            "test/client",
+            "update",
+            &json!({
+                "note": glossary, "body": "## 語彙\n| known | 既存語を復元 |\n"
+            }),
+            false,
+        )
+        .unwrap();
+        assert_eq!(read()["entries"], json!({"known": "既存語を復元"}));
+        call_tool(
+            &vault,
+            "test/client",
+            "propose",
+            &rejection_proposal(),
+            false,
+        )
+        .unwrap();
+    }
+
+    /// 2026-09-08本人訂正: タグごとの合意を求める旧案内へ戻らず、AI裁量と語彙検証を両立する。
+    #[test]
+    fn tag_vocabulary_guidance_describes_the_same_autonomous_update_path() {
+        let prompt = prompt_text("タグの整理").unwrap();
+        for client in [
+            "claude-code/claude",
+            "codex-cli/gpt",
+            "claude-desktop/claude",
+            "chatgpt/openai",
+            "unknown",
+        ] {
+            let instructions = instructions_for(client);
+            for text in [instructions.as_str(), prompt.as_ref()] {
+                assert_eq!(text.matches(TAG_VOCABULARY_GUIDANCE).count(), 1);
+                for required in [
+                    "plan_tag_vocabulary_change",
+                    "apply_tag_vocabulary_change",
+                    "receipt",
+                    "execution_id",
+                    "can_apply=true",
+                    "list_tag_vocabulary_changes",
+                    "get_tag_vocabulary_change",
+                    "plan_tag_vocabulary_rollback",
+                    "rollback_tag_vocabulary_change",
+                    "rollback_id",
+                    "get_tag_vocabulary_stats",
+                    "blocker",
+                    "本文全体",
+                    "未知語を拒否",
+                    "候補が1件でも自動採用しない",
+                ] {
+                    assert!(text.contains(required), "{client}: {required}");
+                }
+            }
+            let error = reject_unavailable_mcp_capabilities(
+                client,
+                "update",
+                &json!({"allow_new_tags":true}),
+            )
+            .unwrap_err()
+            .to_string();
+            let tools = tool_definitions_for_surface(client, ToolSurface::Read);
+            let description = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|tool| tool["name"] == "tag_vocabulary")
+                .unwrap()["description"]
+                .as_str()
+                .unwrap();
+            for text in [
+                instructions.as_str(),
+                prompt.as_ref(),
+                description,
+                error.as_str(),
+            ] {
+                for required in [
+                    "AI裁量",
+                    "本人の個別合意は不要",
+                    "既存語",
+                    "重複",
+                    "本人の訂正",
+                    "保護対象",
+                    "plan_tag_vocabulary_change",
+                    "apply_tag_vocabulary_change",
+                    "update(body)",
+                ] {
+                    assert!(text.contains(required), "{client}: {required}");
+                }
+                for forbidden in [
+                    "本人合意後",
+                    "本人と合意してから",
+                    "trusted UI / CLI",
+                    "別承認が必要",
+                    "allow_new_tags を true",
+                    "語彙表を先に更新",
+                    "機構による保証ではない",
+                ] {
+                    assert!(!text.contains(forbidden), "{client}: {forbidden}");
+                }
+            }
         }
     }
 
@@ -8810,7 +12248,7 @@ mod tests {
         );
         let disabled = handle_with_search_options(
             Some(&vault),
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             true,
             ToolCallOptions {
                 hook_context: true,
@@ -8834,7 +12272,7 @@ mod tests {
         );
         let initialized = handle_with_search_options(
             None,
-            "test/client",
+            &ClientIdentity::from_hint("test/client"),
             true,
             ToolCallOptions {
                 harvest: crate::harvest::Policy::resolve(true, true, Some("off")),

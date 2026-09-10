@@ -50,6 +50,9 @@ struct Document<'a> {
     source: &'a str,
     #[serde(default)]
     depth: u64,
+    /// 誰がいつ書いたか(契約20)。本文へは混ぜず、見出し行の側へ素の1行で出す。
+    #[serde(borrow, default)]
+    provenance_line: Option<&'a str>,
 }
 
 fn default_source() -> &'static str {
@@ -218,8 +221,14 @@ pub fn render_hook_delivery(structured: &Value, budget: HookOutputBudget) -> Res
         {
             break;
         }
+        // 来歴は本文の外へ出す。長すぎる1行は本文ごと諦めず、その行だけ落とす。
+        let provenance = document
+            .provenance_line
+            .filter(|line| budget.measure(line) <= budget.limit)
+            .map(|line| format!("{line}\n"))
+            .unwrap_or_default();
         selection.documents.push(format!(
-            "(note: {}; source: {}; depth: {})\n{}\n",
+            "(note: {}; source: {}; depth: {})\n{provenance}{}\n",
             serde_json::to_string(document.id)?,
             serde_json::to_string(document.source)?,
             document.depth,
@@ -755,6 +764,29 @@ mod tests {
         assert_eq!(stats["budget_limit"], budget.limit);
         assert!(budget.measure(output) <= budget.limit);
         assert!(output.ends_with('\n'));
+    }
+
+    /// 来歴は本文の外(見出し行の直後)に素の1行で出し、予算計算にも入れる。
+    #[test]
+    fn provenance_is_delivered_as_one_plain_line_beside_the_body() {
+        let mut input = fixture(&["本文"]);
+        let line = "来歴: 作成 2026-09-01 claude-code/claude-fable-5-1(自己申告) · 更新2回";
+        input["documents"][0]["provenance_line"] = json!(line);
+        let budget = ClientSurface::ClaudeCode.hook_output_budget();
+        let output = render_hook_context(&input, budget).unwrap();
+        assert!(
+            output.contains(&format!(
+                "(note: \"notes/0\"; source: \"search\"; depth: 0)\n{line}\n本文\n"
+            )),
+            "{output}"
+        );
+        assert_measured(&output, budget);
+        assert_eq!(stats(&output)["emitted_documents"], 1);
+
+        // 記録の無いノートは行そのものが無い(「記録なし」でtokenを使わない)。
+        let without = render_hook_context(&fixture(&["本文"]), budget).unwrap();
+        assert!(!without.contains("来歴:"), "{without}");
+        assert!(budget.measure(&output) > budget.measure(&without));
     }
 
     #[test]

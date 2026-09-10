@@ -17,6 +17,7 @@ import { usePrefs } from "@/lib/stores/prefs";
 import { isTheme, THEMES } from "@/lib/theme";
 
 import { SettingRow } from "./SettingRow";
+import { AppUpdateCard } from "./AppUpdateCard";
 
 /**
  * 端末ごとの設定。ここに置くのは「この端末での見え方・ふるまい」だけで、
@@ -116,6 +117,7 @@ export function SettingsPage() {
         </div>
 
         <p className="text-muted mt-3 text-xs">{t("settings.note")}</p>
+        <AppUpdateCard />
       </div>
     </SinglePaneLayout>
   );

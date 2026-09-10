@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, types::ValueRef};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -276,10 +276,6 @@ fn read_database_inner(
         "SELECT type, name, tbl_name, sql FROM sqlite_schema",
         &mut digest,
     )?;
-    for table in crate::derived_index::DURABLE_STATE_TABLES {
-        hash_field(&mut digest, table.as_bytes());
-        hash_query(conn, &format!("SELECT * FROM {table}"), &mut digest)?;
-    }
     let declared: Option<String> = conn
         .query_row("SELECT value FROM meta WHERE key='schema'", [], |row| {
             row.get(0)
@@ -288,6 +284,100 @@ fn read_database_inner(
     report.declared_schema = declared
         .as_deref()
         .and_then(|value| value.trim().parse::<u32>().ok());
+    let vocabulary_present = vocabulary_tables_present(conn).and_then(|present| {
+        if present {
+            crate::tag_vocabulary_source::verify_schema(conn)?;
+        }
+        Ok(present)
+    });
+    let vocabulary_present = match vocabulary_present {
+        Ok(present) => present,
+        Err(error) => {
+            report.issue("tag_vocabulary_tables_invalid", true, None);
+            return Err(error);
+        }
+    };
+    if !vocabulary_present && report.declared_schema.is_some_and(|version| version >= 11) {
+        report.issue("tag_vocabulary_tables_missing", true, None);
+    }
+    let tag_history_present =
+        crate::tag_vocabulary_history::tables_present(conn).and_then(|present| {
+            if present {
+                crate::tag_vocabulary_history::verify_integrity(conn)?;
+            }
+            Ok(present)
+        });
+    let tag_history_present = match tag_history_present {
+        Ok(present) => present,
+        Err(error) => {
+            report.issue("tag_vocabulary_history_invalid", true, None);
+            return Err(error);
+        }
+    };
+    if !tag_history_present && report.declared_schema.is_some_and(|version| version >= 12) {
+        report.issue("tag_vocabulary_history_missing", true, None);
+    }
+    let tag_rollback_present = crate::tag_vocabulary_history::rollback_table_present(conn)
+        .and_then(|present| {
+            if present {
+                crate::tag_vocabulary_history::verify_rollback_integrity(conn)?;
+            }
+            Ok(present)
+        });
+    let tag_rollback_present = match tag_rollback_present {
+        Ok(present) => present,
+        Err(error) => {
+            report.issue("tag_vocabulary_rollback_history_invalid", true, None);
+            return Err(error);
+        }
+    };
+    if !tag_rollback_present && report.declared_schema.is_some_and(|version| version >= 13) {
+        report.issue("tag_vocabulary_rollback_history_missing", true, None);
+    }
+    for table in crate::derived_index::DURABLE_STATE_TABLES {
+        hash_field(&mut digest, table.as_bytes());
+        if crate::tag_vocabulary_history::ROLLBACK_TABLES.contains(&table) {
+            hash_field(
+                &mut digest,
+                if tag_rollback_present {
+                    b"present"
+                } else {
+                    b"absent"
+                },
+            );
+            if !tag_rollback_present {
+                continue;
+            }
+        }
+        if crate::tag_vocabulary_history::TABLES.contains(&table) {
+            hash_field(
+                &mut digest,
+                if tag_history_present {
+                    b"present"
+                } else {
+                    b"absent"
+                },
+            );
+            if !tag_history_present {
+                continue;
+            }
+        }
+        if crate::tag_vocabulary_source::TABLES.contains(&table) {
+            // v11導入前の不在と、空の既存台帳を同一の計画にしない。
+            hash_field(
+                &mut digest,
+                if vocabulary_present {
+                    b"present"
+                } else {
+                    b"absent"
+                },
+            );
+            if !vocabulary_present {
+                continue;
+            }
+        }
+        hash_query(conn, &format!("SELECT * FROM {table}"), &mut digest)?;
+    }
     let runtime_marker_rows: i64 = conn.query_row(
         "SELECT count(*) FROM meta WHERE key='runtime_store'",
         [],
@@ -368,6 +458,16 @@ fn read_database_inner(
         jobs,
         history,
     })
+}
+
+fn vocabulary_tables_present(conn: &Connection) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN (?1,?2)",
+        crate::tag_vocabulary_source::TABLES,
+        |row| row.get(0),
+    )?;
+    ensure!(count != 1, "語彙正本のdurable tableが片方だけ欠けている");
+    Ok(count == 2)
 }
 
 fn columns(conn: &Connection, table: &str) -> rusqlite::Result<BTreeSet<String>> {
@@ -795,6 +895,11 @@ mod tests {
              DROP TRIGGER distillation_jobs_delete;
              ALTER TABLE notes DROP COLUMN normal_reference_allowed;
              ALTER TABLE notes DROP COLUMN distillation_allowed;
+             DROP TABLE tag_vocabulary_sources;
+             DROP TABLE tag_vocabulary_source_exports;
+             DROP TABLE tag_vocabulary_rollbacks;
+             DROP TABLE tag_vocabulary_run_notes;
+             DROP TABLE tag_vocabulary_runs;
              DELETE FROM meta WHERE key='runtime_store';",
         )
         .unwrap();
@@ -844,6 +949,30 @@ mod tests {
             "INSERT INTO distillation_job_runs VALUES(?1,?2,2,90,'applied','fixture','sha256:fixture',?3,?4,'test')",
             params![run,source,serde_json::to_string(&before).unwrap(),serde_json::to_string(&after).unwrap()],
         ).unwrap();
+    }
+
+    pub(super) fn seed_vocabulary(conn: &Connection, vault: &Vault) -> (String, String) {
+        let workspace_id = crate::workspace::stored_workspace_id(vault).unwrap();
+        let binding = || crate::tag_vocabulary_source::SourceBinding {
+            schema: crate::tag_vocabulary_source::SOURCE_SCHEMA.into(),
+            workspace_id: workspace_id.clone(),
+            note_uid: crate::authority::NoteUid::new(),
+            revision: crate::authority::NoteUid::new().to_string(),
+        };
+        let current = binding();
+        let current_document = serde_json::to_string(&current).unwrap();
+        let base_document = serde_json::to_string(&binding()).unwrap();
+        conn.execute(
+            "INSERT INTO tag_vocabulary_sources VALUES(1,?1)",
+            [&current_document],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tag_vocabulary_source_exports VALUES(1,?1,?2,?3,'private log','private commit')",
+            params![current.revision,base_document,current_document],
+        )
+        .unwrap();
+        (current_document, base_document)
     }
 
     /// 2026-09-07: completedの現行hashとpendingに残った前回hashを混同しない。
@@ -1049,6 +1178,86 @@ mod tests {
         );
     }
 
+    /// 2026-09-08: 新しいdurable表の導入で旧版の限定復旧を止めず、残存する固定先も計画に含める。
+    #[test]
+    fn legacy_recovery_hashes_vocabulary_absence_and_full_durable_rows() {
+        for schema in [7, 9] {
+            let (_dir, vault, conn) = setup(schema);
+            let raw = document("raw", true);
+            md(&vault, "notes/a", &raw);
+            job(&conn, "notes/a", "completed", Some(&raw));
+            let absent = plan(&vault).unwrap();
+            assert!(absent.supported_reset_shape && absent.snapshot_complete);
+            assert!(absent.latest_state_proven);
+            assert!(!vocabulary_tables_present(&conn).unwrap());
+
+            conn.execute_batch(crate::tag_vocabulary_source::SCHEMA_SQL)
+                .unwrap();
+            let empty = plan(&vault).unwrap();
+            assert!(empty.latest_state_proven);
+            assert_ne!(absent.plan_digest, empty.plan_digest);
+            let (current, base) = seed_vocabulary(&conn, &vault);
+            let bound = plan(&vault).unwrap();
+            assert!(bound.latest_state_proven);
+            assert_ne!(empty.plan_digest, bound.plan_digest);
+            let mut previous = bound.plan_digest;
+            for (sql, value) in [
+                (
+                    "UPDATE tag_vocabulary_sources SET document=?1",
+                    format!("{current}\n"),
+                ),
+                (
+                    "UPDATE tag_vocabulary_source_exports SET base_document=?1",
+                    format!("{base}\n"),
+                ),
+                (
+                    "UPDATE tag_vocabulary_source_exports SET log_entry=?1",
+                    "changed private log".into(),
+                ),
+            ] {
+                conn.execute(sql, [value]).unwrap();
+                let before = fs::read(vault.index_db_path()).unwrap();
+                let changed = plan(&vault).unwrap();
+                assert!(changed.latest_state_proven);
+                assert_ne!(previous, changed.plan_digest);
+                assert_eq!(fs::read(vault.index_db_path()).unwrap(), before);
+                assert!(!serde_json::to_string(&changed).unwrap().contains("private"));
+                previous = changed.plan_digest;
+            }
+        }
+    }
+
+    /// 2026-09-08: 片欠損や壊れた指定を、未指定の旧版として復旧することを防ぐ。
+    #[test]
+    fn damaged_vocabulary_tables_block_without_mutating_the_database() {
+        for alteration in [
+            "DROP TABLE tag_vocabulary_sources",
+            "DROP TABLE tag_vocabulary_source_exports",
+            "UPDATE tag_vocabulary_sources SET document='private broken JSON'",
+            "UPDATE tag_vocabulary_source_exports SET document='private broken JSON'",
+            "UPDATE tag_vocabulary_source_exports SET base_document='private broken JSON'",
+            "UPDATE tag_vocabulary_source_exports SET op_id='wrong revision'",
+        ] {
+            let (_dir, vault, conn) = setup(9);
+            conn.execute_batch(crate::tag_vocabulary_source::SCHEMA_SQL)
+                .unwrap();
+            seed_vocabulary(&conn, &vault);
+            conn.execute_batch(alteration).unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = plan(&vault).unwrap();
+            assert!(!report.snapshot_complete && !report.supported_reset_shape);
+            assert!(report.plan_digest.is_none());
+            assert!(
+                report.issues.iter().any(|issue| {
+                    issue.code == "tag_vocabulary_tables_invalid" && issue.blocking
+                })
+            );
+            assert_eq!(fs::read(vault.index_db_path()).unwrap(), before);
+            assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+        }
+    }
+
     #[test]
     fn malformed_or_duplicate_history_keys_block_without_assuming_zero_history() {
         for malformed in ["not json", r#"{"notes/a":"x","notes/a":"y"}"#] {
@@ -1069,6 +1278,85 @@ mod tests {
                     .iter()
                     .any(|issue| issue.code == "history_document_map_invalid" && issue.blocking)
             );
+        }
+    }
+
+    /// 2026-09-08: ローカル語彙変更履歴の不在・現存・破損を同じ復旧計画にしない。
+    #[test]
+    fn vocabulary_history_binds_plan_and_corruption_blocks_without_exposing_documents() {
+        for alteration in [
+            "DROP TABLE tag_vocabulary_run_notes",
+            "DROP TABLE tag_vocabulary_runs",
+            "UPDATE tag_vocabulary_run_notes SET before_document='private broken original'",
+            "UPDATE tag_vocabulary_run_notes SET after_hash='wrong'",
+            "DELETE FROM tag_vocabulary_run_notes",
+        ] {
+            let (_dir, vault, conn) = setup(7);
+            let raw = document("復旧本文", true);
+            md(&vault, "notes/a", &raw);
+            job(&conn, "notes/a", "completed", Some(&raw));
+            let absent = plan(&vault).unwrap();
+            conn.execute_batch(crate::tag_vocabulary_history::SCHEMA_SQL)
+                .unwrap();
+            let empty = plan(&vault).unwrap();
+            assert_ne!(absent.plan_digest, empty.plan_digest);
+            crate::tag_vocabulary_history::record_for_test(&conn);
+            let present = plan(&vault).unwrap();
+            assert!(present.snapshot_complete);
+            assert_ne!(empty.plan_digest, present.plan_digest);
+            conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+            conn.execute_batch(alteration).unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = plan(&vault).unwrap();
+            assert!(!report.snapshot_complete);
+            assert!(report.plan_digest.is_none());
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.code == "tag_vocabulary_history_invalid" && issue.blocking)
+            );
+            assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+            assert_eq!(fs::read(vault.index_db_path()).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn vocabulary_rollback_history_binds_recovery_and_corruption_blocks_without_content() {
+        for alteration in [
+            "UPDATE tag_vocabulary_rollbacks SET restored_notes=2",
+            "UPDATE tag_vocabulary_rollbacks SET restored_at='private broken time'",
+            "UPDATE tag_vocabulary_rollbacks SET execution_id='01ARZ3NDEKTSV4RRFFQ69G5FAV'",
+        ] {
+            let (_dir, vault, conn) = setup(7);
+            let raw = document("復旧本文", true);
+            md(&vault, "notes/a", &raw);
+            job(&conn, "notes/a", "completed", Some(&raw));
+            conn.execute_batch(crate::tag_vocabulary_history::SCHEMA_SQL)
+                .unwrap();
+            let execution_id = crate::tag_vocabulary_history::record_for_test(&conn);
+            let absent = plan(&vault).unwrap();
+            conn.execute_batch(crate::tag_vocabulary_history::ROLLBACK_SCHEMA_SQL)
+                .unwrap();
+            let empty = plan(&vault).unwrap();
+            crate::tag_vocabulary_history::record_rollback_for_test(&conn, &execution_id);
+            let present = plan(&vault).unwrap();
+            assert!(present.snapshot_complete);
+            assert_ne!(absent.plan_digest, empty.plan_digest);
+            assert_ne!(empty.plan_digest, present.plan_digest);
+            conn.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+            conn.execute_batch(alteration).unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = plan(&vault).unwrap();
+            assert!(!report.snapshot_complete);
+            assert!(report.plan_digest.is_none());
+            assert!(report.issues.iter().any(|issue| issue.code
+                == "tag_vocabulary_rollback_history_invalid"
+                && issue.blocking));
+            assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+            assert_eq!(before, fs::read(vault.index_db_path()).unwrap());
         }
     }
 

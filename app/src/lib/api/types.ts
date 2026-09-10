@@ -1,9 +1,14 @@
 import type {
+  ActivityFeedView,
+  ActivityFilter_Deserialize,
+  ActivityRowView,
+  ActivitySummaryView,
   AiGuardStatus,
   AutostartState,
   ConnectState,
   Degradation,
   Favorite_Serialize,
+  FieldChangeView,
   FileCard,
   FilesPage,
   GraphData,
@@ -14,16 +19,21 @@ import type {
   NoteCategories,
   NoteCategory,
   NoteBrowsePage_Serialize,
+  NoteEventView,
   NoteListPage,
   NoteSummary,
   NoteView,
   PreviewFile,
+  ProvenanceView,
   SearchOutcome_Serialize,
+  SectionAuthorView,
   Settings,
   SetupState,
   TagInfo,
   TagOverview,
 } from "@/lib/bindings";
+
+export type { UpdateStatus, UpdatePhase, UpdateFailureKind } from "@/lib/bindings";
 
 /**
  * 生成物(bindings.ts)は serde の Serialize / Deserialize で型を分けて出す。
@@ -35,12 +45,18 @@ export type HomeState = HomeState_Serialize;
 export type NoteBrowsePage = NoteBrowsePage_Serialize;
 export type SearchOutcome = SearchOutcome_Serialize;
 export type Favorite = Favorite_Serialize;
+/** 活動フィードの絞り込み。画面は常に「これから送る条件」= Deserialize 側を組み立てる。 */
+export type ActivityFilter = ActivityFilter_Deserialize;
 
 export type {
+  ActivityFeedView,
+  ActivityRowView,
+  ActivitySummaryView,
   AiGuardStatus,
   AutostartState,
   ConnectState,
   Degradation,
+  FieldChangeView,
   FileCard,
   FilesPage,
   GraphData,
@@ -48,10 +64,13 @@ export type {
   MaintenanceReport,
   NoteCategories,
   NoteCategory,
+  NoteEventView,
   NoteListPage,
   NoteSummary,
   NoteView,
   PreviewFile,
+  ProvenanceView,
+  SectionAuthorView,
   Settings,
   SetupState,
   TagInfo,
@@ -69,6 +88,19 @@ export type {
 } from "@/lib/bindings";
 export type { CareProposal, GraphNode, Stats } from "@/lib/bindings";
 export type { ObservationHealth, ObservationSurfaceHealth, SurfaceSummary } from "@/lib/bindings";
+export type {
+  ClientDiagnosticsReport,
+  ClientRuleDiagnostics,
+  ClientRegistrations,
+  ClientRegistrationView,
+  ClientBindingStatus,
+  ClientSurface,
+  RegistrationClient,
+  RegistrationStatus,
+  RegistrationRepair,
+  RegistrationIssueKind,
+  GuardTargetState,
+} from "@/lib/bindings";
 export type { ObservationTrend, ObservationTrendDay, ObservationTrendFilter } from "@/lib/bindings";
 export type { NoteCountTrend, NoteCountTrendDay, NoteCountTrendStatus } from "@/lib/bindings";
 export type {

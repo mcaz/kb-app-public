@@ -62,6 +62,10 @@ pub struct RetrievalDocument {
     pub depth: u8,
     pub seed: String,
     pub estimated_tokens: usize,
+    /// 誰がいつ書いたかの1行(契約20)。イベントが1件も無いノートは None。
+    /// 本文には混ぜない — 混ぜると蒸留・検索の入力が履歴文で汚れる(ADR-0023)。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance_line: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -128,6 +132,7 @@ struct Candidate {
 struct CandidateRow {
     title: Option<String>,
     document: String,
+    note_uid: Option<String>,
     namespace: Option<String>,
     authority_role: Option<String>,
     authority_status: Option<String>,
@@ -297,7 +302,7 @@ fn context_documents_inner(
     for candidate in candidates {
         let row = conn
             .query_row(
-                "SELECT title, document, namespace, authority_role, authority_status,
+                "SELECT title, document, note_uid, namespace, authority_role, authority_status,
                         authority_scope
                  FROM notes WHERE id = ?1 AND status != 'deprecated'
                    AND normal_reference_allowed = 1",
@@ -306,10 +311,11 @@ fn context_documents_inner(
                     Ok(CandidateRow {
                         title: row.get(0)?,
                         document: row.get(1)?,
-                        namespace: row.get(2)?,
-                        authority_role: row.get(3)?,
-                        authority_status: row.get(4)?,
-                        authority_scope: row.get(5)?,
+                        note_uid: row.get(2)?,
+                        namespace: row.get(3)?,
+                        authority_role: row.get(4)?,
+                        authority_status: row.get(5)?,
+                        authority_scope: row.get(6)?,
                     })
                 },
             )
@@ -338,6 +344,7 @@ fn context_documents_inner(
             continue;
         }
         summary.title = row.title;
+        let note_uid = row.note_uid;
         summary.namespace = row.namespace;
         summary.authority_role = row.authority_role;
         summary.authority_status = row.authority_status;
@@ -370,6 +377,7 @@ fn context_documents_inner(
             depth: candidate.depth,
             seed: candidate.seed,
             estimated_tokens: tokens,
+            provenance_line: provenance_line(conn, &summary.id, note_uid.as_deref())?,
         });
         summary.selected = true;
         candidate_summaries.push(summary);
@@ -431,6 +439,22 @@ struct RankedPassage {
     text: String,
     exact_query: bool,
     matched_terms: usize,
+}
+
+/// 予算内へ選んだ本文にだけ来歴の1行を付ける。イベントが無いノート(移行前・
+/// backfill未実施)は None を返し、「記録なし」という文言でトークンを使わない。
+fn provenance_line(
+    conn: &Connection,
+    note_id: &str,
+    note_uid: Option<&str>,
+) -> Result<Option<String>> {
+    let events = crate::provenance::events_for_note(conn, note_id, note_uid, usize::MAX)?;
+    if events.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(crate::provenance::provenance_line(
+        &crate::provenance::summarize(&events),
+    )))
 }
 
 fn rank_document_passages(document: &str, query: &str, policy: PassagePolicy) -> String {
@@ -693,7 +717,14 @@ mod tests {
                  target_uid TEXT NOT NULL,
                  PRIMARY KEY(src_uid, kind, target_uid)
              );
-             CREATE INDEX note_relations_target ON note_relations(target_uid);",
+             CREATE INDEX note_relations_target ON note_relations(target_uid);
+             CREATE TABLE note_events(
+                 event_id TEXT PRIMARY KEY, note_uid TEXT, note_id TEXT NOT NULL,
+                 at TEXT NOT NULL, operation TEXT NOT NULL, actor_client TEXT NOT NULL,
+                 actor_client_version TEXT, actor_surface TEXT NOT NULL, actor_model TEXT,
+                 actor_model_basis TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT,
+                 payload TEXT NOT NULL, exported INTEGER NOT NULL DEFAULT 0
+             );",
         )
         .unwrap();
         conn
@@ -714,6 +745,82 @@ mod tests {
             rusqlite::params![id, uid],
         )
         .unwrap();
+    }
+
+    fn add_event(conn: &Connection, note_id: &str, note_uid: Option<&str>, at: &str, kind: &str) {
+        let payload = serde_json::json!({
+            "v": 1,
+            "event_id": format!("event:{note_id}:{at}"),
+            "note_uid": note_uid,
+            "note_id": note_id,
+            "at": at,
+            "operation": if kind == "create" { "propose" } else { "update" },
+            "actor": {
+                "client": "claude-code",
+                "client_basis": "handshake",
+                "model": "claude-fable-5-1",
+                "model_basis": "self_reported"
+            },
+            "kind": kind,
+        });
+        conn.execute(
+            "INSERT INTO note_events(
+                 event_id, note_uid, note_id, at, operation, actor_client, actor_surface,
+                 actor_model, actor_model_basis, kind, payload
+             ) VALUES(?1, ?2, ?3, ?4, 'propose', 'claude-code', 'unknown',
+                      'claude-fable-5-1', 'self_reported', ?5, ?6)",
+            rusqlite::params![
+                format!("event:{note_id}:{at}"),
+                note_uid,
+                note_id,
+                at,
+                kind,
+                payload.to_string()
+            ],
+        )
+        .unwrap();
+    }
+
+    /// 予算内へ選んだ本文にだけ来歴の1行を付ける。記録の無いノートは行を持たない
+    /// (「記録なし」でtokenを使わない)。本文自体は変えない。
+    #[test]
+    fn selected_documents_carry_a_provenance_line_without_touching_the_body() {
+        let conn = setup();
+        add_note_with_uid(&conn, "with-events", "uid-1");
+        add_note(&conn, "no-events", "本文だけ");
+        add_event(
+            &conn,
+            "with-events",
+            Some("uid-1"),
+            "2026-09-01T00:00:00Z",
+            "create",
+        );
+        // 改名前のnote_idで積んだイベントも、安定uidで今のノートへ結び付く。
+        add_event(
+            &conn,
+            "old-name",
+            Some("uid-1"),
+            "2026-09-02T00:00:00Z",
+            "amend",
+        );
+
+        let bundle = context_documents(
+            &conn,
+            &["with-events".into(), "no-events".into()],
+            RetrievalOptions::default(),
+        )
+        .unwrap();
+        let line = bundle.documents[0]
+            .provenance_line
+            .as_deref()
+            .expect("イベントのあるノートに来歴行がない");
+        assert!(
+            line.starts_with("来歴: 作成 2026-09-01 claude-code/claude-fable-5-1(自己申告)"),
+            "{line}"
+        );
+        assert!(line.contains("更新1回"), "{line}");
+        assert_eq!(bundle.documents[0].text, "with-events");
+        assert_eq!(bundle.documents[1].provenance_line, None);
     }
 
     #[test]

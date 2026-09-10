@@ -11,7 +11,7 @@ Vault と kb-app の端末設定を Claude の Read / Edit / sandboxed Bash か�
 
 | 部品 | 役割 | 置き場 |
 |---|---|---|
-| MCP サーバー | read / write / maintenance の用途別3面 | `claude mcp add --scope user kb-app-read -- <kb バイナリ> mcp --surface read --vault <名前> --client claude-code/claude`（同様に`kb-app-write`=`--surface write`、`kb-app-maintenance`=`--surface maintenance`）。host 側の`search`は配信profile `session_auto`（省略時既定 — 現行の候補展開予算そのもの。予算を絞る`session_explicit`は明示選択のみ）で動き、`--retrieval-profile`で process 単位に固定できる。initialize の`kbApp.retrieval_profile`で確認する（[retrieval-profiles.md](../../docs/retrieval-profiles.md)） |
+| MCP サーバー | read / write / maintenance の用途別3面 | `claude mcp add --scope user kb-app-read -- <kb バイナリ> mcp --surface read --vault <名前> --client claude-code/claude`（同様に`kb-app-write`=`--surface write`、`kb-app-maintenance`=`--surface maintenance`）。`--client`は`<製品名>/<モデル>[/<動作設定>]`で、モデルと動作設定は来歴の設定値として記録される（AIが書込時に`actor.model`／`actor.mode`を申告すればそちらが優先）。host 側の`search`は配信profile `session_auto`（省略時既定 — 現行の候補展開予算そのもの。予算を絞る`session_explicit`は明示選択のみ）で動き、`--retrieval-profile`で process 単位に固定できる。initialize の`kbApp.retrieval_profile`で確認する（[retrieval-profiles.md](../../docs/retrieval-profiles.md)） |
 | 前出しフック | 発話ごとに同じkb-app実行ファイルをMCP serverとして子起動し（`--retrieval-profile session-auto`を明示）、`initialize → search(any, include_documents)`を実行。上位5 seedからDBリンクを最大2ホップ展開し、最大50候補から予算内・最大10本文を同じDB snapshotで返す。OFFならsearchの権威ある`kb_disabled`終端結果を検知して無音終了 | 完全保護のmanaged settingsがUserPromptSubmitへ登録 |
 | kb-researcher | 検索専用サブエージェント(複数クエリ・全文読み・要点だけ返す) | `~/.claude/agents/kb-researcher.md` |
 | 規律 | まず引く・会話中に個別承諾なしで広く記録・リンク付き報告 | MCP server instructions（個人のAGENTS / CLAUDEファイルへの追記は不要） |

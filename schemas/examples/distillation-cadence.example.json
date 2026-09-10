@@ -10,12 +10,34 @@
     "current_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "accepted_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "lanes": [
-      {"lane": "after_write", "due": false, "last_completed_at": null, "next_due_at": null},
-      {"lane": "daily", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-21T09:00:00Z"},
-      {"lane": "weekly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-27T09:00:00Z"},
-      {"lane": "monthly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-09-19T09:00:00Z"}
+      {
+        "lane": "after_write",
+        "due": false,
+        "last_completed_at": null,
+        "next_due_at": null
+      },
+      {
+        "lane": "daily",
+        "due": false,
+        "last_completed_at": "2026-08-20T09:00:00Z",
+        "next_due_at": "2026-08-21T09:00:00Z"
+      },
+      {
+        "lane": "weekly",
+        "due": false,
+        "last_completed_at": "2026-08-20T09:00:00Z",
+        "next_due_at": "2026-08-27T09:00:00Z"
+      },
+      {
+        "lane": "monthly",
+        "due": false,
+        "last_completed_at": "2026-08-20T09:00:00Z",
+        "next_due_at": "2026-09-19T09:00:00Z"
+      }
     ],
-    "last_failure": null
+    "last_failure": null,
+    "current_artifact_stamp": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "accepted_artifact_stamp": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
   },
   "status_after": {
     "schema": "kb-app.distillation-cadence-status/v1",
@@ -24,12 +46,34 @@
     "current_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "accepted_checkpoint_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "lanes": [
-      {"lane": "after_write", "due": false, "last_completed_at": null, "next_due_at": null},
-      {"lane": "daily", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-21T09:00:00Z"},
-      {"lane": "weekly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-08-27T09:00:00Z"},
-      {"lane": "monthly", "due": false, "last_completed_at": "2026-08-20T09:00:00Z", "next_due_at": "2026-09-19T09:00:00Z"}
+      {
+        "lane": "after_write",
+        "due": false,
+        "last_completed_at": null,
+        "next_due_at": null
+      },
+      {
+        "lane": "daily",
+        "due": false,
+        "last_completed_at": "2026-08-20T09:00:00Z",
+        "next_due_at": "2026-08-21T09:00:00Z"
+      },
+      {
+        "lane": "weekly",
+        "due": false,
+        "last_completed_at": "2026-08-20T09:00:00Z",
+        "next_due_at": "2026-08-27T09:00:00Z"
+      },
+      {
+        "lane": "monthly",
+        "due": false,
+        "last_completed_at": "2026-08-20T09:00:00Z",
+        "next_due_at": "2026-09-19T09:00:00Z"
+      }
     ],
-    "last_failure": null
+    "last_failure": null,
+    "current_artifact_stamp": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "accepted_artifact_stamp": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
   },
   "review_scope": [],
   "audit": null,

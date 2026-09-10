@@ -185,6 +185,8 @@ pub fn create_fixture(suite: &RetrievalBenchmarkSuite, path: &Path) -> Result<Va
                 relations: Vec::new(),
                 allow_new_tags: true,
                 client: "retrieval-benchmark/fixture",
+                actor: None,
+                revision: None,
             },
         )?;
         if id != note.expected_id {
@@ -232,6 +234,8 @@ pub fn create_fixture(suite: &RetrievalBenchmarkSuite, path: &Path) -> Result<Va
                 relations: Some(relations),
                 allow_new_tags: false,
                 client: "retrieval-benchmark/fixture",
+                actor: None,
+                revision: None,
             },
         )?;
     }

@@ -1,0 +1,1 @@
+export { AppUpdateCard } from "./AppUpdateCard";

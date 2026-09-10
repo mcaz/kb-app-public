@@ -1,8 +1,9 @@
-import { Brain, Palette, Plug, RefreshCw, Settings } from "lucide-react";
-import { useState } from "react";
+import { BookOpen, Brain, Palette, Plug, RefreshCw, Settings } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Icon } from "@/components/atoms/Icon";
+import { Button } from "@/components/atoms/ui/button";
+import { GettingStarted } from "@/components/organisms/GettingStarted";
 import {
   Dialog,
   DialogContent,
@@ -13,19 +14,30 @@ import { ConnectPage } from "@/pages/ConnectPage";
 import { DistillationSettingsPage } from "@/pages/DistillationSettingsPage";
 import { KnowledgeBaseSettingsPage } from "@/pages/KnowledgeBaseSettingsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { settingsDialogVariants } from "./variants";
 
 export interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  section: SettingsSection;
+  onSectionChange: (section: SettingsSection) => void;
+  onOpenSearch: () => void;
 }
 
-type SettingsSection = "kb" | "distillation" | "connect" | "general";
+export type SettingsSection = "getting_started" | "kb" | "distillation" | "connect" | "general";
 
 /** KB利用・接続・端末設定を、アプリ本体の画面遷移を変えずにまとめて扱う。 */
-export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const { t } = useTranslation("common");
-  const [section, setSection] = useState<SettingsSection>("kb");
+export function SettingsDialog({
+  open,
+  onOpenChange,
+  section,
+  onSectionChange,
+  onOpenSearch,
+}: SettingsDialogProps) {
+  const { t } = useTranslation(["common", "gettingStarted"]);
+  const styles = settingsDialogVariants();
   const items = [
+    { id: "getting_started" as const, icon: BookOpen, label: t("gettingStarted:nav") },
     { id: "kb" as const, icon: Brain, label: t("settings.kbUsage") },
     { id: "distillation" as const, icon: RefreshCw, label: t("settings.distillation.title") },
     { id: "connect" as const, icon: Plug, label: t("nav.connect") },
@@ -49,7 +61,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 key={item.id}
                 type="button"
                 aria-current={section === item.id ? "page" : undefined}
-                onClick={() => setSection(item.id)}
+                onClick={() => onSectionChange(item.id)}
                 className={`flex cursor-pointer items-center gap-2 rounded-md border-none px-2.5 py-2 text-left text-[13px] whitespace-nowrap ${
                   section === item.id
                     ? "bg-sel text-ink font-semibold"
@@ -64,12 +76,26 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </aside>
 
         <div className="flex min-h-0 min-w-0 overflow-hidden">
-          {section === "kb" ? (
+          {section === "getting_started" ? (
+            <GettingStarted
+              onOpenConnections={() => onSectionChange("connect")}
+              onOpenProtection={() => onSectionChange("kb")}
+              onOpenSearch={onOpenSearch}
+            />
+          ) : section === "kb" ? (
             <KnowledgeBaseSettingsPage />
           ) : section === "distillation" ? (
             <DistillationSettingsPage />
           ) : section === "connect" ? (
-            <ConnectPage />
+            <div className={styles.connectionPane()}>
+              <div className={styles.guideEntry()}>
+                <p>{t("gettingStarted:afterConnection")}</p>
+                <Button size="sm" onClick={() => onSectionChange("getting_started")}>
+                  {t("gettingStarted:openGuide")}
+                </Button>
+              </div>
+              <ConnectPage />
+            </div>
           ) : (
             <SettingsPage />
           )}

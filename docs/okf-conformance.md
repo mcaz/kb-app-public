@@ -51,7 +51,7 @@ OKF上の概念 ID = パス(`.md` 抜き)を互換表示用に維持し、kb-app
 | `description` | OKF 推奨 | AI(提案) | 一文要約。index 生成・検索スニペットに使用 |
 | `tags` | OKF 推奨 | AI | 主題を横断する可変facet。正本判定には使わない |
 | `status` | OKF §5.4 | ライフサイクル API のみ | 通常は`stable`。OKF互換の`deprecated`は表示上の退役にだけ使い、draft/承認キューは持たない |
-| `generated` | OKF §5.2 | app(保存時に自動) | `{by, at}`。actor 規約: ユーザー編集 = `human:<ローカルID>`、AI 起票・編纂 = `<クライアント>/<モデル>`(例 `claude-desktop/claude-fable-5`) |
+| `generated` | OKF §5.2 | app(保存時に自動) | `{by, at}`。actor 規約: ユーザー編集 = `human:<ローカルID>`、AI 起票・編纂 = `<クライアント>/<モデル> <動作設定>`(例 `claude-desktop/claude-fable-5`、`codex-cli/gpt-6-codex Astra medium`。動作設定は推論強度などの申告があるときだけ) |
 | `verified` | OKF §5.2 | app(承諾時に追記) | 受信箱・お手入れの承諾履歴。人間の承諾 = `human:` actor |
 | `sources` | OKF §5.1 | AI(propose 時) | 会話由来なら `resource: "conversation:<クライアント>/<日付>"`(scope descriptor)。外部 URL 由来ならその URL |
 | `stale_after` | OKF §5.5 | お手入れ(任意) | 期限のある知識にだけ付く |
@@ -108,6 +108,16 @@ UI はリンクをタイトルで表示し、パスは見せない(原則7)。�
 加えて consumer 側の寛容規則(未知 type・未知キー・リンク切れで拒否しない)を
 アプリ自身が守る。**検査はアプリの自己修復(外部 git 操作後の再索引)と同じ経路で
 走らせ、違反は「壊れたら見える」(原則4)に従い画面に出す。**
+
+### 履歴は frontmatter の外に置く(2026-09-10 追加)
+
+`generated` は OKF §5.1 のとおり**最後の書き手**1件のままにし、過去の書き手を
+`generated` へ積んだり本文へ書き戻したりしない。「誰がどの部分をいつ・なぜ書いたか」は
+frontmatter の外、vault 直下の `.kb-events/YYYY-MM.jsonl`(追記専用)に持つ
+(契約20 / [ADR-0023](adr/0023-note-provenance-events.md))。
+OKF のノート形式・予約ファイルの構造は変わらないので、`.kb-events` を知らない
+OKF consumer もこれまでどおりバンドルを読める — 履歴が読めないだけで、
+未知キーやリンク切れと同じく拒否の理由にはならない(§4.1 / §6.1 の寛容規則)。
 
 ## 版追随戦略
 

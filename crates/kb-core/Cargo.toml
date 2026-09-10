@@ -24,6 +24,8 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 rand = "0.9"
 serde_json = "1"
+# CodexのMCP登録だけを更新し、無関係な設定とTOMLコメントを保持する。
+toml_edit = "=0.25.13"
 serde_yaml = "0.9"
 walkdir = "2"
 anyhow = "1"
@@ -33,6 +35,12 @@ fs4 = { version = "0.13", features = ["sync"] }
 ureq = "3.4"
 tempfile = "3"
 base64 = "0.22"
+# 更新署名を確認したarchiveの構造・版・埋込metadataを、展開前に検査する。
+flate2 = "1"
+tar = "0.4"
+semver = "1"
+plist = "1"
+minisign-verify = "=0.2.5"
 # OAuth token はファイルへ保存せず、macOS Keychain / Windows Credential Manager /
 # Linux Secret Service へ預ける。v1 API は各 OS の推奨 credential store を選ぶ。
 keyring = "4.1"

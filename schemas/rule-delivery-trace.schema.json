@@ -14,6 +14,55 @@
   },
   "$defs": {
     "strings": {"type": "array", "items": {"type": "string"}},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rule_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "contract_sha256", "instructions_sha256", "client_surface", "tool_surface", "server_version"],
+      "properties": {
+        "schema": {"const": 1},
+        "contract_sha256": {"$ref": "#/$defs/sha256"},
+        "instructions_sha256": {"$ref": "#/$defs/sha256"},
+        "client_surface": {"enum": ["codex_cli", "claude_code", "claude_desktop", "chat_gpt", "rule_delivery_evaluation", "unknown"]},
+        "tool_surface": {"enum": ["all", "read", "write", "maintenance"]},
+        "server_version": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000-\\u001f\\u007f]*$"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suite_sha256", "cli_version", "initialize_response"],
+      "properties": {
+        "suite_sha256": {"$ref": "#/$defs/sha256"},
+        "cli_version": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["value", "source"],
+              "properties": {
+                "value": {"type": "string", "minLength": 1},
+                "source": {"enum": ["claude_system_init.claude_code_version", "mcp_initialize_request.clientInfo.version"]}
+              }
+            }
+          ]
+        },
+        "initialize_response": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["source", "instructions", "rule_identity"],
+              "properties": {
+                "source": {"const": "mcp_initialize_server_response"},
+                "instructions": {"type": "string"},
+                "rule_identity": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/rule_identity"}]}
+              }
+            }
+          ]
+        }
+      }
+    },
     "tool_call": {
       "type": "object",
       "additionalProperties": false,
@@ -36,6 +85,7 @@
         "client_surface": {"type": "string", "minLength": 1},
         "model": {"type": "string", "minLength": 1},
         "model_version": {"type": ["string", "null"]},
+        "evidence": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/evidence"}]},
         "os": {"type": "string", "minLength": 1},
         "run": {"type": "integer", "minimum": 1},
         "delivered_rule_ids": {"$ref": "#/$defs/strings"},

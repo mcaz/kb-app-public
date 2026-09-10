@@ -29,6 +29,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// 明示された更新archiveの署名・内容を検査する（KBや設定を開かない）
+    VerifyUpdatePackage {
+        #[arg(long)]
+        archive: PathBuf,
+        #[arg(long)]
+        signature: PathBuf,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(long)]
+        current_version: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        target: String,
+    },
     /// vault の作成・一覧
     Vault {
         #[command(subcommand)]
@@ -557,6 +572,61 @@ fn parse_exclusion_window(value: &str) -> Result<kb_core::session_ledger::Exclus
     Ok(kb_core::session_ledger::ExclusionWindow { since_ms, until_ms })
 }
 
+fn read_update_input(path: &std::path::Path, limit: usize) -> Result<Vec<u8>> {
+    anyhow::ensure!(
+        fs::symlink_metadata(path)?.file_type().is_file(),
+        "更新検査の入力は通常fileに限定します"
+    );
+    let file = fs::File::open(path).context("更新検査fileを開けません")?;
+    anyhow::ensure!(
+        file.metadata()?.is_file() && file.metadata()?.len() <= limit as u64,
+        "更新検査fileの種別または上限が不正です"
+    );
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("更新検査fileを読み取れません")?;
+    anyhow::ensure!(bytes.len() <= limit, "更新検査fileが上限を超えました");
+    Ok(bytes)
+}
+
+fn verify_update_package_files(
+    archive: &std::path::Path,
+    signature: &std::path::Path,
+    public_key: &std::path::Path,
+    current_version: &str,
+    version: &str,
+    target: &str,
+) -> Result<serde_json::Value> {
+    use kb_core::app_update_package::{MAX_COMPRESSED_BYTES, validate_macos_package};
+    use kb_core::app_update_signature::{
+        MAX_PUBLIC_KEY_TEXT_BYTES, MAX_SIGNATURE_TEXT_BYTES, verify_updater_signature,
+    };
+    let bytes = read_update_input(archive, MAX_COMPRESSED_BYTES)?;
+    let signature = String::from_utf8(read_update_input(signature, MAX_SIGNATURE_TEXT_BYTES)?)
+        .context("署名fileがUTF-8ではありません")?;
+    let public_key = String::from_utf8(read_update_input(public_key, MAX_PUBLIC_KEY_TEXT_BYTES)?)
+        .context("公開key fileがUTF-8ではありません")?;
+    verify_updater_signature(&bytes, signature.trim(), public_key.trim())?;
+    let package = validate_macos_package(bytes, current_version, version, target)?;
+    Ok(serde_json::json!({
+        "schema": "kb-app.update-package-verification/v1",
+        "verifier_version": env!("CARGO_PKG_VERSION"),
+        "verified": true,
+        "archive_sha256": package.archive_sha256(),
+        "plan_sha256": package.plan_sha256(),
+        "version": package.version(),
+        "target": package.target(),
+        "source_commit": package.source_commit(),
+        "compatibility": package.compatibility(),
+        "entries": package.entries().iter().map(|entry| serde_json::json!({
+            "path": entry.path(), "directory": entry.is_directory(),
+            "mode": entry.mode(), "size": entry.size(), "sha256": entry.sha256()
+        })).collect::<Vec<_>>(),
+        "coexistence_verified": false
+    }))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     anyhow::ensure!(
@@ -567,6 +637,29 @@ fn main() -> Result<()> {
         "観測集計はVaultを開かない。絞り込みには--workspace-idを指定する"
     );
     match cli.command {
+        Command::VerifyUpdatePackage {
+            archive,
+            signature,
+            public_key,
+            current_version,
+            version,
+            target,
+        } => {
+            // この分岐はRegistry/Vault/既定設定を解決せず、明示ファイルだけを読む。
+            anyhow::ensure!(
+                cli.vault.is_none(),
+                "更新package検査に--vaultは指定できません"
+            );
+            let report = verify_update_package_files(
+                &archive,
+                &signature,
+                &public_key,
+                &current_version,
+                &version,
+                &target,
+            )?;
+            println!("{}", serde_json::to_string(&report)?);
+        }
         Command::Vault { command } => match command {
             VaultCommand::Create { name, path } => {
                 let path = match path {
@@ -668,6 +761,8 @@ fn main() -> Result<()> {
                     relations: Vec::new(),
                     allow_new_tags,
                     client: &client,
+                    actor: None,
+                    revision: None,
                 },
             )?;
             println!("{id}");
@@ -792,11 +887,16 @@ fn main() -> Result<()> {
                                     .collect::<Vec<_>>()
                                     .join(", ");
                                 format!(
-                                    "# Distillation cadence status\n\n- checked: {}\n- due: {}\n- current: `{}`\n- accepted: `{}`",
+                                    "# Distillation cadence status\n\n- checked: {}\n- due: {}\n- current: `{}`\n- accepted: `{}`\n- artifact current: `{}`\n- artifact accepted: `{}`",
                                     status.checked_at,
                                     if due.is_empty() { "none" } else { &due },
                                     status.current_checkpoint_id,
                                     status.accepted_checkpoint_id.as_deref().unwrap_or("none"),
+                                    status
+                                        .current_artifact_stamp
+                                        .as_deref()
+                                        .unwrap_or("unverified"),
+                                    status.accepted_artifact_stamp.as_deref().unwrap_or("none"),
                                 )
                             }
                         };
@@ -1318,6 +1418,7 @@ mod tests {
             "vault".to_string(),
             "vault create".to_string(),
             "vault list".to_string(),
+            "verify-update-package".to_string(),
         ]);
 
         assert_eq!(

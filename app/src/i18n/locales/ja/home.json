@@ -9,6 +9,30 @@
     "backupPending": "残 {{count}}",
     "backupOk": "✓"
   },
+  "activity": {
+    "head": "活動",
+    "empty": "まだ活動の記録がありません",
+    "tile": {
+      "last7Days": "直近7日の書込",
+      "distinctActors": "書き手の種類",
+      "unknownModel": "モデル不明の書込割合"
+    },
+    "filter": {
+      "client": "書き手",
+      "clientAll": "すべての書き手",
+      "model": "モデル",
+      "modelAll": "すべてのモデル",
+      "kind": "種別",
+      "kindAll": "すべての種別",
+      "period": "期間",
+      "period7": "7日以内",
+      "period30": "30日以内",
+      "periodAll": "全期間"
+    },
+    "row": {
+      "sections": "{{count}}見出し"
+    }
+  },
   "observation": {
     "head": "AIの記録",
     "retry": "再試行",

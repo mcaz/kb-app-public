@@ -4,7 +4,7 @@ members = ["crates/kb-core", "crates/kb-cli", "app/src-tauri"]
 exclude = ["poc"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 publish = false
 

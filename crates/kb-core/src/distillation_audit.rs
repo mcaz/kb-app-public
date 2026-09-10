@@ -127,6 +127,7 @@ pub enum DistillationAuditCheckCode {
     NoPendingMarkdownExports,
     StorageContractValid,
     RemoteBackupCurrentOrLocalOnly,
+    ArtifactMetadataStable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -240,24 +241,9 @@ fn build_report(
         &storage_contract,
         &remote_backup,
     );
-    let material = AuditMaterial {
+    let mut report = DistillationAuditReport {
         schema: AUDIT_SCHEMA,
-        plan_id: &plan.plan_id,
-        checkpoint: &checkpoint,
-        delta: &delta,
-        gate: &gate,
-        pending_markdown_exports,
-        storage_contract_digest: storage_contract
-            .report
-            .as_ref()
-            .map(|report| report.digest.as_str()),
-        storage_contract_error: storage_contract.error.as_deref(),
-        remote_backup: &remote_backup,
-    };
-    let audit_id = sha256(&serde_json::to_vec(&material).context("蒸留audit materialのserialize")?);
-    Ok(DistillationAuditReport {
-        schema: AUDIT_SCHEMA,
-        audit_id,
+        audit_id: String::new(),
         read_only: true,
         plan,
         checkpoint,
@@ -266,7 +252,46 @@ fn build_report(
         pending_markdown_exports,
         storage_contract,
         remote_backup,
-    })
+    };
+    refresh_audit_id(&mut report)?;
+    Ok(report)
+}
+
+/// cadenceは監査前後の版を比較してから受け入れる。gate変更後もaudit IDを本文へ照合する。
+pub(crate) fn check_artifact_metadata(
+    report: &mut DistillationAuditReport,
+    stable: bool,
+    detail: Option<String>,
+) -> Result<()> {
+    report.gate.checks.push(DistillationAuditCheck {
+        code: DistillationAuditCheckCode::ArtifactMetadataStable,
+        passed: stable,
+        violations: usize::from(!stable),
+        detail,
+    });
+    report.gate.passed = report.gate.checks.iter().all(|check| check.passed);
+    refresh_audit_id(report)
+}
+
+fn refresh_audit_id(report: &mut DistillationAuditReport) -> Result<()> {
+    let material = AuditMaterial {
+        schema: report.schema,
+        plan_id: &report.plan.plan_id,
+        checkpoint: &report.checkpoint,
+        delta: &report.delta,
+        gate: &report.gate,
+        pending_markdown_exports: report.pending_markdown_exports,
+        storage_contract_digest: report
+            .storage_contract
+            .report
+            .as_ref()
+            .map(|storage| storage.digest.as_str()),
+        storage_contract_error: report.storage_contract.error.as_deref(),
+        remote_backup: &report.remote_backup,
+    };
+    report.audit_id =
+        sha256(&serde_json::to_vec(&material).context("蒸留audit materialのserialize")?);
+    Ok(())
 }
 
 fn build_delta(
@@ -569,6 +594,9 @@ pub fn render_markdown(report: &DistillationAuditReport) -> String {
             if check.passed { "yes" } else { "no" },
             check.violations,
         ));
+    }
+    if let Some(storage) = &report.storage_contract.report {
+        output.push_str(&format!("\n- {}\n", storage.legacy_inventory.summary()));
     }
     output.push_str("\n## Incremental workset\n\n");
     if report.delta.workset.is_empty() {

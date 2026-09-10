@@ -1,7 +1,7 @@
 //! タグ語彙の統治 — 契約1の形式検証と、語彙外タグの拒否。
 //!
 //! **なぜコアに置くか**(2026-08-12 本人決定)。「どのタグを使うか」は運用であり
-//! KB の「タグ運用」ノートで合意する可変の領域だが、**語彙を膨らませないための強制は
+//! KB の「タグ運用」ノートで共有する可変の領域だが、**語彙を膨らませないための強制は
 //! 機構の仕事**。実測で 60 ノートに対しユニークタグ 112 語・うち 61% が1回限りまで
 //! 増殖しており、運用ルール(常駐文章)では止まらないことが確認された。
 //! 強制の階段(KB「AI 協働アプリの規律は文章でなく機構で確定させる」)に従い、
@@ -12,7 +12,7 @@
 
 use crate::write_rejection::WriteRejection;
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// タグの最大長(従来の契約検証を踏襲)。
@@ -82,20 +82,22 @@ pub struct Glossary {
 /// 偽タグとして UI のタグ一覧に出た(2026-08-12 に実際に発生、16語混入)。
 /// 読む範囲を節で限定し、さらに形式検証を通すのが再発防止の要。
 pub fn glossary(conn: &Connection) -> Result<Glossary> {
-    let found: Option<(String, String)> = conn
-        .query_row(
-            "SELECT id, body FROM notes
-             WHERE status != 'deprecated' AND normal_reference_allowed = 1
-               AND (title LIKE '%タグ運用%' OR title LIKE '%タグの運用%')
-             LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .ok();
-    let Some((note_id, body)) = found else {
-        return Ok(Glossary::default());
-    };
+    let overview = vocabulary_overview(conn)?;
+    if let Some(problem) = overview.source_problem() {
+        return Err(WriteRejection::TagVocabulary.validation(problem));
+    }
+    Ok(Glossary {
+        note_id: overview.glossary_note,
+        entries: if overview.source_status == SourceStatus::Pinned {
+            overview.entries
+        } else {
+            BTreeMap::new()
+        },
+        skipped: overview.skipped,
+    })
+}
 
+pub(crate) fn parse_glossary(note_id: String, body: &str) -> Glossary {
     let mut g = Glossary {
         note_id: Some(note_id),
         ..Default::default()
@@ -135,14 +137,232 @@ pub fn glossary(conn: &Connection) -> Result<Glossary> {
             Err(_) => g.skipped.push(tag.to_string()),
         }
     }
-    Ok(g)
+    g
+}
+
+/// 参照不能になった正本の修復でも、読める旧語彙の使用を見落とさない。
+pub(crate) fn registered_vocabulary(conn: &Connection) -> Result<BTreeSet<String>> {
+    let Some(binding) = crate::tag_vocabulary_source::read_binding(conn)? else {
+        return Ok(BTreeSet::new());
+    };
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT id, document FROM notes WHERE note_uid=?1",
+            [binding.note_uid.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    // 復旧で欠損した正本は明示的な再指定を許す。壊れた原文の読取失敗は隠さない。
+    let Some((id, document)) = row else {
+        return Ok(BTreeSet::new());
+    };
+    let note = crate::frontmatter::Note::parse(&document)?;
+    if note.front.note_uid.as_ref() != Some(&binding.note_uid) || note.front.authority.is_none() {
+        return Err(WriteRejection::TagVocabulary
+            .validation("語彙正本の指定UIDとDB原文のidentityが一致しない"));
+    }
+    crate::authority::validate_envelope(
+        note.front.note_uid.as_ref(),
+        note.front.authority.as_ref(),
+        &note.front.relations,
+    )?;
+    Ok(parse_glossary(id, &note.body).entries.into_keys().collect())
+}
+
+/// 既存の語彙外タグの修復は妨げず、今回削除する登録語の使用だけを検査する。
+pub(crate) fn guard_vocabulary_removal(
+    conn: &Connection,
+    previous: &BTreeSet<String>,
+    next: &BTreeSet<String>,
+    replacement: Option<(&str, &[String])>,
+) -> Result<()> {
+    let removed: BTreeSet<_> = previous.difference(next).map(String::as_str).collect();
+    if removed.is_empty() {
+        return Ok(());
+    }
+    // 人間・提案・廃止ノートも保存された使用例なので、検索画面の絞り込みを適用しない。
+    let mut statement = conn.prepare("SELECT id, tags FROM notes ORDER BY id")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (id, tags) = row?;
+        let tags: Vec<&str> = match replacement {
+            Some((replacement_id, after_tags)) if replacement_id == id => {
+                after_tags.iter().map(String::as_str).collect()
+            }
+            _ => tags.split_whitespace().collect(),
+        };
+        if let Some(tag) = tags.into_iter().find(|tag| removed.contains(tag)) {
+            return Err(WriteRejection::TagVocabulary.validation(format!(
+                "使用中の語彙「{tag}」は削除できない。一括変更で使用先のタグも同時に変更する"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn guard_source_vocabulary_write(
+    conn: &Connection,
+    id: &str,
+    note: &crate::frontmatter::Note,
+) -> Result<()> {
+    let Some(binding) = crate::tag_vocabulary_source::read_binding(conn)? else {
+        return Ok(());
+    };
+    if note.front.note_uid.as_ref() != Some(&binding.note_uid) {
+        return Ok(());
+    }
+    let previous = registered_vocabulary(conn)?;
+    let next = parse_glossary(id.into(), &note.body)
+        .entries
+        .into_keys()
+        .collect();
+    // 正本自身のretagと表更新は一度の保存になるため、自身だけ保存後のタグへ置換する。
+    guard_vocabulary_removal(conn, &previous, &next, Some((id, &note.front.tags)))
+}
+
+/// 書込検証と同じ語彙、および明示指定の状態を読み取り口へ渡す。
+#[derive(Debug, serde::Serialize)]
+pub struct VocabularyOverview {
+    pub glossary_note: Option<String>,
+    pub entries: BTreeMap<String, String>,
+    pub skipped: Vec<String>,
+    pub enforce_vocabulary: bool,
+    pub source: Option<crate::tag_vocabulary_source::SourceBinding>,
+    pub source_status: SourceStatus,
+    pub candidates: Vec<SourceCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStatus {
+    Unconfigured,
+    Pinned,
+    Missing,
+    Unavailable,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SourceCandidate {
+    pub note_id: String,
+    pub note_uid: Option<crate::authority::NoteUid>,
+    pub title: String,
+}
+
+impl VocabularyOverview {
+    pub(crate) fn source_problem(&self) -> Option<String> {
+        match self.source_status {
+            SourceStatus::Unconfigured if !self.candidates.is_empty() => Some(format!(
+                "語彙の正本が未指定です(候補{}件)。tag_vocabularyのcandidatesをgetで確認し、set_tag_vocabulary_sourceでnote_uidを指定する。個別の本人合意は不要。UIDがない旧ノートはauthority付きの移行を先に行う",
+                self.candidates.len()
+            )),
+            SourceStatus::Missing => Some(
+                "指定された語彙の正本が見つかりません。別ノートや現用タグへは切り替えません。getで復元先を確認するか、tag_vocabularyのrevisionを使って正本を再指定する".into(),
+            ),
+            SourceStatus::Unavailable => Some(
+                "指定された語彙の正本を通常参照できません。別ノートや現用タグへは切り替えません。正本の状態を修復するか、tag_vocabularyのrevisionを使って参照可能な正本へ再指定する".into(),
+            ),
+            _ => None,
+        }
+    }
+}
+
+fn source_candidates(conn: &Connection) -> Result<Vec<SourceCandidate>> {
+    let mut statement = conn.prepare(
+        "SELECT id, note_uid, title FROM notes
+         WHERE status != 'deprecated' AND normal_reference_allowed = 1
+           AND (title LIKE '%タグ運用%' OR title LIKE '%タグの運用%')
+         ORDER BY id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (note_id, uid, title) = row?;
+        Ok(SourceCandidate {
+            note_id,
+            note_uid: uid
+                .map(|uid| uid.parse::<crate::authority::NoteUid>())
+                .transpose()?,
+            title,
+        })
+    })
+    .collect()
+}
+
+pub fn vocabulary_overview(conn: &Connection) -> Result<VocabularyOverview> {
+    let source = crate::tag_vocabulary_source::read_binding(conn)?;
+    let mut overview = VocabularyOverview {
+        glossary_note: None,
+        entries: BTreeMap::new(),
+        skipped: Vec::new(),
+        enforce_vocabulary: true,
+        source,
+        source_status: SourceStatus::Unconfigured,
+        candidates: Vec::new(),
+    };
+    if let Some(binding) = &overview.source {
+        let found: Option<(String, String, bool, String)> = conn
+            .query_row(
+                "SELECT id, document, normal_reference_allowed = 1, status FROM notes WHERE note_uid = ?1",
+                [binding.note_uid.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        if let Some((note_id, document, allowed, status)) = found {
+            let note = crate::frontmatter::Note::parse(&document)?;
+            if note.front.note_uid.as_ref() != Some(&binding.note_uid)
+                || note.front.authority.is_none()
+            {
+                return Err(WriteRejection::TagVocabulary
+                    .validation("語彙正本の指定UIDとDB原文のidentityが一致しない"));
+            }
+            crate::authority::validate_envelope(
+                note.front.note_uid.as_ref(),
+                note.front.authority.as_ref(),
+                &note.front.relations,
+            )?;
+            if !allowed
+                || status == "deprecated"
+                || note.front.effective_status() == "deprecated"
+                || !crate::proposal_workflow::derive_normal_reference_allowed(&note)
+            {
+                overview.source_status = SourceStatus::Unavailable;
+            } else {
+                let glossary = parse_glossary(note_id, &note.body);
+                overview.glossary_note = glossary.note_id;
+                overview.entries = glossary.entries;
+                overview.skipped = glossary.skipped;
+                overview.source_status = SourceStatus::Pinned;
+                return Ok(overview);
+            }
+        } else {
+            overview.source_status = SourceStatus::Missing;
+        }
+    }
+    overview.candidates = source_candidates(conn)?;
+    // 指定の消失をbootstrapと取り違えると、壊れた語彙が通常書込から増殖する。
+    if overview.source_status == SourceStatus::Unconfigured && overview.candidates.is_empty() {
+        overview.entries = crate::search::tag_counts(conn, 1000)?
+            .into_iter()
+            .map(|(tag, _)| (tag, String::new()))
+            .collect();
+        overview.enforce_vocabulary = !overview.entries.is_empty();
+    }
+    Ok(overview)
 }
 
 /// 現在の語彙。「タグ運用」ノートがあれば、その語彙表だけを正本にする。
 ///
 /// 語彙ノートがまだ無い新規 vault だけは、現に使われているタグからブートストラップする。
 /// 語彙表と現用タグを無条件に合成すると、外部編集や旧 import で一度混入した語が自動的に
-/// 正式語彙へ昇格してしまうため、合意済みの語彙表がある場合は fallback を使わない。
+/// 正式語彙へ昇格してしまうため、登録済みの語彙表がある場合は fallback を使わない。
 pub fn vocabulary(conn: &Connection) -> Result<BTreeSet<String>> {
     Ok(validator(conn)?.vocabulary)
 }
@@ -154,32 +374,22 @@ pub fn vocabulary(conn: &Connection) -> Result<BTreeSet<String>> {
 pub(crate) struct TagValidator {
     vocabulary: BTreeSet<String>,
     enforce_vocabulary: bool,
+    source_problem: Option<String>,
 }
 
 pub(crate) fn validator(conn: &Connection) -> Result<TagValidator> {
-    let glossary = glossary(conn)?;
-    if glossary.note_id.is_some() {
-        return Ok(TagValidator {
-            vocabulary: glossary.entries.into_keys().collect(),
-            enforce_vocabulary: true,
-        });
-    }
-    let vocabulary: BTreeSet<String> = crate::search::tag_counts(conn, 1000)?
-        .into_iter()
-        .map(|(tag, _)| tag)
-        .collect();
-    let enforce_vocabulary = !vocabulary.is_empty();
+    let overview = vocabulary_overview(conn)?;
     Ok(TagValidator {
-        vocabulary,
-        enforce_vocabulary,
+        source_problem: overview.source_problem(),
+        vocabulary: overview.entries.into_keys().collect(),
+        enforce_vocabulary: overview.enforce_vocabulary,
     })
 }
 
 /// タグ契約を一括検証する唯一の入口(個数・形・語彙)。
 ///
-/// - `allow_new` が真なら通す。「新語は2本目のノートが見えたときだけ作る」という
-///   合意を、明示のフラグとして機構化したもの(運用ノート v1・2026-08-12)
-/// - 語彙が空(新規 vault・索引が空)のときは素通し。立ち上げを塞がないため
+/// - `allow_new` はCLI・importの明示指定用。AI用MCPは語彙表を先に更新してから使う。
+/// - 語彙ノートも現用語も無い新規 vault では立ち上げを塞がない。
 pub fn validate(conn: &Connection, tags: &[String], allow_new: bool) -> Result<()> {
     validator(conn)?.validate(tags, allow_new)
 }
@@ -187,6 +397,9 @@ pub fn validate(conn: &Connection, tags: &[String], allow_new: bool) -> Result<(
 impl TagValidator {
     pub(crate) fn validate(&self, tags: &[String], allow_new: bool) -> Result<()> {
         validate_structure(tags)?;
+        if let Some(problem) = &self.source_problem {
+            return Err(WriteRejection::TagVocabulary.validation(problem.clone()));
+        }
         if allow_new || !self.enforce_vocabulary {
             return Ok(());
         }
@@ -216,8 +429,8 @@ impl TagValidator {
         };
         Err(WriteRejection::TagVocabulary.validation(format!(
             "契約: 語彙にないタグは使えない。{}\n現在の語彙({}語): {}{}\n\
-既存語で8割合うならそれを使う。どうしても新語が要るなら allow_new_tags を true にして\
-呼び直す(合意は KB の「タグ運用」ノート)",
+既存語で8割合うならそれを使う。新語はAIが必要性を判断し、個別の本人合意を求めずに\
+「タグ運用」ノートの「## 語彙」表を先に更新する。登録を再確認してから通常の書込をやり直す",
             hints.join(" / "),
             vocab.len(),
             shown.join(" / "),
@@ -328,7 +541,7 @@ mod tests {
 
 - ops: 日々の運用 — これは語彙表の外なので拾わない
 ";
-        vault
+        let glossary_id = vault
             .propose_for_test(
                 "タグ運用 — 合意の置き場",
                 body,
@@ -339,6 +552,7 @@ mod tests {
             .unwrap();
         sync(&vault, &conn).unwrap();
 
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &glossary_id).unwrap();
         let g = glossary(&conn).unwrap();
         assert_eq!(
             g.entries.keys().collect::<Vec<_>>(),
@@ -366,6 +580,17 @@ mod tests {
             BTreeSet::from(["kb-app".to_string(), "knowledge-base".to_string()])
         );
         assert!(validate(&conn, &["stray".into()], false).is_err());
+
+        // 2026-09-08: 案内する正本ID・表・不正行を検証と共通化し、現用の混入語を案内しない。
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert_eq!(overview.glossary_note, Some(glossary_id));
+        assert_eq!(overview.entries, g.entries);
+        assert_eq!(overview.skipped, g.skipped);
+        assert!(overview.enforce_vocabulary);
+        assert!(!overview.entries.contains_key("stray"));
+        for tag in overview.entries.keys() {
+            validate(&conn, std::slice::from_ref(tag), false).unwrap();
+        }
     }
 
     /// 2026-09-06: 未採用票内の語彙案が、通常書込のタグ正本やエラーの既存語一覧へ昇格しない。
@@ -410,6 +635,7 @@ mod tests {
             )
             .unwrap();
         sync(&vault, &conn).unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &glossary_id).unwrap();
         assert_eq!(glossary(&conn).unwrap().note_id, Some(glossary_id));
         assert_eq!(
             vocabulary(&conn).unwrap(),
@@ -439,6 +665,13 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("語彙にないタグは使えない"), "{msg}");
         assert!(msg.contains("knowledge-base"), "{msg}");
+        // 2026-09-08: MCPで拒否されるoverrideへ誘導せず、語彙表の更新を先に案内する。
+        // 2026-09-08 本人訂正: 数万件規模のタグ判断を個別の合意待ちへ戻さない。
+        assert!(msg.contains("AIが必要性を判断"), "{msg}");
+        assert!(msg.contains("個別の本人合意を求めず"), "{msg}");
+        assert!(!msg.contains("本人と合意済み"), "{msg}");
+        assert!(msg.contains("表を先に更新"), "{msg}");
+        assert!(!msg.contains("allow_new_tags"), "{msg}");
         // 既存語なら通る
         validate(&conn, &["kb-app".into()], false).unwrap();
         // 明示フラグがあれば新語も通る
@@ -448,13 +681,18 @@ mod tests {
     #[test]
     fn empty_vocabulary_does_not_block_bootstrap() {
         let (_d, _v, conn) = setup();
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert!(overview.glossary_note.is_none());
+        assert!(overview.entries.is_empty());
+        assert!(overview.skipped.is_empty());
+        assert!(!overview.enforce_vocabulary);
         validate(&conn, &["anything".into()], false).unwrap();
     }
 
     #[test]
     fn empty_glossary_still_enforces_the_vocabulary_boundary() {
         let (_d, vault, conn) = setup();
-        vault
+        let glossary_id = vault
             .propose_for_test(
                 "タグ運用 — 合意の置き場",
                 "## 語彙\n\n| タグ | 説明 |\n|---|---|\n",
@@ -465,14 +703,466 @@ mod tests {
             .unwrap();
         sync(&vault, &conn).unwrap();
 
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &glossary_id).unwrap();
         assert!(vocabulary(&conn).unwrap().is_empty());
+        // 2026-09-08: 空表を新規vault扱いにせず、復旧のための更新対象を返す。
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert_eq!(overview.glossary_note, Some(glossary_id));
+        assert!(overview.entries.is_empty());
+        assert!(overview.skipped.is_empty());
+        assert!(overview.enforce_vocabulary);
         assert!(validate(&conn, &["anything".into()], false).is_err());
         validate(&conn, &["anything".into()], true).unwrap();
+    }
+
+    /// 2026-09-08: 正本がまだ無いvaultでは案内と検証が同じ現用語を使い、説明を捏造しない。
+    #[test]
+    fn vocabulary_overview_uses_existing_tags_only_when_no_glossary_exists() {
+        let (_d, vault, conn) = setup();
+        vault
+            .propose_for_test(
+                "語彙の立ち上げ",
+                "現用のタグを初期語彙として使う。",
+                None,
+                &["kb-app".into(), "knowledge-base".into()],
+                "test/client",
+            )
+            .unwrap();
+
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert!(overview.glossary_note.is_none());
+        assert_eq!(
+            overview.entries,
+            BTreeMap::from([
+                ("kb-app".into(), String::new()),
+                ("knowledge-base".into(), String::new()),
+            ])
+        );
+        assert!(overview.skipped.is_empty());
+        assert!(overview.enforce_vocabulary);
+        assert_eq!(
+            vocabulary(&conn).unwrap(),
+            overview.entries.keys().cloned().collect()
+        );
+        for tag in overview.entries.keys() {
+            validate(&conn, std::slice::from_ref(tag), false).unwrap();
+        }
+        assert!(validate(&conn, &["not-registered".into()], false).is_err());
+    }
+
+    /// 2026-09-08: 正本の取得不能を「正本なし」と誤認し、現用語や空語彙へ退避させない。
+    #[test]
+    fn glossary_read_failure_does_not_fall_back_to_existing_or_empty_vocabulary() {
+        for existing_tag in [None, Some("existing")] {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.execute_batch("CREATE TABLE notes (tags TEXT, status TEXT)")
+                .unwrap();
+            if let Some(tag) = existing_tag {
+                conn.execute(
+                    "INSERT INTO notes (tags, status) VALUES (?1, 'stable')",
+                    [tag],
+                )
+                .unwrap();
+            }
+            // 現用語の集計自体が正常でも、語彙正本のSELECT失敗は隠さない。
+            assert!(crate::search::tag_counts(&conn, 1000).is_ok());
+            assert!(glossary(&conn).is_err());
+            assert!(vocabulary_overview(&conn).is_err());
+            assert!(vocabulary(&conn).is_err());
+            assert!(validate(&conn, &["existing".into()], false).is_err());
+        }
     }
 
     #[test]
     fn shape_is_enforced_even_when_new_tags_are_allowed() {
         let (_d, _v, conn) = setup();
         assert!(validate(&conn, &["日本語".into()], true).is_err());
+    }
+
+    /// 2026-09-08: 題名一致が1件でも自動選択せず、複数候補を読んだ順で正本が変わらない。
+    #[test]
+    fn unconfigured_candidates_require_explicit_selection() {
+        let (_dir, vault, conn) = setup();
+        let first = vault
+            .propose_for_test(
+                "タグ運用 A",
+                "## 語彙\n| alpha | A語彙 |\n",
+                None,
+                &["alpha".into()],
+                "test/client",
+            )
+            .unwrap();
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert_eq!(overview.source_status, SourceStatus::Unconfigured);
+        assert!(overview.source.is_none());
+        assert!(overview.glossary_note.is_none());
+        assert_eq!(overview.candidates.len(), 1);
+        assert_eq!(overview.candidates[0].note_id, first);
+        assert!(overview.entries.is_empty());
+        assert!(overview.enforce_vocabulary);
+        assert!(validate(&conn, &["alpha".into()], false).is_err());
+        assert!(validate(&conn, &["alpha".into()], true).is_err());
+        assert!(
+            crate::tag_vocabulary_source::read_binding(&conn)
+                .unwrap()
+                .is_none()
+        );
+
+        let mut other = crate::note_store::read(&conn, &first).unwrap();
+        other.front.note_uid = Some(crate::authority::NoteUid::new());
+        other.front.title = Some("タグ運用 B".into());
+        other.front.authority.as_mut().unwrap().scope = "test/other-source".into();
+        other.body = "## 語彙\n| beta | B語彙 |\n".into();
+        vault
+            .write_note_fixture("notes/other-source", &other)
+            .unwrap();
+        assert!(
+            crate::index::import_markdown_snapshot(&vault, &conn)
+                .unwrap()
+                .degraded
+                .is_empty()
+        );
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert_eq!(overview.candidates.len(), 2);
+        assert!(overview.entries.is_empty());
+        assert!(overview.source_problem().unwrap().contains("候補2件"));
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &first).unwrap();
+        assert_eq!(vocabulary(&conn).unwrap(), BTreeSet::from(["alpha".into()]));
+    }
+
+    /// 2026-09-08: 改名や似た題名の追加が、指定したUIDと検証に使う語彙を変えない。
+    #[test]
+    fn pinned_source_survives_rename_and_new_candidates() {
+        let (_dir, vault, conn) = setup();
+        let first = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| alpha | 正本語彙 |\n",
+                None,
+                &["alpha".into()],
+                "test/client",
+            )
+            .unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &first).unwrap();
+        let binding = crate::tag_vocabulary_source::read_binding(&conn)
+            .unwrap()
+            .unwrap();
+        let mut renamed = crate::note_store::read(&conn, &first).unwrap();
+        renamed.front.title = Some("名前を変えた語彙表".into());
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &first,
+            &renamed,
+            crate::note_store::WriteAttribution::new(
+                "改名",
+                "test: 改名",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
+        vault.flush_note_exports(&conn).unwrap();
+        vault
+            .propose_for_test(
+                "タグ運用 — 別の候補",
+                "## 語彙\n| wrong | 別の語彙 |\n",
+                None,
+                &["alpha".into()],
+                "test/client",
+            )
+            .unwrap();
+        let overview = vocabulary_overview(&conn).unwrap();
+        assert_eq!(overview.source_status, SourceStatus::Pinned);
+        assert_eq!(overview.glossary_note, Some(first));
+        assert_eq!(overview.source.unwrap().revision, binding.revision);
+        assert_eq!(
+            overview.entries.keys().cloned().collect::<Vec<_>>(),
+            vec!["alpha"]
+        );
+        validate(&conn, &["alpha".into()], false).unwrap();
+        assert!(validate(&conn, &["wrong".into()], false).is_err());
+    }
+
+    /// 2026-09-08: 破損DBの欠損・参照不可を空語彙/未指定と取り違えない。本文取得は修復用に残る。
+    #[test]
+    fn broken_pinned_source_is_visible_without_fallback() {
+        for missing in [true, false] {
+            let (_dir, vault, conn) = setup();
+            let id = vault
+                .propose_for_test(
+                    "タグ運用",
+                    "## 語彙\n| alpha | 正本語彙 |\n",
+                    None,
+                    &["alpha".into()],
+                    "test/client",
+                )
+                .unwrap();
+            crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &id).unwrap();
+            let other = vault
+                .propose_for_test(
+                    "タグ運用 — 代替候補",
+                    "## 語彙\n| alpha | 既存の使用語彙 |\n| wrong | 選んでいない語彙 |\n",
+                    None,
+                    &["alpha".into()],
+                    "test/client",
+                )
+                .unwrap();
+            if missing {
+                conn.execute("DELETE FROM notes WHERE id=?1", [&id])
+                    .unwrap();
+            } else {
+                let mut note = crate::note_store::read(&conn, &id).unwrap();
+                note.front.status = Some("deprecated".into());
+                conn.execute(
+                    "UPDATE notes SET document=?1,status='deprecated' WHERE id=?2",
+                    rusqlite::params![note.to_file_string().unwrap(), id],
+                )
+                .unwrap();
+            }
+            let overview = vocabulary_overview(&conn).unwrap();
+            assert_eq!(
+                overview.source_status,
+                if missing {
+                    SourceStatus::Missing
+                } else {
+                    SourceStatus::Unavailable
+                }
+            );
+            assert!(overview.source.is_some());
+            assert!(overview.entries.is_empty());
+            assert!(overview.enforce_vocabulary);
+            assert!(overview.glossary_note.is_none());
+            assert!(validate(&conn, &["alpha".into()], false).is_err());
+            assert!(validate(&conn, &["wrong".into()], true).is_err());
+            assert!(crate::note_store::read(&conn, &other).is_ok());
+            crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &other).unwrap();
+            assert_eq!(
+                vocabulary(&conn).unwrap(),
+                BTreeSet::from(["alpha".into(), "wrong".into()])
+            );
+        }
+    }
+
+    fn removal_fixture(vault: &Vault, conn: &Connection) -> String {
+        let source = vault
+            .propose_for_test(
+                "使用語彙を保持する正本",
+                "## 語彙\n| keep | 保持する語 |\n| old | 削除予定の語 |\n| unused | 未使用の語 |\n",
+                None,
+                &["keep".into()],
+                "test/client",
+            )
+            .unwrap();
+        crate::tag_vocabulary_source::pin_for_test(vault, conn, &source).unwrap();
+        source
+    }
+
+    /// 2026-09-08: 本文だけの更新でも、人間・未採用提案・廃止ノートの使用語を孤立させない。
+    #[test]
+    fn body_only_source_update_preserves_every_persisted_usage() {
+        for kind in ["agent", "human", "proposal", "deprecated"] {
+            let (_dir, vault, conn) = setup();
+            let source = removal_fixture(&vault, &conn);
+            let user = if kind == "proposal" {
+                crate::proposal_workflow::create(
+                    &vault,
+                    &conn,
+                    crate::proposal_workflow::ProposalInput {
+                        title: "語彙を使用する未採用提案".into(),
+                        problem: "問題".into(),
+                        proposal: "提案".into(),
+                        impact: "影響".into(),
+                        acceptance: "確認条件".into(),
+                        tags: vec!["old".into()],
+                        scope: "test/vocabulary-removal".into(),
+                    },
+                    "test/client",
+                )
+                .unwrap()
+                .ticket
+                .note_id
+            } else {
+                let id = vault
+                    .propose_for_test("語彙の使用先", "本文", None, &["old".into()], "test/client")
+                    .unwrap();
+                let mut note = crate::note_store::read(&conn, &id).unwrap();
+                if kind == "human" {
+                    note.front.origin = Some("human".into());
+                } else if kind == "deprecated" {
+                    note.front.status = Some("deprecated".into());
+                }
+                crate::note_store::put(
+                    &vault,
+                    &conn,
+                    &id,
+                    &note,
+                    crate::note_store::WriteAttribution::new(
+                        "fixture",
+                        "test: fixture",
+                        &crate::provenance::test_context(),
+                    ),
+                )
+                .unwrap();
+                vault.flush_note_exports(&conn).unwrap();
+                id
+            };
+            let before = crate::index::test_support::logical_snapshot(&vault.index_db_path());
+            let error = vault
+                .agent_update_note(
+                    &conn,
+                    crate::vault::NoteUpdate {
+                        id: &source,
+                        title: None,
+                        body: Some("## 語彙\n| keep | 保持する語 |\n"),
+                        description: None,
+                        tags: None,
+                        authority: None,
+                        relations: None,
+                        judgment: None,
+                        allow_new_tags: false,
+                        client: "test/client",
+                        actor: None,
+                        revision: None,
+                    },
+                )
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("使用中の語彙「old」"),
+                "{kind}: {error}"
+            );
+            assert!(!error.to_string().contains(&user), "{kind}: {error}");
+            assert_eq!(
+                before,
+                crate::index::test_support::logical_snapshot(&vault.index_db_path())
+            );
+        }
+    }
+
+    /// 2026-09-08: 正本自身のretagと表更新が同時でも、保存前の自己タグで一括変更を拒否しない。
+    #[test]
+    fn source_retag_uses_after_tags_and_keeps_unrelated_legacy_violations() {
+        let (_dir, vault, conn) = setup();
+        let source = removal_fixture(&vault, &conn);
+        let mut source_note = crate::note_store::read(&conn, &source).unwrap();
+        source_note.front.tags = vec!["old".into()];
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &source,
+            &source_note,
+            crate::note_store::WriteAttribution::new(
+                "fixture",
+                "test: fixture",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
+        vault.flush_note_exports(&conn).unwrap();
+        let mut front = Frontmatter::new_note("既存の語彙外タグ");
+        front.tags = vec!["old-extra".into()];
+        vault
+            .write_note_fixture(
+                "notes/legacy-unknown",
+                &Note {
+                    front,
+                    body: "本文".into(),
+                },
+            )
+            .unwrap();
+        assert!(
+            crate::index::import_markdown_snapshot(&vault, &conn)
+                .unwrap()
+                .degraded
+                .is_empty()
+        );
+
+        source_note.front.tags = vec!["keep".into()];
+        source_note.body = "## 語彙\n| keep | 保持する語 |\n".into();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &source,
+            &source_note,
+            crate::note_store::WriteAttribution::new(
+                "語彙更新",
+                "test: 語彙更新",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            registered_vocabulary(&conn).unwrap(),
+            BTreeSet::from(["keep".into()])
+        );
+        assert_eq!(
+            crate::note_store::read(&conn, "notes/legacy-unknown")
+                .unwrap()
+                .front
+                .tags,
+            vec!["old-extra"]
+        );
+    }
+
+    /// 2026-09-08: 空の正本を修復する本文更新は、既存の未知タグを理由に妨げない。
+    #[test]
+    fn empty_source_body_can_be_repaired() {
+        let (_dir, vault, conn) = setup();
+        let source = vault
+            .propose_for_test(
+                "空の語彙表",
+                "## 語彙\n",
+                None,
+                &["keep".into()],
+                "test/client",
+            )
+            .unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &source).unwrap();
+        let mut note = crate::note_store::read(&conn, &source).unwrap();
+        note.body = "## 語彙\n| keep | 復元した語彙 |\n".into();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &source,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "修復",
+                "test: 修復",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
+        validate(&conn, &["keep".into()], false).unwrap();
+    }
+
+    /// 2026-09-08: UID索引だけが正しくても、別identityのdocumentを正本へ採用しない。
+    #[test]
+    fn pinned_source_rejects_document_identity_mismatch() {
+        for legacy in [false, true] {
+            let (_dir, vault, conn) = setup();
+            let id = vault
+                .propose_for_test(
+                    "タグ運用",
+                    "## 語彙\n| alpha | 主題 |\n",
+                    None,
+                    &["alpha".into()],
+                    "test/client",
+                )
+                .unwrap();
+            crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &id).unwrap();
+            let mut note = crate::note_store::read(&conn, &id).unwrap();
+            if legacy {
+                note.front.note_uid = None;
+                note.front.authority = None;
+            } else {
+                note.front.note_uid = Some(crate::authority::NoteUid::new());
+            }
+            conn.execute(
+                "UPDATE notes SET document=?1 WHERE id=?2",
+                rusqlite::params![note.to_file_string().unwrap(), id],
+            )
+            .unwrap();
+            assert!(vocabulary_overview(&conn).is_err());
+            assert!(validate(&conn, &["alpha".into()], true).is_err());
+        }
     }
 }

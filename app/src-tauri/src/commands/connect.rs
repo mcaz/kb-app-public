@@ -1,6 +1,9 @@
 //! 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)と、AI の起動。
 
 use kb_core::client_binding::{self, ClientBinding};
+use kb_core::client_registration::{
+    RegistrationClient, RegistrationRepair, RegistrationState, RegistrationStatus,
+};
 use kb_core::client_surface::ClientSurface;
 use kb_core::connect::DesktopStatus;
 use kb_core::search::stats;
@@ -37,6 +40,101 @@ pub struct ConnectState {
     sync_error: Option<String>,
     sync_error_kind: Option<kb_core::backup::BackupFailureKind>,
     smart_search: SmartSearchState,
+}
+
+#[derive(Clone, Copy, Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientBindingStatus {
+    Matched,
+    Missing,
+    Mismatch,
+    Unavailable,
+}
+
+#[derive(Serialize, specta::Type)]
+pub struct ClientRegistrationView {
+    registration: RegistrationStatus,
+    binding: ClientBindingStatus,
+}
+
+#[derive(Serialize, specta::Type)]
+pub struct ClientRegistrations {
+    vault_name: String,
+    workspace_id: String,
+    clients: Vec<ClientRegistrationView>,
+}
+
+fn registration_surface(client: RegistrationClient) -> ClientSurface {
+    match client {
+        RegistrationClient::Codex => ClientSurface::CodexCli,
+        RegistrationClient::ClaudeCode => ClientSurface::ClaudeCode,
+        RegistrationClient::ClaudeDesktop => ClientSurface::ClaudeDesktop,
+    }
+}
+
+fn registration_binding_status(
+    client: RegistrationClient,
+    expected: &ClientBinding,
+) -> ClientBindingStatus {
+    match client_binding::load(registration_surface(client)) {
+        Ok(Some(actual)) if binding_matches(&actual, expected) => ClientBindingStatus::Matched,
+        Ok(Some(_)) => ClientBindingStatus::Mismatch,
+        Ok(None) => ClientBindingStatus::Missing,
+        Err(_) => ClientBindingStatus::Unavailable,
+    }
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn connect_client_registrations(state: State<'_, AppState>) -> AppResult<ClientRegistrations> {
+    let binding = selected_client_binding(&state)?;
+    let exe = std::env::current_exe()?;
+    let clients = [
+        RegistrationClient::Codex,
+        RegistrationClient::ClaudeCode,
+        RegistrationClient::ClaudeDesktop,
+    ]
+    .into_iter()
+    .map(|client| ClientRegistrationView {
+        registration: kb_core::client_registration::status(client, &exe, &binding.vault_name),
+        binding: registration_binding_status(client, &binding),
+    })
+    .collect();
+    Ok(ClientRegistrations {
+        vault_name: binding.vault_name,
+        workspace_id: binding.workspace_id,
+        clients,
+    })
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn connect_register_client(
+    state: State<'_, AppState>,
+    client: RegistrationClient,
+) -> AppResult<RegistrationRepair> {
+    let binding = selected_client_binding(&state)?;
+    let exe = std::env::current_exe()?;
+    let repaired = kb_core::client_registration::repair(client, &exe, &binding.vault_name)
+        .map_err(AppError::configuration)?;
+    if repaired.status.state != RegistrationState::Registered {
+        return Err(AppError::configuration(anyhow::anyhow!(
+            "client registration did not pass verification"
+        )));
+    }
+    // 設定更新とbindingは別書込み。後半の失敗は成功にせず、再検査で修復経路を残す。
+    client_binding::bind(registration_surface(client), &binding)?;
+    Ok(repaired)
+}
+
+#[tauri::command(async)]
+#[specta::specta]
+pub fn connect_client_diagnostics(
+    state: State<'_, AppState>,
+) -> AppResult<kb_core::client_diagnostics::ClientDiagnosticsReport> {
+    state.with_db(|vault, conn, _| {
+        kb_core::client_diagnostics::read(vault, conn).map_err(AppError::index)
+    })
 }
 
 /// かしこい検索の進み具合。数分かかるので画面へ流す。

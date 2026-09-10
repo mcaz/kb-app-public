@@ -30,6 +30,27 @@ AIがwrite MCPの`create_proposal`で問題・提案・影響・完了条件を�
 承認後の実装・外部公開・merge・配備は自動実行しない。
 詳しくは[提案チケットの設計](docs/adr/0019-proposal-workflow.md)を参照。
 
+## タグ語彙の確認と一括変更
+
+AIはread MCPの`tag_vocabulary`で語彙の指定状態と候補を確認し、`get`で運用を読む。
+未指定ならwrite MCPの`set_tag_vocabulary_source`でworkspaceと不変のnote_uidへ正本を固定する。
+改名や似た題名の追加で参照先を変えず、変更は現在版の一致を必須にする。指定はGit復元用データにも残る。
+既存語を優先して増殖を抑えながら、語彙の追加・統合・削除までAIが判断する。タグごとの本人確認は
+必須にせず、本人の明示的な訂正に従う。
+maintenance MCPの`plan_tag_vocabulary_change`で追加・説明変更・削除・統合/改名を計画し、
+件数・最大20件の例・変更を妨げる条件を確認する。write MCPの`apply_tag_vocabulary_change`は
+計画を再照合し、語彙と利用ノート・履歴を一括保存する。途中失敗は全件未反映とし、
+保存後の書出し失敗は保存済み・出力待ちとして伝える。
+read MCPの`list_tag_vocabulary_changes`と`get_tag_vocabulary_change`で履歴をページ取得できる。
+保存済み変更を戻すときは`plan_tag_vocabulary_rollback`で計画し、`rollback_tag_vocabulary_change`で
+一括復元する。対象が変更直後から変わっていないことを検査し、元の履歴を保ったまま復元記録を残す。
+read MCPの`get_tag_vocabulary_stats`は適用・復元の件数、延べノート変更数、最近の実行と出力待ちを返す。
+判断品質や失敗率は未計測であり、保存件数から推定しない。
+plan・履歴・集計は読取り専用で、全ノートの原文を応答へ含めない。専用GUIはまだない。
+通常書込みの未知タグ拒否と、`allow_new_tags`をMCPで受け付けない制約は維持する。
+使用中の語を通常の本文更新・正本切替だけで削除する操作も拒否する。
+新規KB・空表・計画の適用と保存結果の確認は[タグ語彙の更新手順](docs/tag-vocabulary.md)を参照。
+
 ## Claude Desktop の接続
 
 インストールしたkb-appの「繋ぐ」画面から接続する。アプリ自身の実行ファイルと現在のVault名を使い、

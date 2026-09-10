@@ -69,7 +69,7 @@ describe("tabTitle", () => {
     expect(titles()).toEqual(["alpha", "beta"]);
   });
 
-  it.each(["home", "files", "graph", "proposals"] as const)(
+  it.each(["home", "files", "tags", "graph", "proposals"] as const)(
     "%sでは保持中のノート名ではなく画面名を使う",
     (view) => {
       useSession.getState().openNote("notes/alpha");

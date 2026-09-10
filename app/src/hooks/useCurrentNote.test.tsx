@@ -133,6 +133,7 @@ describe("useCurrentNote", () => {
         body: "読み続けられる本文",
         status: "stable",
         origin: "agent",
+        provenance_line: null,
         tags: [],
         note_uid: null,
         authority: null,

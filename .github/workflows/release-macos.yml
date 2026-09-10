@@ -1,0 +1,128 @@
+name: macOS候補配布物
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Cargo・npm・Tauriにcommit済みのX.Y.Z
+        required: true
+        type: string
+      source_commit:
+        description: 現在のmain HEADの完全な40桁SHA
+        required: true
+        type: string
+      target:
+        description: CPU別に候補を生成する
+        required: true
+        type: choice
+        options: [aarch64-apple-darwin, x86_64-apple-darwin]
+      minimum_system_version:
+        description: 実機受入とは別の、明示的なmacOS build下限
+        required: true
+        type: string
+      mode:
+        description: releaseは署名・公証資格を使うが公開はしない
+        required: true
+        type: choice
+        options: [candidate, release]
+      update_from_version:
+        description: 更新配信設定済みreleaseの検査元X.Y.Z（共存受入の代用ではない）
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-candidate-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    # PRや別refから資格付きbuildを開始しない。任意commitをcheckoutする入力にも使わない。
+    if: github.repository == 'mcaz/kb-app' && github.ref == 'refs/heads/main' && inputs.source_commit == github.sha
+    runs-on: ${{ inputs.target == 'aarch64-apple-darwin' && 'macos-15' || 'macos-15-intel' }}
+    timeout-minutes: 90
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_COMMIT: ${{ inputs.source_commit }}
+      RELEASE_TARGET: ${{ inputs.target }}
+      RELEASE_MINIMUM_OS: ${{ inputs.minimum_system_version }}
+      RELEASE_MODE: ${{ inputs.mode }}
+      KB_GITHUB_CLIENT_ID: Ov23li1xyWYmAMscYlj8
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/macos-release
+      MACOSX_DEPLOYMENT_TARGET: ${{ inputs.minimum_system_version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target/macos-release
+      - run: npm --prefix app ci
+      - name: 配布判定を合成fixtureで検査
+        run: node --test tests/macOS-release/release.test.mjs
+      - name: 候補計画とbuild（資格なし）
+        if: inputs.mode == 'candidate'
+        run: bash scripts/prepare-macos-release.sh
+      - name: 署名・公証用の一時資格を準備
+        if: inputs.mode == 'release'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          for (const name of ['APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD', 'KEYCHAIN_PASSWORD', 'APPLE_API_PRIVATE_KEY']) {
+            if (!process.env[name]) throw new Error(`${name} が未設定です`);
+          }
+          writeFileSync(`${process.env.RUNNER_TEMP}/release-cert.p12`, Buffer.from(process.env.APPLE_CERTIFICATE, 'base64'), { mode: 0o600 });
+          writeFileSync(`${process.env.RUNNER_TEMP}/release-api.p8`, process.env.APPLE_API_PRIVATE_KEY, { mode: 0o600 });
+          JS
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db" >/dev/null 2>&1
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db" >/dev/null 2>&1
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/release.keychain-db" >/dev/null 2>&1
+          security import "$RUNNER_TEMP/release-cert.p12" -k "$RUNNER_TEMP/release.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null 2>&1
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db" >/dev/null 2>&1
+          security list-keychains -d user -s "$RUNNER_TEMP/release.keychain-db" >/dev/null 2>&1
+      - name: 署名・公証候補をbuild（公開しない）
+        if: inputs.mode == 'release'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_UPDATE_FROM_VERSION: ${{ inputs.update_from_version }}
+        run: |
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/release-api.p8"
+          bash scripts/prepare-macos-release.sh
+      - name: 一時資格を削除
+        if: always() && inputs.mode == 'release'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" >/dev/null 2>&1 || true
+          node --input-type=module <<'JS'
+          import { rmSync } from 'node:fs';
+          for (const name of ['release-cert.p12', 'release-api.p8']) rmSync(`${process.env.RUNNER_TEMP}/${name}`, { force: true });
+          JS
+      - name: 候補と検証manifestのみ保持
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kb-app-${{ inputs.version }}-${{ inputs.target }}-${{ inputs.mode }}-${{ github.sha }}
+          path: release-output/
+          if-no-files-found: error
+          retention-days: 14

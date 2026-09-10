@@ -1,5 +1,5 @@
 //! 発話ごとの全件plannerを避ける派生キャッシュ。正本変更はDB triggerで失効させる。
-//! checkpointの受入やexecutorの再照合には使わない。期限と受入stateは毎回読み直す。
+//! checkpointの受入やexecutorの再照合には使わない。期限・受入state・Artifact変更印は毎回読み直す。
 
 use anyhow::{Result, ensure};
 use rusqlite::Connection;
@@ -180,6 +180,7 @@ pub(crate) fn read(vault: &Vault, conn: &Connection) -> Result<Option<CadenceDig
     let Some((checkpoint, lineage)) = cached(conn)? else {
         return Ok(None);
     };
+    // Artifactだけの昇格・rollbackでnotes_revisionが不変でも、変更印はcache外で確認する。
     let status = crate::distillation_cadence::status_for_checkpoint(vault, &checkpoint)?;
     Ok(Some(from_status(status, lineage)?))
 }
@@ -211,6 +212,73 @@ mod tests {
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let conn = crate::index::open_db(&vault).unwrap();
         (dir, vault, conn)
+    }
+
+    /// 2026-09-08: aliasだけの変更はplannerのcacheを失効させず、hookへ要監査を返す。
+    #[test]
+    fn metadata_changes_make_cached_status_due_without_invalidating_note_revision() {
+        let (_dir, vault, conn) = setup();
+        let accepted = crate::distillation_cadence::run(
+            &vault,
+            &conn,
+            crate::distillation_cadence::DistillationCadenceRunArguments::default(),
+        )
+        .unwrap();
+        assert!(accepted.accepted);
+        refresh(&conn).unwrap();
+        let revision_before = note_revision(&conn).unwrap();
+        let cache_before = cached(&conn).unwrap();
+        let before = read(&vault, &conn).unwrap().unwrap();
+        assert!(before.status.due_lanes().is_empty());
+        let root = vault.root.join(crate::ledger::DIR);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("aliases.json"), "{}").unwrap();
+        let changed = read(&vault, &conn).unwrap().unwrap();
+        assert_eq!(
+            changed.status.due_lanes(),
+            vec![crate::distillation_cadence::DistillationCadenceLane::AfterWrite]
+        );
+        assert_eq!(
+            changed.status.current_checkpoint_id,
+            before.status.current_checkpoint_id
+        );
+        assert_ne!(changed.digest, before.digest);
+        assert_eq!(note_revision(&conn).unwrap(), revision_before);
+        assert_eq!(cached(&conn).unwrap(), cache_before);
+        std::fs::remove_file(root.join("aliases.json")).unwrap();
+        assert!(
+            read(&vault, &conn)
+                .unwrap()
+                .unwrap()
+                .status
+                .due_lanes()
+                .is_empty()
+        );
+        let reference = crate::artifact::ArtifactRef::new(
+            &crate::workspace::stored_workspace_id(&vault).unwrap(),
+            "fixture".parse().unwrap(),
+            crate::artifact::ArtifactId::new(1),
+        );
+        std::fs::create_dir_all(root.join("refs")).unwrap();
+        std::fs::write(
+            root.join("refs/fixture.json"),
+            serde_json::to_vec(&reference).unwrap(),
+        )
+        .unwrap();
+        let ref_changed = read(&vault, &conn).unwrap().unwrap();
+        assert_eq!(
+            ref_changed.status.due_lanes(),
+            vec![crate::distillation_cadence::DistillationCadenceLane::AfterWrite]
+        );
+        assert_eq!(
+            ref_changed.status.current_checkpoint_id,
+            before.status.current_checkpoint_id
+        );
+        assert_eq!(note_revision(&conn).unwrap(), revision_before);
+        assert_eq!(cached(&conn).unwrap(), cache_before);
+        std::fs::write(root.join("aliases.json"), "{broken").unwrap();
+        assert!(read(&vault, &conn).is_err());
+        assert_eq!(cached(&conn).unwrap(), cache_before);
     }
 
     /// 2026-09-08: 起動済みGUIは別MCP接続の保存を、接続を開き直さず検知する。

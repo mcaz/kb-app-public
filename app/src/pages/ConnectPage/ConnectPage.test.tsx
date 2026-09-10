@@ -22,6 +22,9 @@ vi.mock(import("@/lib/api"), async (importOriginal) => {
     api: {
       ...actual.api,
       connectState: vi.fn(),
+      connectClientRegistrations: vi.fn(),
+      connectClientDiagnostics: vi.fn(),
+      settingsAiGuardStatus: vi.fn(),
       githubAuthState: vi.fn(),
       inspectRuntimeStorage: vi.fn(),
       planRuntimeRecovery: vi.fn(),
@@ -35,7 +38,7 @@ vi.mock("sonner", () => ({
 
 const connected: ConnectState = {
   desktop: "connected",
-  backup: { remote: null, pending: 0 },
+  backup: { remote: "https://github.com/example/notes.git", pending: 0 },
   sync_error: null,
   sync_error_kind: null,
   smart_search: { state: "not_installed", embedded: 0, total: 12 },
@@ -137,6 +140,33 @@ beforeEach(() => {
     configured: false,
     signed_in: false,
     account_login: null,
+  });
+  vi.mocked(api.connectClientRegistrations).mockResolvedValue({
+    vault_name: "test",
+    workspace_id: "test-workspace",
+    clients: [],
+  });
+  vi.mocked(api.connectClientDiagnostics).mockResolvedValue({
+    observed_at_ms: 0,
+    window_days: 30,
+    os: "macos",
+    workspace: {
+      schema: 1,
+      workspace_id: "test-workspace",
+      vocabulary: {
+        source_status: "unconfigured",
+        source_note_uid: null,
+        source_revision: null,
+        source_document_sha256: null,
+      },
+    },
+    clients: [],
+  });
+  vi.mocked(api.settingsAiGuardStatus).mockResolvedValue({
+    ready: false,
+    codex: "missing",
+    claude: "missing",
+    guarded_paths: [],
   });
 });
 afterEach(() => {

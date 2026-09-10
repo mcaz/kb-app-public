@@ -22,12 +22,12 @@
   },
   "ai": {
     "name": "AI アプリ(Claude)",
-    "desc": "会話の中からあなたの知識ベースが引かれ、会話で得た知見が下書きとして届くようになります。",
-    "connected": "接続済み",
+    "desc": "AIから知識ベースを検索・記録するための接続を設定します。登録と、実際の利用の確認を分けて表示します。",
+    "connected": "登録済み",
     "notFound": "Claude Desktop が見つかりません",
     "notConnected": "未接続",
     "connect": "接続する",
-    "done": "接続しました。Claude Desktop を再起動すると使えます",
+    "done": "接続設定を保存しました。Claude Desktop を再起動し、kb-app MCPを再接続してください",
     "failed": "接続できませんでした: {{error}}"
   },
   "smartSearch": {
@@ -58,5 +58,106 @@
     "connect": "接続する",
     "needUrl": "リポジトリの URL を入れてください",
     "done": "バックアップ先を設定し、初回の控えを送りました"
+  },
+  "clients": {
+    "title": "AIアプリの登録と利用状況",
+    "description": "利用するAIアプリを登録し、設定と観測結果を確認します。",
+    "selectedKnowledgeBase": "接続先の知識ベース: {{name}}",
+    "recheck": "すべて再検査",
+    "registrationLoadFailed": "登録を確認できませんでした: {{error}}",
+    "diagnosticsLoadFailed": "利用状況の一部を確認できませんでした: {{error}}",
+    "previousCheck": "前回の確認結果",
+    "unverified": "未確認",
+    "names": {
+      "codex": "Codex",
+      "claude_code": "Claude Code",
+      "claude_desktop": "Claude Desktop"
+    },
+    "registrationStates": {
+      "registered": "登録済み",
+      "missing": "未登録",
+      "needs_repair": "修復が必要",
+      "blocked": "設定の確認が必要",
+      "unsupported": "このOSでは登録非対応"
+    },
+    "binding": "知識ベースの照合",
+    "bindingStates": {
+      "matched": "選択中の知識ベースと一致",
+      "missing": "照合設定なし",
+      "mismatch": "別の知識ベースの設定",
+      "unavailable": "照合設定を確認できません"
+    },
+    "protection": "直接操作の保護",
+    "protectionNotApplicable": "対象外（ローカルhookなし）",
+    "guardStates": {
+      "enforced": "保護設定あり",
+      "development": "開発用の許可設定",
+      "missing": "保護設定なし",
+      "conflict": "設定に競合あり",
+      "unsupported": "このOSでは非対応",
+      "outdated": "保護設定の更新が必要"
+    },
+    "ruleOutput": "規則の出力記録",
+    "outputStates": {
+      "not_observed": "規則版を確認できる出力記録なし",
+      "current_rules": "最後の出力が現版と一致",
+      "different_rules": "最後の出力が現版と異なる",
+      "stdout_failed": "出力に失敗",
+      "prepared_only": "準備のみ記録（出力未確認）",
+      "not_applicable": "対象外（ローカルhookなし）",
+      "vocabulary_unverified": "語彙正本は未確認",
+      "concurrent_outputs": "同時刻の出力が混在・順序未確認"
+    },
+    "receipt": "AIによる規則の受信",
+    "runningVersion": "実行中のAIアプリの版",
+    "operations": "保存・更新の応答",
+    "operationCounts": "過去{{days}}日: 保存{{proposed}}件・更新{{updated}}件・失敗{{errors}}件",
+    "issues": {
+      "missing_config": "AIアプリの設定ファイルがありません。",
+      "missing_server": "用途別MCPの登録が不足しています。",
+      "legacy_registration": "旧形式のMCP登録があります。",
+      "executable_mismatch": "別の実行ファイルが登録されています。",
+      "vault_mismatch": "別の知識ベースが登録されています。",
+      "client_mismatch": "別のAIアプリ向けの登録です。",
+      "arguments_mismatch": "MCPの起動設定が現在の形式と異なります。",
+      "disabled_server": "MCPの登録が無効になっています。",
+      "invalid_config": "設定の形式を読み取れません。AIアプリ側で設定を確認してください。",
+      "unreadable_config": "設定ファイルを読み取れません。ファイルの権限を確認してください。",
+      "managed_policy_conflict": "管理者の設定と競合しています。管理者に設定を確認してください。",
+      "managed_policy_unverified": "管理者の設定の影響を確認できません。管理者に設定を確認してください。",
+      "scoped_override": "プロジェクトなどの設定による上書きがあります。AIアプリ側で該当設定を確認してください。",
+      "unsafe_path": "安全に更新できない設定先です。AIアプリ側で設定を確認してください。",
+      "unsupported_platform": "このOSでの自動登録・修復は未対応です。",
+      "tool_policy_restriction": "利用できるMCPツールが設定で制限されています。AIアプリ側で必要なツールの許可を確認してください。"
+    },
+    "protectionHint": "保護設定は「KBの利用」から確認・設定できます。",
+    "register": "登録する",
+    "repair": "登録を修復する",
+    "registering": "登録を保存しています…",
+    "registered": "登録を保存しました。AIアプリを再起動し、MCPを再接続してください。",
+    "reconnect": "{{client}}を再起動し、kb-app MCPを再接続してから「すべて再検査」を押してください。再検査だけでは再接続の完了を確認できません。",
+    "details": "規則の版と出力日時",
+    "serverVersion": "診断したkb-appの版",
+    "contractVersion": "共通規約の識別値",
+    "instructionsVersion": "AI別指示の識別値",
+    "lastOutput": "最後の出力記録",
+    "evidenceNote": "登録済みは設定の一致を表します。出力記録は最後のhook出力、保存・更新件数はMCPの応答記録です。どちらも現在の接続、規則の受信、AIの遵守を保証しません。プロジェクトや起動時の一時設定による上書きは、確認できる範囲に限り検出します。",
+    "knowledgeBaseDetails": "知識ベース・語彙正本・OSの照合情報",
+    "workspaceIdentity": "知識ベースの識別値",
+    "vocabularySource": "語彙正本",
+    "vocabularyStates": {
+      "unconfigured": "未指定",
+      "pinned": "指定済み・確認できました",
+      "missing": "指定された正本がありません",
+      "unavailable": "指定された正本を確認できません"
+    },
+    "vocabularyRevision": "語彙正本の版",
+    "lastCheck": "診断日時",
+    "os": "診断したOS",
+    "capabilities": "MCPの用途",
+    "capabilitySummary": "検索・保存・管理を別々に登録",
+    "supportedOs": "自動登録・保護設定はmacOSに対応しています。他のOSの完成状況は個別に確認してください。",
+    "vocabularyNote": "語彙正本のノート識別値",
+    "vocabularyDocument": "語彙正本の本文識別値"
   }
 }

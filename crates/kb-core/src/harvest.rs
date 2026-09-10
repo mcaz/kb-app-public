@@ -211,7 +211,7 @@ mod tests {
         }
     }
     fn facts() -> serde_json::Value {
-        serde_json::json!({"schema":"kb-app.cadence-digest/v1","digest":"a".repeat(64),"records_without_canonical_lineage":2,"status":{"schema":"kb-app.distillation-cadence-status/v1","checked_at":"2026-09-05T00:00:00Z","state_exists":false,"current_checkpoint_id":"fixture","accepted_checkpoint_id":null,"lanes":[],"last_failure":null}})
+        serde_json::json!({"schema":"kb-app.cadence-digest/v1","digest":"a".repeat(64),"records_without_canonical_lineage":2,"status":{"schema":"kb-app.distillation-cadence-status/v1","checked_at":"2026-09-05T00:00:00Z","state_exists":false,"current_checkpoint_id":"fixture","accepted_checkpoint_id":null,"current_artifact_stamp":null,"accepted_artifact_stamp":null,"lanes":[],"last_failure":null}})
     }
     #[test]
     fn policy_precedence_is_kb_then_environment_then_setting() {

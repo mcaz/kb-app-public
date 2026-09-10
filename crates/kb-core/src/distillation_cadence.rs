@@ -1,7 +1,7 @@
 //! 継続蒸留checkpointを端末ローカルに保持し、監査深度をcadenceで選ぶ。
 //!
 //! 時間で意味変更を自動実行しない。ここが永続化するのは最後に受入gateを通った
-//! checkpointと実行時刻だけで、semantic executorのsnapshot再照合は省略しない。
+//! checkpoint・Artifact変更印・実行時刻で、semantic executorのsnapshot再照合は省略しない。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -104,6 +104,9 @@ pub struct DistillationCadenceFailure {
 struct DistillationCadenceState {
     schema: String,
     checkpoint: Option<DistillationCheckpoint>,
+    // 2026-09-08: 旧v1は変更印を持たないため、一度再監査する。旧binaryへの逆互換は持たない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_artifact_stamp: Option<String>,
     completed_at: CompletedAt,
     last_failure: Option<DistillationCadenceFailure>,
 }
@@ -113,6 +116,7 @@ impl Default for DistillationCadenceState {
         Self {
             schema: CADENCE_STATE_SCHEMA.to_string(),
             checkpoint: None,
+            accepted_artifact_stamp: None,
             completed_at: CompletedAt::default(),
             last_failure: None,
         }
@@ -134,6 +138,11 @@ pub struct DistillationCadenceStatus {
     pub state_exists: bool,
     pub current_checkpoint_id: String,
     pub accepted_checkpoint_id: Option<String>,
+    // 保存済みhook/ledgerに含まれる旧statusを引き続き読めるよう欠落を許す。
+    #[serde(default)]
+    pub current_artifact_stamp: Option<String>,
+    #[serde(default)]
+    pub accepted_artifact_stamp: Option<String>,
     pub lanes: Vec<DistillationCadenceLaneStatus>,
     pub last_failure: Option<DistillationCadenceFailure>,
 }
@@ -176,7 +185,7 @@ pub struct DistillationCadenceRunReport {
 
 pub fn status(vault: &Vault, conn: &Connection) -> Result<DistillationCadenceStatus> {
     let paths = StatePaths::for_vault(vault)?;
-    status_at_path(conn, &paths.state, OffsetDateTime::now_utc())
+    status_at_path(vault, conn, &paths.state, OffsetDateTime::now_utc())
 }
 
 /// 書込後の判断支援では、plannerと同じsnapshotから期限を計算して全件走査の重複を避ける。
@@ -188,6 +197,7 @@ pub(crate) fn status_for_plan(
     let (state, state_exists) = load_state(&paths.state)?;
     build_status(
         &DistillationCheckpoint::from_plan(plan).checkpoint_id,
+        Some(&crate::artifact_metadata::stamp(vault)?),
         &state,
         state_exists,
         OffsetDateTime::now_utc(),
@@ -209,10 +219,17 @@ pub(crate) fn status_for_checkpoint(
 ) -> Result<DistillationCadenceStatus> {
     let paths = StatePaths::for_vault(vault)?;
     let (state, exists) = load_state(&paths.state)?;
-    build_status(checkpoint, &state, exists, OffsetDateTime::now_utc())
+    build_status(
+        checkpoint,
+        Some(&crate::artifact_metadata::stamp(vault)?),
+        &state,
+        exists,
+        OffsetDateTime::now_utc(),
+    )
 }
 
 fn status_at_path(
+    vault: &Vault,
     conn: &Connection,
     state_path: &Path,
     now: OffsetDateTime,
@@ -220,7 +237,13 @@ fn status_at_path(
     let (state, state_exists) = load_state(state_path)?;
     let plan = crate::distillation::plan(conn)?;
     let current = DistillationCheckpoint::from_plan(&plan);
-    build_status(&current.checkpoint_id, &state, state_exists, now)
+    build_status(
+        &current.checkpoint_id,
+        Some(&crate::artifact_metadata::stamp(vault)?),
+        &state,
+        state_exists,
+        now,
+    )
 }
 
 fn run_at_paths(
@@ -230,6 +253,28 @@ fn run_at_paths(
     now: OffsetDateTime,
     paths: &StatePaths,
 ) -> Result<DistillationCadenceRunReport> {
+    run_at_paths_with_audit(
+        vault,
+        conn,
+        arguments,
+        now,
+        paths,
+        crate::distillation_audit::audit,
+    )
+}
+
+fn run_at_paths_with_audit(
+    vault: &Vault,
+    conn: &Connection,
+    arguments: DistillationCadenceRunArguments,
+    now: OffsetDateTime,
+    paths: &StatePaths,
+    audit: impl FnOnce(
+        &Vault,
+        &Connection,
+        Option<&DistillationCheckpoint>,
+    ) -> Result<DistillationAuditReport>,
+) -> Result<DistillationCadenceRunReport> {
     fs::create_dir_all(&paths.directory).context("蒸留cadence状態directoryを作れない")?;
     let lock = fs::File::create(&paths.lock).context("蒸留cadence lockを作れない")?;
     lock.lock_exclusive()
@@ -238,7 +283,14 @@ fn run_at_paths(
     let (mut state, state_exists) = load_state(&paths.state)?;
     let plan = crate::distillation::plan(conn)?;
     let current = DistillationCheckpoint::from_plan(&plan);
-    let status_before = build_status(&current.checkpoint_id, &state, state_exists, now)?;
+    let before_stamp = crate::artifact_metadata::stamp(vault)?;
+    let status_before = build_status(
+        &current.checkpoint_id,
+        Some(&before_stamp),
+        &state,
+        state_exists,
+        now,
+    )?;
     let selected_lanes = arguments
         .lane
         .map(|lane| vec![lane])
@@ -258,11 +310,23 @@ fn run_at_paths(
         });
     }
 
-    let report = crate::distillation_audit::audit(vault, conn, state.checkpoint.as_ref())?;
+    let mut report = audit(vault, conn, state.checkpoint.as_ref())?;
+    let after_stamp = crate::artifact_metadata::stamp(vault);
+    let stable = after_stamp
+        .as_ref()
+        .is_ok_and(|stamp| stamp == &before_stamp);
+    let detail = match &after_stamp {
+        Ok(_) if stable => None,
+        Ok(_) => Some("監査中にArtifactメタデータが変わったため、変更印とcheckpointを受け入れなかった。再監査が必要。".into()),
+        Err(error) => Some(format!("監査後のArtifactメタデータを確認できず、変更印とcheckpointを受け入れなかった。再監査が必要: {error:#}")),
+    };
+    crate::distillation_audit::check_artifact_metadata(&mut report, stable, detail)?;
+    let after_stamp = after_stamp.ok();
     let review_scope = build_review_scope(&report, &selected_lanes);
     let at = format_at(now)?;
     if report.gate.passed {
         state.checkpoint = Some(report.checkpoint.clone());
+        state.accepted_artifact_stamp = Some(before_stamp);
         for lane in &selected_lanes {
             state.completed_at.set(*lane, &at);
         }
@@ -282,7 +346,13 @@ fn run_at_paths(
         });
     }
     save_state(&paths.state, &state)?;
-    let status_after = build_status(&report.checkpoint.checkpoint_id, &state, true, now)?;
+    let status_after = build_status(
+        &report.checkpoint.checkpoint_id,
+        after_stamp.as_deref(),
+        &state,
+        true,
+        now,
+    )?;
     let accepted = report.gate.passed;
 
     Ok(DistillationCadenceRunReport {
@@ -300,6 +370,7 @@ fn run_at_paths(
 
 fn build_status(
     current: &str,
+    current_artifact_stamp: Option<&str>,
     state: &DistillationCadenceState,
     state_exists: bool,
     now: OffsetDateTime,
@@ -307,7 +378,9 @@ fn build_status(
     let changed = state
         .checkpoint
         .as_ref()
-        .is_none_or(|accepted| accepted.checkpoint_id != current);
+        .is_none_or(|accepted| accepted.checkpoint_id != current)
+        || current_artifact_stamp.is_none()
+        || state.accepted_artifact_stamp.as_deref() != current_artifact_stamp;
     let mut lanes = Vec::with_capacity(DistillationCadenceLane::ALL.len());
     for lane in DistillationCadenceLane::ALL {
         if lane == DistillationCadenceLane::AfterWrite {
@@ -341,6 +414,8 @@ fn build_status(
             .checkpoint
             .as_ref()
             .map(|checkpoint| checkpoint.checkpoint_id.clone()),
+        current_artifact_stamp: current_artifact_stamp.map(str::to_owned),
+        accepted_artifact_stamp: state.accepted_artifact_stamp.clone(),
         lanes,
         last_failure: state.last_failure.clone(),
     })
@@ -433,6 +508,17 @@ fn validate_state(state: &DistillationCadenceState) -> Result<()> {
     if let Some(checkpoint) = &state.checkpoint {
         crate::distillation_audit::validate_checkpoint(checkpoint)?;
     }
+    if let Some(stamp) = &state.accepted_artifact_stamp {
+        let valid = stamp.strip_prefix("sha256:").is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+        if !valid {
+            bail!("蒸留cadenceのArtifact変更印が不正")
+        }
+    }
     for at in [
         state.completed_at.daily.as_deref(),
         state.completed_at.weekly.as_deref(),
@@ -506,7 +592,7 @@ pub fn render_markdown(report: &DistillationCadenceRunReport) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let mut output = format!(
-        "# Distillation cadence\n\n- executed: {}\n- accepted: {}\n- lanes: {}\n- review scope: {}\n",
+        "# Distillation cadence\n\n- executed: {}\n- accepted: {}\n- lanes: {}\n- review scope: {}\n- artifact current: `{}`\n- artifact accepted: `{}`\n",
         report.executed,
         report.accepted,
         if selected.is_empty() {
@@ -515,12 +601,33 @@ pub fn render_markdown(report: &DistillationCadenceRunReport) -> String {
             &selected
         },
         report.review_scope.len(),
+        report
+            .status_after
+            .current_artifact_stamp
+            .as_deref()
+            .unwrap_or("unverified"),
+        report
+            .status_after
+            .accepted_artifact_stamp
+            .as_deref()
+            .unwrap_or("none"),
     );
     if let Some(audit) = &report.audit {
         output.push_str(&format!(
             "- audit: `{}`\n- checkpoint: `{}`\n",
             audit.audit_id, audit.checkpoint.checkpoint_id
         ));
+        if let Some(check) = audit.gate.checks.iter().find(|check| {
+            check.code == DistillationAuditCheckCode::ArtifactMetadataStable && !check.passed
+        }) {
+            output.push_str(&format!(
+                "- artifact_metadata_stable: false — {}\n",
+                check
+                    .detail
+                    .as_deref()
+                    .unwrap_or("Artifactメタデータが未確認のため再監査が必要")
+            ));
+        }
     }
     output.push_str("\n## Review scope\n\n");
     if report.review_scope.is_empty() {
@@ -579,6 +686,11 @@ mod tests {
         assert!(report.accepted);
         assert_eq!(report.selected_lanes, DistillationCadenceLane::ALL);
         assert!(report.status_after.due_lanes().is_empty());
+        assert_eq!(
+            report.status_after.current_artifact_stamp,
+            report.status_after.accepted_artifact_stamp
+        );
+        assert_eq!(report.audit.as_ref().unwrap().gate.checks.len(), 7);
         assert!(paths.state.is_file());
     }
 
@@ -594,9 +706,9 @@ mod tests {
         )
         .unwrap();
 
-        let daily = status_at_path(&conn, &paths.state, at(101)).unwrap();
+        let daily = status_at_path(&vault, &conn, &paths.state, at(101)).unwrap();
         assert_eq!(daily.due_lanes(), vec![DistillationCadenceLane::Daily]);
-        let weekly = status_at_path(&conn, &paths.state, at(107)).unwrap();
+        let weekly = status_at_path(&vault, &conn, &paths.state, at(107)).unwrap();
         assert_eq!(
             weekly.due_lanes(),
             vec![
@@ -604,7 +716,7 @@ mod tests {
                 DistillationCadenceLane::Weekly
             ]
         );
-        let monthly = status_at_path(&conn, &paths.state, at(130)).unwrap();
+        let monthly = status_at_path(&vault, &conn, &paths.state, at(130)).unwrap();
         assert_eq!(
             monthly.due_lanes(),
             vec![
@@ -627,6 +739,10 @@ mod tests {
         )
         .unwrap();
         let accepted = initial.status_after.accepted_checkpoint_id.unwrap();
+        let accepted_artifact = initial.status_after.accepted_artifact_stamp.unwrap();
+        let metadata = vault.root.join(crate::ledger::DIR);
+        fs::create_dir_all(&metadata).unwrap();
+        fs::write(metadata.join("aliases.json"), "{}").unwrap();
         vault
             .propose(
                 &conn,
@@ -645,11 +761,13 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
 
-        let status = status_at_path(&conn, &paths.state, at(100)).unwrap();
+        let status = status_at_path(&vault, &conn, &paths.state, at(100)).unwrap();
         assert_eq!(
             status.due_lanes(),
             vec![DistillationCadenceLane::AfterWrite]
@@ -675,6 +793,180 @@ mod tests {
             vec![DistillationCadenceLane::AfterWrite]
         );
         assert!(failed.status_after.last_failure.is_some());
+        assert_eq!(
+            failed.status_after.accepted_artifact_stamp.as_deref(),
+            Some(accepted_artifact.as_str())
+        );
+        assert_ne!(
+            failed.status_after.current_artifact_stamp,
+            failed.status_after.accepted_artifact_stamp
+        );
+    }
+
+    /// 2026-09-08: 旧v1の本文checkpointだけではArtifact監査済みと認めず、一度受け入れ直す。
+    #[test]
+    fn old_state_without_artifact_stamp_requires_one_audit_and_old_status_still_loads() {
+        let (_dir, vault, conn, paths) = setup();
+        let initial = run_at_paths(
+            &vault,
+            &conn,
+            DistillationCadenceRunArguments::default(),
+            at(100),
+            &paths,
+        )
+        .unwrap();
+        let mut old_state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&paths.state).unwrap()).unwrap();
+        old_state
+            .as_object_mut()
+            .unwrap()
+            .remove("accepted_artifact_stamp");
+        fs::write(&paths.state, serde_json::to_vec(&old_state).unwrap()).unwrap();
+        let status = status_at_path(&vault, &conn, &paths.state, at(100)).unwrap();
+        assert_eq!(
+            status.due_lanes(),
+            vec![DistillationCadenceLane::AfterWrite]
+        );
+        assert!(status.accepted_artifact_stamp.is_none());
+        assert_eq!(
+            status.accepted_checkpoint_id,
+            initial.status_after.accepted_checkpoint_id
+        );
+        let accepted = run_at_paths(
+            &vault,
+            &conn,
+            DistillationCadenceRunArguments::default(),
+            at(100),
+            &paths,
+        )
+        .unwrap();
+        assert!(accepted.accepted);
+        assert!(accepted.status_after.due_lanes().is_empty());
+        let unchanged = run_at_paths(
+            &vault,
+            &conn,
+            DistillationCadenceRunArguments::default(),
+            at(100),
+            &paths,
+        )
+        .unwrap();
+        assert!(!unchanged.executed);
+
+        let mut old_status = serde_json::to_value(&initial.status_after).unwrap();
+        old_status
+            .as_object_mut()
+            .unwrap()
+            .remove("current_artifact_stamp");
+        old_status
+            .as_object_mut()
+            .unwrap()
+            .remove("accepted_artifact_stamp");
+        let loaded: DistillationCadenceStatus = serde_json::from_value(old_status).unwrap();
+        assert!(loaded.current_artifact_stamp.is_none());
+        assert!(loaded.accepted_artifact_stamp.is_none());
+        let (mut state, _) = load_state(&paths.state).unwrap();
+        state.accepted_artifact_stamp = None;
+        assert!(
+            build_status(
+                &accepted.status_after.current_checkpoint_id,
+                None,
+                &state,
+                true,
+                at(100)
+            )
+            .unwrap()
+            .due_lanes()
+            .contains(&DistillationCadenceLane::AfterWrite)
+        );
+    }
+
+    /// 2026-09-08: gate合格後のalias更新・破損を受入に混ぜず、監査IDと失敗履歴も一致させる。
+    #[test]
+    fn metadata_race_or_post_audit_read_failure_preserves_all_accepted_state() {
+        for changed in ["{}", "{broken"] {
+            let (_dir, vault, conn, paths) = setup();
+            let initial = run_at_paths(
+                &vault,
+                &conn,
+                DistillationCadenceRunArguments::default(),
+                at(100),
+                &paths,
+            )
+            .unwrap();
+            assert!(initial.accepted);
+            let (before, _) = load_state(&paths.state).unwrap();
+            let mut original_audit_id = String::new();
+            let raced = run_at_paths_with_audit(
+                &vault,
+                &conn,
+                DistillationCadenceRunArguments {
+                    lane: Some(DistillationCadenceLane::Daily),
+                },
+                at(101),
+                &paths,
+                |vault, conn, checkpoint| {
+                    let report = crate::distillation_audit::audit(vault, conn, checkpoint)?;
+                    assert!(report.gate.passed);
+                    original_audit_id = report.audit_id.clone();
+                    let root = vault.root.join(crate::ledger::DIR);
+                    fs::create_dir_all(&root)?;
+                    fs::write(root.join("aliases.json"), changed)?;
+                    Ok(report)
+                },
+            )
+            .unwrap();
+            assert!(raced.executed);
+            assert!(!raced.accepted);
+            assert!(raced.state_persisted);
+            let audit = raced.audit.as_ref().unwrap();
+            assert!(!audit.gate.passed);
+            assert_ne!(audit.audit_id, original_audit_id);
+            let check = audit.gate.checks.last().unwrap();
+            assert_eq!(
+                check.code,
+                DistillationAuditCheckCode::ArtifactMetadataStable
+            );
+            assert!(!check.passed);
+            assert!(check.detail.as_deref().unwrap().contains("再監査"));
+            assert_eq!(
+                raced.status_after.current_artifact_stamp.is_none(),
+                changed == "{broken"
+            );
+            assert!(
+                raced
+                    .status_after
+                    .due_lanes()
+                    .contains(&DistillationCadenceLane::AfterWrite)
+            );
+            assert!(render_markdown(&raced).contains("artifact_metadata_stable: false"));
+            let (after, _) = load_state(&paths.state).unwrap();
+            assert_eq!(after.checkpoint, before.checkpoint);
+            assert_eq!(
+                after.accepted_artifact_stamp,
+                before.accepted_artifact_stamp
+            );
+            assert_eq!(after.completed_at, before.completed_at);
+            let failure = after.last_failure.unwrap();
+            assert_eq!(failure.audit_id, audit.audit_id);
+            assert_eq!(
+                failure.failed_checks,
+                vec![DistillationAuditCheckCode::ArtifactMetadataStable]
+            );
+            if changed == "{broken" {
+                let bytes = fs::read(&paths.state).unwrap();
+                assert!(
+                    run_at_paths(
+                        &vault,
+                        &conn,
+                        DistillationCadenceRunArguments::default(),
+                        at(101),
+                        &paths
+                    )
+                    .is_err()
+                );
+                assert_eq!(bytes, fs::read(&paths.state).unwrap());
+            }
+        }
     }
 
     #[test]
@@ -712,6 +1004,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: true,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -749,7 +1043,7 @@ mod tests {
 
     #[test]
     fn broken_or_tampered_state_fails_closed() {
-        let (_dir, _vault, conn, paths) = setup();
+        let (_dir, vault, conn, paths) = setup();
         fs::create_dir_all(&paths.directory).unwrap();
         fs::write(
             &paths.state,
@@ -757,7 +1051,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = status_at_path(&conn, &paths.state, at(100)).unwrap_err();
+        let error = status_at_path(&vault, &conn, &paths.state, at(100)).unwrap_err();
         assert!(error.to_string().contains("schema"));
     }
 
@@ -784,13 +1078,14 @@ mod tests {
             ..Default::default()
         };
         let before = crate::cadence_cache::from_status(
-            build_status("fixture", &state, true, at(100)).unwrap(),
+            build_status("fixture", None, &state, true, at(100)).unwrap(),
             2,
         )
         .unwrap();
         let shortly = crate::cadence_cache::from_status(
             build_status(
                 "fixture",
+                None,
                 &state,
                 true,
                 at(100) + time::Duration::seconds(10),
@@ -801,13 +1096,13 @@ mod tests {
         .unwrap();
         assert_eq!(before.digest, shortly.digest);
         let due = crate::cadence_cache::from_status(
-            build_status("fixture", &state, true, at(101)).unwrap(),
+            build_status("fixture", None, &state, true, at(101)).unwrap(),
             2,
         )
         .unwrap();
         assert_ne!(before.digest, due.digest);
         let changed_count = crate::cadence_cache::from_status(
-            build_status("fixture", &state, true, at(100)).unwrap(),
+            build_status("fixture", None, &state, true, at(100)).unwrap(),
             3,
         )
         .unwrap();
@@ -820,7 +1115,7 @@ mod tests {
             failed_checks: vec![DistillationAuditCheckCode::NoActionableEntries],
         });
         let after = crate::cadence_cache::from_status(
-            build_status("fixture", &failed, true, at(100)).unwrap(),
+            build_status("fixture", None, &failed, true, at(100)).unwrap(),
             2,
         )
         .unwrap();

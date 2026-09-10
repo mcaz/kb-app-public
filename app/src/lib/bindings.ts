@@ -6,6 +6,11 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
+	appUpdateStatus: () => typedError<UpdateStatus, AppError>(__TAURI_INVOKE("app_update_status")),
+	appUpdateCheck: () => typedError<UpdateStatus, AppError>(__TAURI_INVOKE("app_update_check")),
+	appUpdateDownload: () => typedError<UpdateStatus, AppError>(__TAURI_INVOKE("app_update_download")),
+	appUpdateInstall: () => typedError<UpdateStatus, AppError>(__TAURI_INVOKE("app_update_install")),
+	appUpdateBootReady: () => typedError<null, AppError>(__TAURI_INVOKE("app_update_boot_ready")),
 	/**  起動引数から選んだnativeの固定値。URLやWebViewの保存値でモードを変えない。 */
 	appBootMode: () => __TAURI_INVOKE<AppBootMode>("app_boot_mode"),
 	recoveryPlan: () => typedError<RuntimeRecoveryPlan, AppError>(__TAURI_INVOKE("recovery_plan")),
@@ -72,6 +77,15 @@ export const commands = {
 	noteList: (category: string, after: string | null, limit: number) => typedError<NoteListPage, AppError>(__TAURI_INVOKE("note_list", { category, after, limit })),
 	/**  グラフビュー(FR-A7)用のノード・エッジ。退役ノートと未執筆リンク先は除く。 */
 	graphData: () => typedError<GraphData, AppError>(__TAURI_INVOKE("graph_data")),
+	/**  ノート1件の来歴要約(1行サマリ・見出しごとの最終書き手)。 */
+	noteProvenance: (id: string) => typedError<ProvenanceView, AppError>(__TAURI_INVOKE("note_provenance", { id })),
+	/**
+	 *  ノート1件のイベント履歴(新しい順)。既定では本文diffを運ばず、
+	 *  `with_diff` を明示したときだけ含める(会話・画面の初期表示を軽くする)。
+	 */
+	noteHistory: (id: string, limit: number, withDiff: boolean) => typedError<NoteEventView[], AppError>(__TAURI_INVOKE("note_history", { id, limit, withDiff })),
+	/**  ホームの活動ビュー。ノートを跨いで新しい順に書込を並べる。 */
+	activityFeed: (limit: number, filter: ActivityFilter_Deserialize) => typedError<ActivityFeedView, AppError>(__TAURI_INVOKE("activity_feed", { limit, filter })),
 	favoritesList: () => typedError<Favorite_Serialize[], AppError>(__TAURI_INVOKE("favorites_list")),
 	favoriteAdd: (fav: Favorite_Deserialize) => typedError<null, AppError>(__TAURI_INVOKE("favorite_add", { fav })),
 	favoriteRemove: (name: string) => typedError<null, AppError>(__TAURI_INVOKE("favorite_remove", { name })),
@@ -132,6 +146,9 @@ export const commands = {
 	/**  移行前の添付を開く。台帳が無いので保管庫の中の実ファイルを直接指す(決定4)。 */
 	legacyOpen: (noteId: string, name: string) => typedError<null, AppError>(__TAURI_INVOKE("legacy_open", { noteId, name })),
 	connectState: () => typedError<ConnectState, AppError>(__TAURI_INVOKE("connect_state")),
+	connectClientDiagnostics: () => typedError<ClientDiagnosticsReport, AppError>(__TAURI_INVOKE("connect_client_diagnostics")),
+	connectClientRegistrations: () => typedError<ClientRegistrations, AppError>(__TAURI_INVOKE("connect_client_registrations")),
+	connectRegisterClient: (client: RegistrationClient) => typedError<RegistrationRepair, AppError>(__TAURI_INVOKE("connect_register_client", { client })),
 	/**  DB初期化に失敗している画面から使うため、通常のAppState接続を開かない。 */
 	inspectRuntimeStorage: () => typedError<RuntimeDiagnosticsReport, AppError>(__TAURI_INVOKE("inspect_runtime_storage")),
 	/**  復元元の照合も、失敗している通常接続や同期を開始せずに行う。 */
@@ -167,6 +184,55 @@ export const events = {
 };
 
 /* Types */
+export type ActivityFeedView = {
+	rows: ActivityRowView[],
+	summary: ActivitySummaryView,
+	/**  フィルタの選択肢(絞り込み結果ではなく、台帳に実在する値)。 */
+	clients: string[],
+	models: string[],
+};
+
+/**  ホームの活動ビュー向け絞り込み。GUI から渡す入力なので specta 型としても公開する。 */
+export type ActivityFilter = ActivityFilter_Serialize | ActivityFilter_Deserialize;
+
+/**  ホームの活動ビュー向け絞り込み。GUI から渡す入力なので specta 型としても公開する。 */
+export type ActivityFilter_Deserialize = {
+	client?: string | null,
+	model?: string | null,
+	/**  `RevisionKind::as_str()` の値(create/amend/…)で絞り込む。 */
+	kind?: string | null,
+	/**  RFC3339。この時刻以降(`at >= since`)。 */
+	since?: string | null,
+};
+
+/**  ホームの活動ビュー向け絞り込み。GUI から渡す入力なので specta 型としても公開する。 */
+export type ActivityFilter_Serialize = {
+	client?: string | null,
+	model?: string | null,
+	/**  `RevisionKind::as_str()` の値(create/amend/…)で絞り込む。 */
+	kind?: string | null,
+	/**  RFC3339。この時刻以降(`at >= since`)。 */
+	since?: string | null,
+};
+
+export type ActivityRowView = {
+	event_id: string,
+	note_id: string,
+	title: string,
+	at: string,
+	actor_label: string,
+	operation: string,
+	kind: string,
+	summary: string | null,
+	section_count: number,
+};
+
+export type ActivitySummaryView = {
+	last_7_days: number,
+	distinct_actors: number,
+	unknown_model_ratio: number | null,
+};
+
 /**  取り込んだ結果。警告と「区分を固定した」は拒否ではないので、行と一緒に返す。 */
 export type Added = {
 	file: FileRow,
@@ -289,6 +355,36 @@ export type CareProposal = {
 	a: string,
 	b: string,
 	detail: string,
+};
+
+export type ClientBindingStatus = "matched" | "missing" | "mismatch" | "unavailable";
+
+export type ClientDiagnosticsReport = {
+	observed_at_ms: number,
+	window_days: number,
+	os: string,
+	workspace: WorkspaceRuleIdentity,
+	clients: ClientRuleDiagnostics[],
+};
+
+export type ClientRegistrationView = {
+	registration: RegistrationStatus,
+	binding: ClientBindingStatus,
+};
+
+export type ClientRegistrations = {
+	vault_name: string,
+	workspace_id: string,
+	clients: ClientRegistrationView[],
+};
+
+export type ClientRuleDiagnostics = {
+	surface: ClientSurface,
+	rules: RuleIdentity,
+	hook_output: RuleOutputDiagnostic,
+	receipt: ReceiptStatus,
+	operations: OperationObservations,
+	observations_available: boolean,
 };
 
 export type ClientSurface = "claude_code" | "codex_cli" | "claude_desktop" | "chat_gpt" | "rule_delivery_evaluation" | "unknown";
@@ -428,6 +524,12 @@ export type Favorite_Serialize = {
 	query?: string | null,
 	period?: string | null,
 	sort?: string | null,
+};
+
+export type FieldChangeView = {
+	field: string,
+	from: string,
+	to: string,
 };
 
 /**  横断一覧の1枚。内部の台帳用語を画面へ渡さず、カードと操作に要る値だけを返す。 */
@@ -682,6 +784,26 @@ export type NoteCountTrendDay = {
 
 export type NoteCountTrendStatus = "available" | "no_observations" | "unavailable";
 
+export type NoteEventView = {
+	event_id: string,
+	at: string,
+	operation: string,
+	kind: string,
+	actor_label: string,
+	model_basis: string,
+	summary: string | null,
+	reason: string | null,
+	origin_claim: string | null,
+	sections: string[],
+	changes: FieldChangeView[],
+	/**
+	 *  `with_diff` を渡したときだけ入る(契約20: 台帳は本文を複製しないので、
+	 *  一覧表示では毎回運ばない)。
+	 */
+	body_diff: string | null,
+	diff_truncated: boolean,
+};
+
 export type NoteFiles = {
 	files: FileRow[],
 	/**  まだ台帳に載っていない旧添付。移行までは並べて見せるだけにする */
@@ -738,6 +860,11 @@ export type NoteView = {
 	similar: ([string, string | null, number | null])[],
 	degraded: Degradation[],
 	vault_root: string,
+	/**
+	 *  来歴(契約20)の1行要約。イベントが1件も無い(移行前かつbackfill前の)
+	 *  ノートでは `None`(空文字で誤魔化さない)。
+	 */
+	provenance_line: string | null,
 };
 
 export type ObservationHealth = {
@@ -772,6 +899,13 @@ export type ObservationTrendDay = {
 };
 
 export type ObservationTrendFilter = "all" | "claude" | "gpt";
+
+export type OperationObservations = {
+	propose_successes: number,
+	update_successes: number,
+	propose_errors: number,
+	update_errors: number,
+};
 
 export type Outcome = "applied" | "no_change" | "blocked" | "retry_wait" | "cancelled" | "interrupted";
 
@@ -832,6 +966,17 @@ export type ProposalRevision = {
 	created_at: string,
 };
 
+export type ProvenanceView = {
+	line: string,
+	created_by: string | null,
+	created_at: string | null,
+	last_by: string | null,
+	last_at: string | null,
+	event_count: number,
+	distinct_actors: number,
+	section_authors: SectionAuthorView[],
+};
+
 /**  purge の下見。**まだ何も消していない。** */
 export type PurgePlan = {
 	/**  `commit` へ渡す短命 token。 */
@@ -877,6 +1022,8 @@ export type Purged = {
 	/**  同期の失敗は purge 自体の失敗にしない(派生 — 契約4)。 */
 	sync_error: string | null,
 };
+
+export type ReceiptStatus = "unverified";
 
 export type RecoveryCurrentSource = "markdown" | "history_after" | "history_before" | "unavailable" | "unproven";
 
@@ -943,6 +1090,31 @@ export type Refusal =
 /**  原本が無いので、画面の確認を経ないと通さない。 */
 { reason: "needs_confirmation" };
 
+export type RegistrationClient = "codex" | "claude_code" | "claude_desktop";
+
+export type RegistrationIssue = {
+	kind: RegistrationIssueKind,
+	/**  固定した登録名だけを返し、他サーバー名・設定値・資格情報は診断へ出さない。 */
+	server: string | null,
+};
+
+export type RegistrationIssueKind = "missing_config" | "missing_server" | "legacy_registration" | "executable_mismatch" | "vault_mismatch" | "client_mismatch" | "arguments_mismatch" | "disabled_server" | "tool_policy_restriction" | "invalid_config" | "unreadable_config" | "managed_policy_conflict" | "managed_policy_unverified" | "scoped_override" | "unsafe_path" | "unsupported_platform";
+
+export type RegistrationRepair = {
+	status: RegistrationStatus,
+	changed: boolean,
+	backup_path: string | null,
+};
+
+export type RegistrationState = "registered" | "missing" | "needs_repair" | "blocked" | "unsupported";
+
+export type RegistrationStatus = {
+	client: RegistrationClient,
+	state: RegistrationState,
+	issues: RegistrationIssue[],
+	can_repair: boolean,
+};
+
 export type RelationKind = "derived_from" | "supports" | "updates" | "contradicts" | "supersedes" | "mentions";
 
 export type RestorePhase = "checking" | "cloning" | "restoring_files" | "finalizing";
@@ -956,6 +1128,22 @@ export type ReviewInput = {
 };
 
 export type ReviewRecommendation = "approve" | "reject" | "revise";
+
+export type RuleIdentity = {
+	schema: number,
+	contract_sha256: string,
+	instructions_sha256: string,
+	client_surface: ClientSurface,
+	tool_surface: ToolSurface,
+	server_version: string,
+};
+
+export type RuleOutputDiagnostic = {
+	state: RuleOutputState,
+	last_observed_at_ms: number | null,
+};
+
+export type RuleOutputState = "not_observed" | "current_rules" | "different_rules" | "vocabulary_unverified" | "concurrent_outputs" | "stdout_failed" | "prepared_only" | "not_applicable";
 
 export type RunView = {
 	run_id: string,
@@ -1121,6 +1309,12 @@ export type SearchOutcome_Serialize = {
 	degraded: Degradation[],
 };
 
+export type SectionAuthorView = {
+	heading: string,
+	actor_label: string,
+	at: string,
+};
+
 /**
  *  閲覧区分。**転送軸(`SyncPolicy`)とは別の軸**で、UI でも1語に統合しない
  *  (統合すると、正本が分けた軸を画面で混ぜ直すことになる)。
@@ -1156,6 +1350,8 @@ export type SmartSearchState = {
 	embedded: number,
 	total: number,
 };
+
+export type SourceStatus = "unconfigured" | "pinned" | "missing" | "unavailable";
 
 export type Stage = "prepare" | "cli_check" | "model_catalog" | "ai_response" | "search" | "validate" | "commit" | "export";
 
@@ -1216,20 +1412,20 @@ export type SyncPolicy =
 /**  実体も同期する */
 "full";
 
-/**
- *  タグの一覧(使用数+説明)。**説明はアプリが持たず KB の「タグ運用」ノートから読む**
- *  (タグの意味づけは AI とユーザーの会話で決まる — 2026-08-10 方針)。
- *  表(| タグ | 説明 |)と箇条書き(- タグ — 説明 / - タグ: 説明)の両方を拾う。
- */
+/**  通常参照ノートの使用数と、AIが語彙の正本で定めた役割。UIは意味づけを持たない。 */
 export type TagInfo = {
 	tag: string,
 	count: number,
 	description: string | null,
+	/**  使用実績だけでは正式な語彙へ昇格させない。 */
+	registered: boolean,
 };
 
 export type TagOverview = {
 	tags: TagInfo[],
 	glossary_note: string | null,
+	source_status: SourceStatus,
+	skipped_count: number,
 	degraded: Degradation[],
 };
 
@@ -1247,6 +1443,23 @@ export type TicketView = {
 	decisions: ProposalDecision[],
 };
 
+export type ToolSurface =
+/**  CLI・評価fixture向けの後方互換面。 */
+"all" | "read" | "write" | "maintenance";
+
+export type UpdateFailureKind = "not_configured" | "unsupported_platform" | "busy" | "network" | "signature" | "invalid_package" | "incompatible" | "storage" | "install_failed" | "restart_failed";
+
+export type UpdatePhase = "unavailable" | "idle" | "checking" | "up_to_date" | "available" | "downloading" | "verifying" | "ready" | "installing";
+
+export type UpdateStatus = {
+	current_version: string,
+	phase: UpdatePhase,
+	available_version: string | null,
+	downloaded_bytes: number,
+	total_bytes: number | null,
+	failure: UpdateFailureKind | null,
+};
+
 /**  既存Vaultの検査・clone・Full Artifact復元の進捗。 */
 export type VaultRestoreProgress = {
 	phase: RestorePhase,
@@ -1254,6 +1467,22 @@ export type VaultRestoreProgress = {
 	total: number,
 	fetched: number,
 	reused: number,
+};
+
+export type VocabularyIdentity = {
+	source_status: VocabularySourceStatus,
+	source_note_uid: string | null,
+	/**  正本を指定した版。語彙本文の版ではない。 */
+	source_revision: string | null,
+	source_document_sha256: string | null,
+};
+
+export type VocabularySourceStatus = "unconfigured" | "pinned" | "missing" | "unavailable";
+
+export type WorkspaceRuleIdentity = {
+	schema: number,
+	workspace_id: string,
+	vocabulary: VocabularyIdentity,
 };
 
 export type WorkspaceTabShortcut = "new" | "close";

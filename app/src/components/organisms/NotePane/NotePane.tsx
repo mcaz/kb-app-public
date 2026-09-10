@@ -12,6 +12,7 @@ import { CareBar } from "@/components/molecules/CareBar";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { FilePanel } from "@/components/organisms/FilePanel";
 import { MarkdownView } from "@/components/molecules/MarkdownView";
+import { NoteHistoryPanel } from "@/components/organisms/NoteHistoryPanel";
 import { useCurrentNote } from "@/hooks/useCurrentNote";
 import { useErrorText } from "@/hooks/useErrorText";
 import { IN_TAURI } from "@/lib/api";
@@ -202,7 +203,13 @@ export function NotePane({ noteId, onBack, onOpenRelated, onOpenNote }: NotePane
         <DegradedBanner items={[...note.degraded, ...currentNote.degraded]} variant="card" />
         {currentNote.error && <p role="alert">{errorText(currentNote.error)}</p>}
 
+        {note.provenance_line && (
+          <p className="text-muted mb-3.5 flex-none text-xs">{note.provenance_line}</p>
+        )}
+
         <FilePanel noteId={note.id} />
+
+        <NoteHistoryPanel noteId={note.id} />
 
         {showSource ? (
           <pre className={styles.source()}>

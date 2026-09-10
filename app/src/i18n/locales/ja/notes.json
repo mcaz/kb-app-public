@@ -92,6 +92,38 @@
     "showSource": "ソースを表示",
     "showPreview": "プレビューを表示"
   },
+  "history": {
+    "head": "履歴",
+    "empty": "来歴の記録なし(2026-09-10 より前の書込は backfill で作成者のみ復元可)",
+    "sectionAuthorsHead": "見出しごとの最終書き手",
+    "sectionAuthorsEmpty": "見出しごとの帰属はまだありません",
+    "showDiff": "差分を表示",
+    "diffTruncated": "差分は上限を超えたため省略",
+    "reason": "理由: {{reason}}",
+    "originClaim": "申告根拠: {{origin}}",
+    "changesHead": "frontmatterの変更",
+    "changeItem": "{{field}}: {{from}} → {{to}}",
+    "noSummary": "(要約なし)",
+    "operation": {
+      "propose": "起票",
+      "update": "更新",
+      "remove": "削除",
+      "distill": "蒸留",
+      "closure": "取り組みの終了",
+      "import": "取り込み",
+      "human_edit": "人手の編集",
+      "other": "その他"
+    },
+    "kind": {
+      "create": "作成",
+      "amend": "改訂",
+      "reverse": "取り消し",
+      "correct": "訂正",
+      "normalize": "整形",
+      "remove": "削除",
+      "unknown": "不明"
+    }
+  },
   "file": {
     "label": "ファイル:",
     "added": "追加しました",

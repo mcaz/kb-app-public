@@ -1,19 +1,16 @@
 //! 旧添付(`<ノート ID>.files/`)を Artifact の台帳へ載せる — ADR-0003 決定4・実装順8。
 //!
-//! **実体を動かさない。** 旧ファイルは保管庫の中にそのまま残り、locator は
+//! 初段の台帳登録では実体を動かさない。旧ファイルは保管庫の中に残り、locator は
 //! `LegacyGit` を指す。増えるのは台帳・参照・旧リンクの対応表だけなので、
 //! 受入条件「**移行前に取得できた添付を、移行によって取得不能にしない**」は
 //! 実体に触れないことで満たす — 移行しても Git の中の同じファイルを読み続ける。
 //!
-//! ## 実体を LFS へ移す段はここに無い
+//! ## LFS への昇格と旧コピーの保持
 //!
-//! 決定4 の二段目(LFS へ上げて locator を切り替える)は入れていない。旧ファイルは
-//! fallback として残り続ける(MVP に削除が無い)ので**急ぐ理由が無く**、実行するには
-//! 次の2つが要る:
-//!
-//! - locator を差し替える手段。いま「直せる field」を表す [`crate::artifact::Change`] に
-//!   locator は無い(内容の同一性を保ったまま置き場だけ変える操作が、まだモデルに無い)
-//! - upload の成功確認。決定4 は「**上げ切ってから**切り替える」と決めている
+//! 二段目は固定planへ入力を再照合し、LFS upload成功後だけlocatorをManagedへ変える。
+//! 旧ファイルと旧リンクは残し、直後versionからのrollbackでも両方のコピーを削除しない。
+//! 型付き昇格証拠は旧pathの由来を固定するが、現在も保持コピーであるという判定は、
+//! 監査側が現在のmanifest・ref/alias・実ファイルを同じsnapshotへ照合して行う。
 //!
 //! ## 区分を `private + full` にしてよい理由
 //!
@@ -28,7 +25,7 @@ use std::io::Read;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -59,10 +56,12 @@ pub struct Migrated {
 
 pub const PROMOTION_PLAN_SCHEMA: &str = "kb-app.legacy-artifact-promotion-plan/v1";
 pub const PROMOTION_RESULT_SCHEMA: &str = "kb-app.legacy-artifact-promotion-result/v1";
+pub(crate) const PROMOTION_PROOF_EVENT_KIND: &str = "legacy-promotion-proof";
 
 /// 1 Artifact だけを対象にする小規模 promotion plan。
 /// read-only の棚卸し時点に見えた入力をすべて固定し、apply 時に再照合する。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromotionPlan {
     pub schema: String,
     pub plan_id: String,
@@ -79,6 +78,7 @@ pub struct PromotionPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromotionRefSnapshot {
     pub name: RefName,
     pub revision: u64,
@@ -154,6 +154,65 @@ fn promotion_plan_id(plan: &PromotionPlan) -> Result<String> {
     Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
+/// 旧proseを証拠へ読み替えず、新種別だけを検証する。pathはここで構築・照合し、
+/// 返されたplanも現在のmanifest/ref/alias/実体とのsnapshot照合なしでは保持コピーと扱わない。
+pub(crate) fn parse_promotion_proof(
+    event: &crate::artifact::Event,
+) -> Result<Option<PromotionPlan>> {
+    if event.kind != PROMOTION_PROOF_EVENT_KIND {
+        return Ok(None);
+    }
+    let plan: PromotionPlan =
+        serde_json::from_str(&event.detail).context("昇格証拠の構造が不正")?;
+    validate_promotion_plan(&plan)?;
+    Ok(Some(plan))
+}
+
+fn validate_promotion_plan(plan: &PromotionPlan) -> Result<()> {
+    ensure!(
+        plan.schema == PROMOTION_PLAN_SCHEMA && promotion_plan_id(plan)? == plan.plan_id,
+        "promotion planのschemaまたはplan_idが不正"
+    );
+    // serdeのString newtypeはFromStrを通らないので、保存済み証拠も型の境界で再検証する。
+    ArtifactId::from_str(plan.artifact_id.as_str())?;
+    ContentHash::from_str(plan.hash.as_str())?;
+    ensure!(
+        plan.manifest_version > 0 && plan.manifest_version.checked_add(1).is_some(),
+        "promotion planのversionが不正"
+    );
+    let note = crate::note_id::NoteId::parse(&plan.note_id)?;
+    note.legacy_attachment_relative_path(&plan.file_name)?;
+    ensure!(
+        plan.legacy_path == format!("/{}.files/{}", note.as_str(), plan.file_name),
+        "promotion planの旧pathが正規形ではない"
+    );
+    ensure!(
+        plan.destination == format!(".kb-artifacts/lfs/{}", plan.hash),
+        "promotion planの昇格先がhash由来ではない"
+    );
+    if let Some(reference) = &plan.reference {
+        RefName::from_str(reference.name.as_str())?;
+        ensure!(reference.revision > 0, "promotion planのref revisionが不正");
+        // aliasのsourceは比較値だけ。任意文字列をファイルpathとして解決しない。
+        ensure!(
+            plan.aliases
+                .iter()
+                .all(|(_, name)| name == reference.name.as_str()),
+            "promotion planのaliasがrefと一致しない"
+        );
+    } else {
+        ensure!(
+            plan.aliases.is_empty(),
+            "promotion planのrefなしaliasは不正"
+        );
+    }
+    ensure!(
+        plan.aliases.windows(2).all(|pair| pair[0].0 < pair[1].0),
+        "promotion planのaliasが一意な正規順序ではない"
+    );
+    Ok(())
+}
+
 trait PromotionTransport {
     fn stage_and_upload(
         &mut self,
@@ -205,9 +264,7 @@ fn apply_promotion_with(
     transport: &mut impl PromotionTransport,
     push_git: bool,
 ) -> Result<PromotionResult> {
-    if plan.schema != PROMOTION_PLAN_SCHEMA || promotion_plan_id(plan)? != plan.plan_id {
-        bail!("promotion planのschemaまたはplan_idが不正");
-    }
+    validate_promotion_plan(plan)?;
     let _lock = crate::connect::sync_lock(vault)?;
     let current = ledger
         .get(&plan.artifact_id)?
@@ -246,6 +303,12 @@ fn apply_promotion_with(
         at,
         "legacy-promoted",
         &format!("{}; LFS upload確認後にManagedへ昇格", plan.plan_id),
+    );
+    // 旧イベントはcrash/retry互換のため残す。証拠はuploadと入力再照合後の同じ保存に含める。
+    after.record(
+        at,
+        PROMOTION_PROOF_EVENT_KIND,
+        &serde_json::to_string(plan)?,
     );
     let outcome = ledger.put_with_outcome(vault, &after)?;
     if let Some(error) = outcome.sync_error {
@@ -767,6 +830,133 @@ mod tests {
         assert_eq!(e.ledger.get(&migrated.id).unwrap().unwrap(), before);
     }
 
+    /// 2026-09-08: 旧proseでは保持コピーの根拠が不足する。固定入力全体を型付き証拠で照合する。
+    #[test]
+    fn promotion_proof_roundtrips_and_binds_every_plan_field() {
+        let e = env();
+        migrated_legacy(&e, b"synthetic promotion proof");
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let same = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let mut event = crate::artifact::Event {
+            at: AT.into(),
+            kind: PROMOTION_PROOF_EVENT_KIND.into(),
+            detail: serde_json::to_string(&plan).unwrap(),
+        };
+        assert_eq!(event.detail, serde_json::to_string(&same).unwrap());
+        assert_eq!(parse_promotion_proof(&event).unwrap(), Some(plan.clone()));
+        for kind in [
+            "legacy-promoted",
+            "migrated",
+            "legacy-promotion-rolled-back",
+        ] {
+            event.kind = kind.into();
+            assert_eq!(parse_promotion_proof(&event).unwrap(), None);
+        }
+        event.kind = PROMOTION_PROOF_EVENT_KIND.into();
+        let mut reference = serde_json::to_value(&plan.reference).unwrap();
+        reference["revision"] = serde_json::json!(plan.reference.as_ref().unwrap().revision + 1);
+        for (field, replacement) in [
+            ("schema", serde_json::json!("unknown/v2")),
+            ("plan_id", serde_json::json!("sha256:invalid")),
+            ("artifact_id", serde_json::json!(ArtifactId::new(1))),
+            (
+                "manifest_version",
+                serde_json::json!(plan.manifest_version + 1),
+            ),
+            ("note_id", serde_json::json!("notes/other")),
+            ("file_name", serde_json::json!("other.bin")),
+            (
+                "legacy_path",
+                serde_json::json!("/notes/other.files/other.bin"),
+            ),
+            (
+                "hash",
+                serde_json::json!(ContentHash::of_bytes(b"different")),
+            ),
+            ("size", serde_json::json!(plan.size + 1)),
+            (
+                "destination",
+                serde_json::json!(".kb-artifacts/lfs/different"),
+            ),
+            ("reference", reference),
+            ("aliases", serde_json::json!([])),
+        ] {
+            let mut changed = serde_json::to_value(&plan).unwrap();
+            changed[field] = replacement;
+            event.detail = serde_json::to_string(&changed).unwrap();
+            assert!(
+                parse_promotion_proof(&event).is_err(),
+                "unbound field: {field}"
+            );
+        }
+    }
+
+    /// 2026-09-08: 再計算したplan_idがあっても任意pathや不正newtypeを証拠へ受け入れない。
+    #[test]
+    fn promotion_proof_rejects_noncanonical_paths_and_invalid_typed_evidence() {
+        let e = env();
+        migrated_legacy(&e, b"synthetic canonical proof");
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let reference = plan.reference.as_ref().unwrap();
+        for (field, replacement) in [
+            ("note_id", serde_json::json!("notes/../outside")),
+            ("file_name", serde_json::json!("../outside.bin")),
+            (
+                "legacy_path",
+                serde_json::json!("/notes/other.files/other.bin"),
+            ),
+            ("destination", serde_json::json!("/tmp/other.bin")),
+            ("artifact_id", serde_json::json!("not-an-id")),
+            ("hash", serde_json::json!("../outside")),
+            ("manifest_version", serde_json::json!(0)),
+            ("manifest_version", serde_json::json!(u64::MAX)),
+            (
+                "reference",
+                serde_json::json!({"name":reference.name,"revision":0}),
+            ),
+            (
+                "reference",
+                serde_json::json!({"name":"Invalid-Ref","revision":1}),
+            ),
+            ("reference", serde_json::Value::Null),
+            (
+                "aliases",
+                serde_json::json!([["/notes/old.files/a.bin", "different-ref"]]),
+            ),
+            (
+                "aliases",
+                serde_json::json!([plan.aliases[0], plan.aliases[0]]),
+            ),
+        ] {
+            let mut value = serde_json::to_value(&plan).unwrap();
+            value[field] = replacement;
+            let mut changed: PromotionPlan = serde_json::from_value(value).unwrap();
+            changed.plan_id = promotion_plan_id(&changed).unwrap();
+            let event = crate::artifact::Event {
+                at: AT.into(),
+                kind: PROMOTION_PROOF_EVENT_KIND.into(),
+                detail: serde_json::to_string(&changed).unwrap(),
+            };
+            assert!(
+                parse_promotion_proof(&event).is_err(),
+                "accepted invalid {field}"
+            );
+        }
+        let mut unknown = serde_json::to_value(&plan).unwrap();
+        unknown["future_path"] = serde_json::json!("/tmp/unvalidated");
+        let event = crate::artifact::Event {
+            at: AT.into(),
+            kind: PROMOTION_PROOF_EVENT_KIND.into(),
+            detail: serde_json::to_string(&unknown).unwrap(),
+        };
+        assert!(parse_promotion_proof(&event).is_err());
+        let mut unreferenced = plan;
+        unreferenced.reference = None;
+        unreferenced.aliases.clear();
+        unreferenced.plan_id = promotion_plan_id(&unreferenced).unwrap();
+        validate_promotion_plan(&unreferenced).unwrap();
+    }
+
     #[test]
     fn upload_failure_never_switches_primary_locator() {
         let e = env();
@@ -781,6 +971,12 @@ mod tests {
         let current = e.ledger.get(&migrated.id).unwrap().unwrap();
         assert!(matches!(current.locator, Locator::LegacyGit { .. }));
         assert_eq!(current.version, plan.manifest_version);
+        assert!(
+            current
+                .events
+                .iter()
+                .all(|event| event.kind != PROMOTION_PROOF_EVENT_KIND)
+        );
     }
 
     #[test]
@@ -829,12 +1025,28 @@ mod tests {
         assert!(old_path.is_file(), "旧実体はfallbackとして残す");
         assert_eq!(e.ledger.ref_for(&migrated.id).unwrap(), before_ref);
         assert_eq!(e.ledger.aliases(), before_aliases);
+        let proofs = after
+            .events
+            .iter()
+            .filter_map(|event| parse_promotion_proof(event).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(proofs, vec![plan.clone()]);
+        assert!(
+            after
+                .events
+                .iter()
+                .any(|event| event.kind == "legacy-promoted")
+        );
 
         let retried =
             apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).unwrap();
         assert!(retried.already_applied);
         assert_eq!(upload.calls, 1, "retryで再uploadしない");
         assert_eq!(retried.after_version, applied.after_version);
+        assert_eq!(
+            e.ledger.get(&migrated.id).unwrap().unwrap().events,
+            after.events
+        );
 
         let old_link = format!("/{note_id}.files/図.png");
         let resolved = parse_and_resolve(&e, &old_link);
@@ -857,7 +1069,9 @@ mod tests {
         let rolled_back =
             rollback_promotion_with(&e.vault, &e.ledger, &applied, AT, false).unwrap();
         let current = e.ledger.get(&migrated.id).unwrap().unwrap();
-        assert!(matches!(current.locator, Locator::LegacyGit { .. }));
+        assert!(
+            matches!(&current.locator, Locator::LegacyGit { note_id: restored_note, file_name } if restored_note == &note_id && file_name == "図.png")
+        );
         assert!(
             e.vault
                 .legacy_attachment_path(&note_id, "図.png")
@@ -870,5 +1084,59 @@ mod tests {
         );
         assert!(rollback_promotion_with(&e.vault, &e.ledger, &applied, AT, false).is_err());
         assert_eq!(rolled_back.after_version, applied.after_version + 1);
+        assert_eq!(
+            current
+                .events
+                .iter()
+                .filter_map(|event| parse_promotion_proof(event).unwrap())
+                .collect::<Vec<_>>(),
+            vec![plan.clone()]
+        );
+        assert_eq!(
+            fs::read(e.vault.legacy_attachment_path(&note_id, "図.png").unwrap()).unwrap(),
+            b"legacy bytes"
+        );
+
+        // 復元後の再昇格は別version/planになる。監査は過去proofだけで現在状態を決めない。
+        let next_plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        assert_ne!(next_plan.plan_id, plan.plan_id);
+        apply_promotion_with(&e.vault, &e.ledger, &next_plan, AT, &mut upload, false).unwrap();
+        let next = e.ledger.get(&migrated.id).unwrap().unwrap();
+        assert_eq!(
+            next.events
+                .iter()
+                .filter_map(|event| parse_promotion_proof(event).unwrap())
+                .collect::<Vec<_>>(),
+            vec![plan, next_plan]
+        );
+    }
+
+    /// 2026-09-08: 旧版が書いたproseだけの成功記録はretryできるが、新しいproofを捏造しない。
+    #[test]
+    fn legacy_prose_only_retry_does_not_backfill_structured_promotion_proof() {
+        let e = env();
+        let (_, migrated) = migrated_legacy(&e, b"legacy retry bytes");
+        let plan = plan_promotions(&e.vault, &e.ledger).unwrap().remove(0);
+        let mut upload = MockUpload::default();
+        apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).unwrap();
+        let mut previous_format = e.ledger.get(&migrated.id).unwrap().unwrap();
+        previous_format
+            .events
+            .retain(|event| event.kind != PROMOTION_PROOF_EVENT_KIND);
+        e.ledger.put(&e.vault, &previous_format).unwrap();
+        let retried =
+            apply_promotion_with(&e.vault, &e.ledger, &plan, AT, &mut upload, false).unwrap();
+        assert!(retried.already_applied);
+        assert_eq!(upload.calls, 1);
+        assert_eq!(
+            e.ledger.get(&migrated.id).unwrap().unwrap(),
+            previous_format
+        );
+        assert!(
+            previous_format
+                .events
+                .iter()
+                .all(|event| parse_promotion_proof(event).unwrap().is_none())
+        );
     }
 }

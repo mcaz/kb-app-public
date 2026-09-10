@@ -1273,6 +1273,13 @@ mod tests {
              CREATE VIRTUAL TABLE fts_tri USING fts5(id UNINDEXED, text, tokenize='trigram');
              CREATE VIRTUAL TABLE fts_anchor USING fts5(
                  src UNINDEXED, dst UNINDEXED, text, tokenize='unicode61'
+             );
+             CREATE TABLE note_events(
+                 event_id TEXT PRIMARY KEY, note_uid TEXT, note_id TEXT NOT NULL,
+                 at TEXT NOT NULL, operation TEXT NOT NULL, actor_client TEXT NOT NULL,
+                 actor_client_version TEXT, actor_surface TEXT NOT NULL, actor_model TEXT,
+                 actor_model_basis TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT,
+                 payload TEXT NOT NULL, exported INTEGER NOT NULL DEFAULT 0
              );",
         )
         .unwrap();
@@ -1375,6 +1382,167 @@ mod tests {
             report.suite_schema_version,
             LEGACY_EVALUATION_SCHEMA_VERSION
         );
+    }
+
+    /// 2026-09-08: #93の完了質問・過去の分類結果が方針ノートに埋もれる構造を、
+    /// 実KBの発話や本文を含まない2題材で再現する。検索1位と本文先頭を別々に検査し、
+    /// 「結果」を含む現行手順の照会を実施記録へ取り違えないことも固定する。
+    #[test]
+    fn completion_and_result_evidence_reaches_early_bodies_on_all_surfaces() {
+        let conn = setup();
+        let add = |id: &str, title: &str, description: &str, body: &str, role: &str| {
+            add_note(&conn, id, &format!("{title}\n{description}\n{body}"));
+            conn.execute(
+                "UPDATE notes SET title=?2, description=?3, body=?4, document=?5,
+                    namespace=?6, authority_role=?7, authority_status='active', authority_scope=?1
+                 WHERE id=?1",
+                rusqlite::params![
+                    id,
+                    title,
+                    description,
+                    body,
+                    format!("---\ntitle: {title}\n---\n{body}"),
+                    if role == "record" {
+                        "records"
+                    } else {
+                        "procedures"
+                    },
+                    role,
+                ],
+            )
+            .unwrap();
+        };
+        add(
+            "notes/lumen-result",
+            "Lumen 移行の実施結果",
+            "Lumen 移行を実施し、復元検証が完了した結果を残す。",
+            "Lumen 移行は完了した。三つの対象すべてで復元一致を確認した。",
+            "record",
+        );
+        add(
+            "notes/vega-result",
+            "Vega 調査の分類結果",
+            "Vega 調査で3項目を分類した結果を残す。",
+            "Vega 調査では3項目を重要、参考、対象外に分類した。再調査は不要と判定した。",
+            "record",
+        );
+        add(
+            "notes/vega-classification-policy",
+            "Vega 調査の分類基準",
+            "Vega 調査結果を分類するための現行方針と判断手順。",
+            "Vega 調査結果の分類方法は機密性と保存期間を判断軸にする。個別の分類結果は別の実施記録に残す。",
+            "canonical",
+        );
+        for (topic, subject) in [("lumen", "移行"), ("vega", "調査")] {
+            for (index, facet) in ["受付", "対象選定", "実施", "照合"].iter().enumerate()
+            {
+                add(
+                    &format!("notes/{topic}-policy-{index}"),
+                    &format!("{topic} {subject}の{facet}手順"),
+                    &format!("{topic} {subject}の現行方針。{facet}を担当する。"),
+                    &format!(
+                        "{topic} {subject}の{facet}手順。完了条件と3項目の分類方法を定める。\n\
+                         この文書は運用規則であり、実施結果を記録するものではない。"
+                    ),
+                    "canonical",
+                );
+            }
+        }
+        add_note(&conn, "notes/unrelated", "別の天体に関する観測資料");
+
+        let make_case = |id: &str, query: &str, required: &str, evidence: &str| GoldenCase {
+            id: id.into(),
+            family: Some("completion-results".into()),
+            queries: SurfaceQueries {
+                codex: query.into(),
+                claude_code: query.into(),
+                chatgpt: query.into(),
+                routine: None,
+            },
+            required: vec![required.into()],
+            relevant: Vec::new(),
+            excluded: vec!["notes/unrelated".into()],
+            body_requirements: vec![BodyRequirement {
+                id: "answer-evidence".into(),
+                all_terms: vec![evidence.into()],
+                any_terms: Vec::new(),
+            }],
+            gate_mode: None,
+        };
+        let suite = GoldenSuite {
+            schema_version: EVALUATION_SCHEMA_VERSION.into(),
+            stability_runs: 3,
+            cases: vec![
+                make_case(
+                    "completion-question",
+                    "lumen移行は完了した？",
+                    "notes/lumen-result",
+                    "復元一致を確認した",
+                ),
+                make_case(
+                    "classification-result",
+                    "vega調査で3項目をどう分類したか",
+                    "notes/vega-result",
+                    "重要、参考、対象外に分類した",
+                ),
+                make_case(
+                    "current-policy-control",
+                    "lumen移行の現在の受付方針は？",
+                    "notes/lumen-policy-0",
+                    "受付手順",
+                ),
+                make_case(
+                    "result-word-in-current-procedure-control",
+                    "現在のVega調査結果の分類方法",
+                    "notes/vega-classification-policy",
+                    "機密性と保存期間を判断軸にする",
+                ),
+            ],
+        };
+        let report = evaluate(&conn, &suite).unwrap();
+        assert_eq!(report.cases.len(), suite.cases.len() * 3);
+        assert!(report.gate.passed, "{:?}", report.gate.failed_cases);
+        for case in &report.cases {
+            let required = &case.required[0];
+            let search = crate::search::search_with(
+                &conn,
+                &case.query,
+                &RetrievalProfile::Evaluation.plan().search,
+            );
+            assert!(search.degraded.is_empty(), "{}", case_key(case));
+            assert_eq!(
+                search.hits.first().map(|hit| &hit.id),
+                Some(required),
+                "{}: 期待する根拠が検索1位ではない: {:?}",
+                case_key(case),
+                search.hits.iter().map(|hit| &hit.id).collect::<Vec<_>>()
+            );
+            assert!(case.stable, "{}", case_key(case));
+            assert!(case.search_degraded.is_empty(), "{}", case_key(case));
+            for result in &case.strategies {
+                let options = retrieval_options_for(result.strategy);
+                assert!(result.gate_passed, "{}", case_key(case));
+                assert_eq!(
+                    result.selected.first().map(|doc| &doc.id),
+                    Some(required),
+                    "{}: {}で期待する根拠が本文先頭ではない: {:?}",
+                    case_key(case),
+                    result.strategy.label(),
+                    result
+                        .selected
+                        .iter()
+                        .map(|doc| &doc.id)
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(result.runtime.missing_documents, 0);
+                assert!(!result.runtime.budget_exhausted);
+                assert!(!result.runtime.spill);
+                assert!(result.runtime.estimated_tokens <= options.estimated_token_budget);
+                assert!(result.runtime.seed_count <= options.seed_limit);
+                assert!(result.runtime.selected_count <= options.document_limit);
+                assert!(result.runtime.candidate_count <= options.candidate_limit);
+            }
+        }
     }
 
     #[test]

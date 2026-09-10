@@ -28,6 +28,9 @@ pub struct NoteView {
     similar: Vec<(String, Option<String>, f32)>,
     degraded: Vec<kb_core::degradation::Degradation>,
     vault_root: String,
+    /// 来歴(契約20)の1行要約。イベントが1件も無い(移行前かつbackfill前の)
+    /// ノートでは `None`(空文字で誤魔化さない)。
+    provenance_line: Option<String>,
 }
 
 #[tauri::command(async)]
@@ -98,6 +101,11 @@ fn note_view_from(
             Vec::new()
         }
     };
+    // mcp.rsの`get`ツール(Phase 2)と同じ扱い — 台帳は本文と同じ`with_db`接続で読むので、
+    // ここが失敗する状況は本文自体も信用できない状況に近い。fail-openの対象にしない。
+    let provenance = vault.note_provenance(conn, id).map_err(AppError::index)?;
+    let provenance_line =
+        (provenance.event_count > 0).then(|| kb_core::provenance::provenance_line(&provenance));
     Ok(NoteView {
         title: note.front.title.clone().unwrap_or_else(|| id.to_string()),
         description: note.front.description.clone(),
@@ -115,6 +123,7 @@ fn note_view_from(
         degraded,
         vault_root: vault.root.display().to_string(),
         id: id.to_string(),
+        provenance_line,
     })
 }
 
@@ -171,6 +180,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap()
@@ -280,6 +291,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();

@@ -11,13 +11,18 @@ use anyhow::{Context, Result, bail};
 use git2::{Repository, Signature};
 use rusqlite::OptionalExtension;
 use serde::Serialize;
-use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
 use crate::authority::NoteNamespace;
 use crate::authority::{Authority, NoteRelation, NoteUid};
 use crate::frontmatter::{Frontmatter, Generated, Note, now_iso, today};
 use crate::note_id::NoteId;
+use crate::note_store::WriteAttribution;
+use crate::provenance::{
+    NoteEvent, Operation, ProvenanceSummary, RevisionInput, WriteActor, WriteContext, document_hash,
+};
+
+mod tag_exports;
 
 pub const NOTES_DIR: &str = "notes";
 const RESERVED: &[&str] = &["index.md", "log.md"];
@@ -56,6 +61,10 @@ pub struct NoteProposal<'a> {
     pub judgment: Option<crate::judgment::Judgment>,
     pub allow_new_tags: bool,
     pub client: &'a str,
+    /// 来歴に残す書き手。`None` なら `client` hint から組み立てる。
+    pub actor: Option<WriteActor>,
+    /// 来歴に残す改版の申告(意図・理由・根拠)。
+    pub revision: Option<RevisionInput>,
 }
 
 /// ノート更新の入力。`None` の項目は変更しない。
@@ -71,6 +80,8 @@ pub struct NoteUpdate<'a> {
     pub judgment: Option<Option<crate::judgment::Judgment>>,
     pub allow_new_tags: bool,
     pub client: &'a str,
+    pub actor: Option<WriteActor>,
+    pub revision: Option<RevisionInput>,
 }
 
 impl Vault {
@@ -263,7 +274,10 @@ impl Vault {
             judgment,
             allow_new_tags,
             client,
+            actor,
+            revision,
         } = proposal;
+        crate::tag_vocabulary_source::ensure_workspace(self, conn)?;
         validate_note_text_input("title", title)?;
         validate_note_text_input("body", body)?;
         crate::tags::validate(conn, tags, allow_new_tags)
@@ -277,8 +291,10 @@ impl Vault {
         front.authority = Some(authority);
         front.relations = relations;
         front.judgment = judgment;
+        // generated.by は書き手の申告(モデル・動作設定)まで書く。先頭は接続設定の製品名。
+        let actor = actor.unwrap_or_else(|| WriteActor::from_client_hint(client));
         front.generated = Some(Generated {
-            by: client.into(),
+            by: actor.generated_by(client),
             at: now_iso(),
         });
         front.sources = Some(serde_yaml::from_str(&format!(
@@ -290,13 +306,24 @@ impl Vault {
             body: body.to_string(),
         };
         let id = self.next_note_id(conn, title)?;
+        if let Some(revision) = &revision {
+            revision.validate()?;
+        }
+        let context = WriteContext {
+            actor: &actor,
+            revision: revision.as_ref(),
+            operation: Operation::Propose,
+        };
         crate::note_store::put(
             self,
             conn,
             &id,
             &note,
-            &format!("**Proposal**: [{title}](/{id}.md) を起票(via {client})。"),
-            &format!("propose {id} (via {client})"),
+            WriteAttribution::new(
+                &format!("**Proposal**: [{title}](/{id}.md) を起票(via {client})。"),
+                &format!("propose {id} (via {client})"),
+                &context,
+            ),
         )?;
         self.flush_note_exports(conn)?;
         Ok(id)
@@ -338,6 +365,7 @@ impl Vault {
             "旧 human ノートは削除できない(互換読み取り専用)",
         )?;
         crate::proposal_workflow::guard_note_delete(&note)?;
+        crate::tag_vocabulary_source::guard_source_note_id_removal(conn, id)?;
         if let Some(uid) = &note.front.note_uid {
             let source: Option<String> = conn
                 .query_row(
@@ -356,12 +384,14 @@ impl Vault {
     }
 
     /// AI 自身によるノート削除(MCP)。自分のノート(origin: agent)のみ。
+    /// `actor` は MCP handshake まで含めた書き手。`None` なら `client` hint から組み立てる。
     pub fn agent_delete_note(
         &self,
         conn: &rusqlite::Connection,
         id: &str,
         reason: &str,
         client: &str,
+        actor: Option<WriteActor>,
     ) -> Result<()> {
         let reason = reason.trim();
         if reason.is_empty() || reason.chars().count() > 500 || reason.contains(['\n', '\r']) {
@@ -372,12 +402,26 @@ impl Vault {
             .front
             .title
             .unwrap_or_else(|| id.to_string());
+        // 削除理由は本文と一緒に消える。来歴イベントのsummaryへ残す。
+        let revision = RevisionInput {
+            summary: Some(reason.to_string()),
+            ..RevisionInput::default()
+        };
+        let actor = actor.unwrap_or_else(|| WriteActor::from_client_hint(client));
+        let context = WriteContext {
+            actor: &actor,
+            revision: Some(&revision),
+            operation: Operation::Remove,
+        };
         crate::note_store::delete(
             self,
             conn,
             id,
-            &format!("**Deletion**: 「{title}」({id})を削除。理由: {reason}"),
-            &format!("note: delete {id} (via {client})"),
+            WriteAttribution::new(
+                &format!("**Deletion**: 「{title}」({id})を削除。理由: {reason}"),
+                &format!("note: delete {id} (via {client})"),
+                &context,
+            ),
         )?;
         self.flush_note_exports(conn)?;
         Ok(())
@@ -409,7 +453,10 @@ impl Vault {
             judgment,
             allow_new_tags,
             client,
+            actor,
+            revision,
         } = update;
+        crate::tag_vocabulary_source::ensure_workspace(self, conn)?;
         let mut note = self.require_origin(
             conn,
             id,
@@ -445,18 +492,30 @@ impl Vault {
         if let Some(b) = body {
             note.body = b.to_string();
         }
+        let actor = actor.unwrap_or_else(|| WriteActor::from_client_hint(client));
         note.front.generated = Some(Generated {
-            by: client.into(),
+            by: actor.generated_by(client),
             at: now_iso(),
         });
         let t = note.front.title.as_deref().unwrap_or(id);
+        if let Some(revision) = &revision {
+            revision.validate()?;
+        }
+        let context = WriteContext {
+            actor: &actor,
+            revision: revision.as_ref(),
+            operation: Operation::Update,
+        };
         crate::note_store::put(
             self,
             conn,
             id,
             &note,
-            &format!("**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"),
-            &format!("note: update {id} (via {client})"),
+            WriteAttribution::new(
+                &format!("**Update**: [{t}](/{id}.md) を AI が更新(via {client})。"),
+                &format!("note: update {id} (via {client})"),
+                &context,
+            ),
         )?;
         self.flush_note_exports(conn)?;
         Ok(crate::write_guidance::update_warnings(&before, &note))
@@ -491,6 +550,8 @@ impl Vault {
                 relations: Vec::new(),
                 allow_new_tags: true,
                 client,
+                actor: None,
+                revision: None,
             },
         )
     }
@@ -504,8 +565,20 @@ impl Vault {
     /// DB commitと同じtransactionで積まれたMarkdown出力を、順番どおり冪等に反映する。
     pub fn flush_note_exports(&self, conn: &rusqlite::Connection) -> Result<usize> {
         let pending = crate::note_store::pending(conn)?;
-        let count = pending.len();
-        for export in pending {
+        let mut count = pending.len();
+        let mut pending = pending.into_iter().peekable();
+        while let Some(export) = pending.next() {
+            if let Some(execution_id) = tag_exports::execution_id(&export.op_id) {
+                let execution_id = execution_id.to_string();
+                let mut group = vec![export];
+                while pending.peek().is_some_and(|next| {
+                    tag_exports::execution_id(&next.op_id) == Some(execution_id.as_str())
+                }) {
+                    group.push(pending.next().context("語彙変更outboxがない")?);
+                }
+                self.flush_tag_exports(conn, &execution_id, &group)?;
+                continue;
+            }
             let id = NoteId::parse(&export.note_id)?;
             match export.operation {
                 crate::note_store::ExportOperation::Upsert => {
@@ -530,11 +603,23 @@ impl Vault {
                     }
                 }
             }
+            // 来歴イベントは正本(.kb-events)へ追記してから、同じcommitへ載せる。
+            // 旧版が積んだexportにはイベントが無いので、その場合は従来どおり処理する。
+            let event = crate::provenance::event_by_id(conn, &export.op_id)?;
+            let mut extra_paths = Vec::new();
+            if let Some(event) = &event {
+                crate::provenance::append_event(&self.root, event)?;
+                extra_paths.push(crate::provenance::shard_relative_path(&event.at));
+            }
             self.append_log_once(&export.op_id, &export.log_entry)?;
             self.write_index_md()?;
-            self.commit_note_op(id.as_str(), &export.commit_message)?;
+            self.commit_note_op(id.as_str(), &export.commit_message, &extra_paths)?;
             crate::note_store::complete(conn, export.seq)?;
+            if let Some(event) = &event {
+                crate::provenance::mark_exported(conn, &event.event_id)?;
+            }
         }
+        count += crate::tag_vocabulary_source::flush_exports(self, conn)?;
         if count != 0 {
             crate::connect::auto_push(self);
         }
@@ -601,13 +686,28 @@ impl Vault {
             .into_iter()
             .find(|export| export.op_id == conflict.operation_id)
             .context("検査したMarkdown出力が見つからない")?;
-        let document = export.document.context("upsert exportに本文がない")?;
-        let note = Note::parse(&document)?;
+        let document = export
+            .document
+            .as_ref()
+            .context("upsert exportに本文がない")?;
+        let note = Note::parse(document)?;
         self.write_note(&conflict.note, &note)?;
-        self.append_log_once(&export.op_id, &export.log_entry)?;
-        self.write_index_md()?;
-        self.commit_note_op(&conflict.note, &export.commit_message)?;
-        crate::note_store::complete(conn, export.seq)?;
+        // 一括語彙変更は競合1件の解消でoutboxを部分消去せず、グループ全体から再開する。
+        if tag_exports::execution_id(&export.op_id).is_none() {
+            let event = crate::provenance::event_by_id(conn, &export.op_id)?;
+            let mut extra_paths = Vec::new();
+            if let Some(event) = &event {
+                crate::provenance::append_event(&self.root, event)?;
+                extra_paths.push(crate::provenance::shard_relative_path(&event.at));
+            }
+            self.append_log_once(&export.op_id, &export.log_entry)?;
+            self.write_index_md()?;
+            self.commit_note_op(&conflict.note, &export.commit_message, &extra_paths)?;
+            crate::note_store::complete(conn, export.seq)?;
+            if let Some(event) = &event {
+                crate::provenance::mark_exported(conn, &event.event_id)?;
+            }
+        }
         self.flush_note_exports(conn)?;
         crate::index::mark_runtime_store_db(conn)?;
         crate::connect::auto_push(self);
@@ -784,12 +884,54 @@ impl Vault {
         Ok(())
     }
 
-    fn commit_note_op(&self, id: &str, message: &str) -> Result<()> {
+    /// ノート1操作分のcommit。`extra_paths` には来歴shardのような、
+    /// 同じ操作で書いた追加の正本を渡す。
+    fn commit_note_op(&self, id: &str, message: &str, extra_paths: &[String]) -> Result<()> {
         let id = NoteId::parse(id)?;
         let note_path = id.markdown_relative_path();
         let note_path = note_path.to_str().context("ノートIDがUTF-8ではない")?;
-        self.commit(&[note_path, "index.md", "log.md"], message)?;
+        let mut paths = vec![note_path, "index.md", "log.md"];
+        paths.extend(extra_paths.iter().map(String::as_str));
+        self.commit(&paths, message)?;
         Ok(())
+    }
+
+    /// ノートの来歴イベント(新しい順)。台帳はDBの`note_events`から引く。
+    pub fn note_history(
+        &self,
+        conn: &rusqlite::Connection,
+        note_id: &str,
+        limit: usize,
+    ) -> Result<Vec<NoteEvent>> {
+        let id = NoteId::parse(note_id)?;
+        let note_uid = stored_note_uid(conn, id.as_str())?;
+        crate::provenance::events_for_note(conn, id.as_str(), note_uid.as_deref(), limit)
+    }
+
+    /// ノートの来歴要約。見出しの書き手は、現在の本文に残っている見出しだけへ絞る
+    /// (消えた見出しの担当者を「今の書き手」として見せない)。
+    pub fn note_provenance(
+        &self,
+        conn: &rusqlite::Connection,
+        note_id: &str,
+    ) -> Result<ProvenanceSummary> {
+        let id = NoteId::parse(note_id)?;
+        let note_uid = stored_note_uid(conn, id.as_str())?;
+        let events =
+            crate::provenance::events_for_note(conn, id.as_str(), note_uid.as_deref(), usize::MAX)?;
+        let mut summary = crate::provenance::summarize(&events);
+        let note = crate::note_store::read(conn, id.as_str())?;
+        let headings = crate::provenance::body_headings(&note.body);
+        summary
+            .section_authors
+            .retain(|author| headings.contains(&author.heading));
+        summary.section_authors.sort_by_key(|author| {
+            headings
+                .iter()
+                .position(|heading| heading == &author.heading)
+                .unwrap_or(usize::MAX)
+        });
+        Ok(summary)
     }
 
     /// 指定パスをステージしてコミット(git 履歴 = 監査痕跡)。
@@ -823,12 +965,20 @@ impl Vault {
     }
 }
 
-fn document_hash(document: &str) -> String {
-    format!("sha256:{:x}", Sha256::digest(document.as_bytes()))
-}
-
 // 既存の空ノートは読めるまま、新しく渡された入力だけを拒否する。
 // parse/exportの共通検証へ置くと、無関係なmetadata更新やバックアップまで止まる。
+/// 現在のノート行が持つ安定ID。削除済み・legacyノートは None。
+fn stored_note_uid(conn: &rusqlite::Connection, note_id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT note_uid FROM notes WHERE id = ?1",
+            [note_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
 fn validate_note_text_input(field: &str, value: &str) -> Result<()> {
     if value.trim().is_empty() {
         return Err(crate::write_rejection::WriteRejection::InvalidArgument
@@ -957,6 +1107,8 @@ mod tests {
                             relations: None,
                             allow_new_tags: false,
                             client: "test/client",
+                            actor: None,
+                            revision: None,
                         },
                     )
                     .is_err(),
@@ -964,7 +1116,7 @@ mod tests {
             );
             assert!(
                 vault
-                    .agent_delete_note(&conn, id, "境界テスト", "test/client")
+                    .agent_delete_note(&conn, id, "境界テスト", "test/client", None)
                     .is_err(),
                 "削除できてはいけない: {id}"
             );
@@ -1004,13 +1156,15 @@ mod tests {
                         relations: None,
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
         );
         assert!(
             vault
-                .agent_delete_note(&conn, "notes/linked", "添付境界テスト", "test/client")
+                .agent_delete_note(&conn, "notes/linked", "添付境界テスト", "test/client", None)
                 .is_err()
         );
         assert_eq!(std::fs::read_to_string(&outside).unwrap(), original);
@@ -1042,7 +1196,7 @@ mod tests {
 
         for reason in ["", "一行目\n二行目"] {
             let err = vault
-                .agent_delete_note(&conn, &id, reason, "test/client")
+                .agent_delete_note(&conn, &id, reason, "test/client", None)
                 .unwrap_err();
             assert!(err.to_string().contains("削除理由は1〜500文字の一行"));
             assert_eq!(vault.read_note(&id).unwrap().body, "本文\n");
@@ -1050,13 +1204,13 @@ mod tests {
 
         let too_long = "あ".repeat(501);
         let err = vault
-            .agent_delete_note(&conn, &id, &too_long, "test/client")
+            .agent_delete_note(&conn, &id, &too_long, "test/client", None)
             .unwrap_err();
         assert!(err.to_string().contains("削除理由は1〜500文字の一行"));
         assert_eq!(vault.read_note(&id).unwrap().body, "本文\n");
 
         vault
-            .agent_delete_note(&conn, &id, "重複ノートへ統合済み", "test/client")
+            .agent_delete_note(&conn, &id, "重複ノートへ統合済み", "test/client", None)
             .unwrap();
         assert!(vault.read_note(&id).is_err());
     }
@@ -1130,13 +1284,15 @@ mod tests {
                         relations: None,
                         allow_new_tags: false,
                         client: "claude/x",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
         );
         assert!(
             vault
-                .agent_delete_note(&conn, &legacy, "所有ガードテスト", "claude/x")
+                .agent_delete_note(&conn, &legacy, "所有ガードテスト", "claude/x", None)
                 .is_err()
         );
 
@@ -1159,6 +1315,8 @@ mod tests {
                         relations: None,
                         allow_new_tags: false,
                         client: "claude/x",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_ok()
@@ -1170,7 +1328,7 @@ mod tests {
             .unwrap();
         assert!(
             vault
-                .agent_delete_note(&conn, &ai2, "重複整理", "claude/x")
+                .agent_delete_note(&conn, &ai2, "重複整理", "claude/x", None)
                 .is_ok()
         );
     }
@@ -1191,6 +1349,8 @@ mod tests {
             relations: Vec::new(),
             allow_new_tags: true,
             client: "test/text-input",
+            actor: None,
+            revision: None,
         }
     }
 
@@ -1275,6 +1435,8 @@ mod tests {
                         judgment: change,
                         allow_new_tags: false,
                         client: "test/judgment",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -1331,6 +1493,8 @@ mod tests {
                     judgment: Some(Some(invalid)),
                     allow_new_tags: false,
                     client: "test/judgment",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap_err();
@@ -1377,7 +1541,7 @@ mod tests {
         );
         assert!(
             vault
-                .agent_delete_note(&conn, &decision, "参照保護の検証", "test/judgment")
+                .agent_delete_note(&conn, &decision, "参照保護の検証", "test/judgment", None)
                 .is_err()
         );
         assert!(crate::note_store::contains(&conn, &decision).unwrap());
@@ -1397,6 +1561,8 @@ mod tests {
                         judgment: None,
                         allow_new_tags: false,
                         client: "test/judgment",
+                        actor: None,
+                        revision: None,
                     }
                 )
                 .is_err()
@@ -1480,6 +1646,8 @@ mod tests {
                             relations: None,
                             allow_new_tags: false,
                             client: "test/text-input",
+                            actor: None,
+                            revision: None,
                         },
                     )
                     .unwrap_err();
@@ -1525,6 +1693,8 @@ mod tests {
                     relations: None,
                     allow_new_tags: false,
                     client: "test/text-input",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1550,7 +1720,18 @@ mod tests {
             legacy.front.title = title.map(str::to_string);
             legacy.front.tags = vec!["known".into()];
             // 旧版で既に保存された文書を再現する。現行の入力APIから空文書は作らない。
-            crate::note_store::put(&vault, &conn, &id, &legacy, "fixture", "fixture").unwrap();
+            crate::note_store::put(
+                &vault,
+                &conn,
+                &id,
+                &legacy,
+                crate::note_store::WriteAttribution::new(
+                    "fixture",
+                    "fixture",
+                    &crate::provenance::test_context(),
+                ),
+            )
+            .unwrap();
             vault.flush_note_exports(&conn).unwrap();
             let before = vault.read_note_from_db(&conn, &id).unwrap();
             assert!(before.body.trim().is_empty());
@@ -1571,6 +1752,8 @@ mod tests {
                         relations: None,
                         allow_new_tags: false,
                         client: "test/text-input",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -1609,6 +1792,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: true,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
@@ -1631,6 +1816,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1655,6 +1842,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
@@ -1674,6 +1863,8 @@ mod tests {
                         relations: None,
                         allow_new_tags: true,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
@@ -1703,5 +1894,178 @@ mod tests {
         assert!(vault.root.join("index.md").exists());
         assert!(vault.root.join("log.md").exists());
         assert_eq!(vault.list_note_files().unwrap().len(), 1);
+    }
+
+    /// 来歴は本文と分離した台帳に残す(契約20)。propose→update→deleteを1本で通し、
+    /// 何が記録され、何が記録されないかを固定する。
+    #[test]
+    fn every_write_leaves_one_provenance_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let id = vault
+            .propose(
+                &conn,
+                NoteProposal {
+                    judgment: None,
+                    title: "来歴の記録",
+                    body: "## 背景\n最初の本文。\n\n## 決定\n決めた。",
+                    description: None,
+                    tags: &["test".into()],
+                    authority: Authority {
+                        namespace: NoteNamespace::Records,
+                        role: crate::authority::AuthorityRole::Record,
+                        status: crate::authority::AuthorityStatus::Active,
+                        scope: "test/provenance".into(),
+                    },
+                    relations: Vec::new(),
+                    allow_new_tags: true,
+                    client: "codex-cli/gpt-5.6-sol",
+                    actor: None,
+                    revision: None,
+                },
+            )
+            .unwrap();
+
+        let created = vault.note_history(&conn, &id, 10).unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].operation, Operation::Propose);
+        assert_eq!(created[0].kind, crate::provenance::RevisionKind::Create);
+        assert_eq!(created[0].actor.client, "codex-cli");
+        assert_eq!(created[0].actor.model.as_deref(), Some("gpt-5.6-sol"));
+        assert!(created[0].base_hash.is_none());
+        assert!(created[0].doc_hash.is_some());
+
+        vault
+            .agent_update_note(
+                &conn,
+                NoteUpdate {
+                    id: &id,
+                    title: None,
+                    body: Some("## 背景\n最初の本文。\n\n## 決定\n決め直した。"),
+                    description: None,
+                    tags: Some(&["test".into(), "kb-app".into()]),
+                    authority: None,
+                    relations: None,
+                    judgment: None,
+                    allow_new_tags: true,
+                    client: "claude-code/claude-fable-5-1",
+                    actor: None,
+                    revision: None,
+                },
+            )
+            .unwrap();
+
+        let history = vault.note_history(&conn, &id, 10).unwrap();
+        assert_eq!(history.len(), 2);
+        let updated = &history[0];
+        assert_eq!(updated.operation, Operation::Update);
+        assert_eq!(updated.sections, vec!["## 決定"], "変えた見出しだけ");
+        assert!(updated.changes.contains_key("tags"));
+        assert!(!updated.changes.contains_key("title"));
+        assert!(
+            updated
+                .body_diff
+                .as_deref()
+                .is_some_and(|diff| diff.contains("+決め直した。"))
+        );
+        assert_eq!(updated.base_hash, created[0].doc_hash);
+
+        // 見出しの書き手は現在の本文にある見出しへ絞る
+        let summary = vault.note_provenance(&conn, &id).unwrap();
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(summary.distinct_actors, 2);
+        let authors: Vec<(&str, &str)> = summary
+            .section_authors
+            .iter()
+            .map(|author| (author.heading.as_str(), author.actor.client.as_str()))
+            .collect();
+        assert_eq!(
+            authors,
+            vec![("## 背景", "codex-cli"), ("## 決定", "claude-code")]
+        );
+
+        vault
+            .agent_delete_note(
+                &conn,
+                &id,
+                "統合したため削除",
+                "claude-code/claude-fable-5-1",
+                None,
+            )
+            .unwrap();
+        let removed = vault.note_history(&conn, &id, 10).unwrap();
+        assert_eq!(removed.len(), 3);
+        assert_eq!(removed[0].operation, Operation::Remove);
+        assert_eq!(removed[0].kind, crate::provenance::RevisionKind::Remove);
+        assert_eq!(removed[0].summary.as_deref(), Some("統合したため削除"));
+        assert_eq!(removed[0].sections, vec!["## 背景", "## 決定"]);
+        assert!(removed[0].doc_hash.is_none());
+    }
+
+    /// 来歴の正本はvault内のshard。flushで1操作1行を追記し、同じcommitへ載せる。
+    #[test]
+    fn flush_appends_each_event_once_and_commits_the_shard() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let id = vault
+            .propose_for_test("来歴shard", "本文。", None, &["test".into()], "test/client")
+            .unwrap();
+
+        let event = vault.note_history(&conn, &id, 1).unwrap().remove(0);
+        let relative = crate::provenance::shard_relative_path(&event.at);
+        let shard = vault.root.join(&relative);
+        assert_eq!(fs::read_to_string(&shard).unwrap().lines().count(), 1);
+
+        // 出力済みの印が付き、再flushでも行は増えない
+        let exported: i64 = conn
+            .query_row(
+                "SELECT exported FROM note_events WHERE event_id=?1",
+                [&event.event_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exported, 1);
+        vault.flush_note_exports(&conn).unwrap();
+        crate::provenance::append_event(&vault.root, &event).unwrap();
+        assert_eq!(fs::read_to_string(&shard).unwrap().lines().count(), 1);
+
+        // shardはノートと同じcommitに入っている(表示用Markdownだけが残らない)
+        let repo = Repository::open(&vault.root).unwrap();
+        let tree = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        assert!(tree.get_path(Path::new(&relative)).is_ok(), "{relative}");
+    }
+
+    /// DBは派生。`.kb-events`が残っていれば、作り直したDBへ来歴が戻る。
+    #[test]
+    fn a_fresh_database_restores_provenance_from_the_vault() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let id = vault
+            .propose_for_test(
+                "来歴の復元",
+                "本文。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let before = vault.note_history(&conn, &id, 10).unwrap();
+        drop(conn);
+
+        fs::remove_dir_all(vault.root.join(".kb")).unwrap();
+        let restored = crate::index::open_db(&vault).unwrap();
+        let after = vault.note_history(&restored, &id, 10).unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[0].event_id, before[0].event_id);
+        assert_eq!(after[0].doc_hash, before[0].doc_hash);
     }
 }

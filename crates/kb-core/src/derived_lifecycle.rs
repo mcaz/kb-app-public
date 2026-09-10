@@ -801,7 +801,7 @@ mod tests {
         );
     }
 
-    /// 命名規律: coreの既存6 artifactとdurable tableはframeworkの対象外
+    /// 命名規律: coreのregistry artifactとdurable tableはframeworkの対象外
     /// (「coreの既存artifactへは適用しない」の機械的強制)。
     #[test]
     fn framework_rejects_core_registry_objects_and_durable_tables() {
@@ -811,6 +811,7 @@ mod tests {
             "links",
             "links_dst",
             "fts_anchor",
+            "fts_events",
             "note_relations",
             "note_vecs",
             "notes",

@@ -31,6 +31,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 encoding_rs = "0.8"
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-opener = "2.5.4"
+# 取得と署名検証だけを使い、適用は起動受入まで旧版を保持する専用経路へ渡す。
+tauri-plugin-updater = { version = "=2.11.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
+tokio = { version = "1", features = ["sync"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

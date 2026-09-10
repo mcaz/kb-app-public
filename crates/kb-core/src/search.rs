@@ -10,9 +10,11 @@ use crate::retrieval_profile::SearchPolicy;
 use crate::tokenize::match_expr;
 
 mod browse;
+mod result_query;
 pub use browse::{
     NoteBrowsePage, NoteBrowsePeriod, NoteBrowseSort, browsable_note_count, browse_notes,
 };
+use result_query::{ResultRanking, ResultScore};
 
 const DIVERSITY_MAX_NORMALIZED_CHARS: usize = 2_048;
 const DIVERSITY_MIN_SHINGLES: usize = 8;
@@ -139,11 +141,46 @@ fn search_excluding(
     let mut hits: Vec<Hit> = Vec::new();
     let mut degraded = Vec::new();
     let intent = QueryIntent::from_query(query);
+    // 来歴の申告文は「当時の理由」を聞かれたときだけ効かせる。intentが立たない
+    // queryでは索引を引かないので、既存の順位は1件も動かない。
+    let event_notes = if intent.historical || intent.rationale {
+        match event_matched_notes(conn, query, limit) {
+            Ok(notes) => notes,
+            Err(error) => {
+                // 専用codeを足すとGUIの型面(bindings.ts)が増える。索引の欠落・破損
+                // 自体はopen時のhealth checkがIndexRepairとして見せるので、ここは
+                // 「補助artifactが使えずbaseline順位へ落ちた」を既存codeで示す。
+                degraded.push(Degradation::ArtifactNotReady {
+                    artifact: "fts_events".to_string(),
+                    detail: error.to_string(),
+                });
+                std::collections::HashSet::new()
+            }
+        }
+    } else {
+        std::collections::HashSet::new()
+    };
+    let mut results = ResultRanking::from_query(query);
+    // 完了照会では融合前に結果記録を落とさず、各経路を既存倍率の候補予算へ限定する。
+    let candidate_policy = if results.is_some() {
+        SearchPolicy {
+            limit: policy.candidate_limit(),
+            candidate_multiplier: 1,
+            ..*policy
+        }
+    } else {
+        *policy
+    };
 
     // 主経路: lindera 分かち書き + bm25
-    match match excluded {
-        Some(note) => main_search_excluding(conn, query, policy, Some(note)),
-        None => main_search(conn, query, policy),
+    match match results.as_mut() {
+        Some(ranking) => {
+            main_search_excluding(conn, query, &candidate_policy, excluded, Some(ranking))
+        }
+        None => match excluded {
+            Some(note) => main_search_excluding(conn, query, policy, Some(note), None),
+            None => main_search(conn, query, policy),
+        },
     } {
         Ok(main_hits) => hits.extend(main_hits),
         Err(error) => degraded.push(Degradation::MainSearch {
@@ -152,20 +189,28 @@ fn search_excluding(
     }
 
     // リンク文言はリンク先自身に語が無い別名を拾うための弱い索引として扱う。
-    match anchor_search(conn, query, limit) {
+    match anchor_search(conn, query, candidate_policy.limit) {
         Ok(anchor_hits) => merge_anchor_hits(&mut hits, anchor_hits),
         Err(error) => degraded.push(Degradation::AnchorSearch {
             detail: error.to_string(),
         }),
     }
-    rank_hits(&mut hits, query, intent);
-    hits.truncate(limit);
+    load_result_scores(conn, &hits, &mut results, &mut degraded);
+    rank_hits(&mut hits, query, intent, results.as_ref(), &event_notes);
+    hits.truncate(candidate_policy.limit);
 
     // 意味検索(段1)。モデル未導入なら黙って全文のみ(段0 の正常形)。
     // 導入済みで失敗した場合は必ず劣化として見せる(沈黙停止の教訓)。
     if policy.semantic {
-        match vec_search(conn, query, limit) {
-            Ok(Some(vec_hits)) => hits = fuse(hits, vec_hits, limit),
+        match vec_search(conn, query, candidate_policy.limit) {
+            Ok(Some(vec_hits)) => {
+                let fused_limit = if results.is_some() {
+                    hits.len().saturating_add(vec_hits.len())
+                } else {
+                    limit
+                };
+                hits = fuse(hits, vec_hits, fused_limit);
+            }
             Ok(None) => {}
             Err(error) => degraded.push(Degradation::SemanticSearch {
                 detail: error.to_string(),
@@ -175,10 +220,10 @@ fn search_excluding(
 
     // レスキュー経路: 主経路で拾えない部分語・未知語形(差分だけ足す)
     if policy.rescue {
-        match rescue_search(conn, query, limit) {
+        match rescue_search(conn, query, candidate_policy.limit) {
             Ok(rescue_hits) => {
                 for h in rescue_hits {
-                    if hits.len() >= limit {
+                    if results.is_none() && hits.len() >= limit {
                         break;
                     }
                     if !hits.iter().any(|x| x.id == h.id) {
@@ -195,7 +240,8 @@ fn search_excluding(
     // 完全タイトル一致はlocatorとしての明示性が最も高い。明示的なquery intentがある場合だけ
     // authorityの既定順を上書きし、該当しない候補間ではactive canonicalを優先する。
     hits.retain(|hit| Some(hit.id.as_str()) != excluded);
-    rank_hits(&mut hits, query, intent);
+    load_result_scores(conn, &hits, &mut results, &mut degraded);
+    rank_hits(&mut hits, query, intent, results.as_ref(), &event_notes);
     if policy.diversify {
         match diversify_hits(conn, &hits, limit) {
             Ok(diverse_hits) => hits = diverse_hits,
@@ -222,15 +268,69 @@ fn search_excluding(
     }
 }
 
-fn rank_hits(hits: &mut [Hit], query: &str, intent: QueryIntent) {
+fn load_result_scores(
+    conn: &Connection,
+    hits: &[Hit],
+    results: &mut Option<ResultRanking>,
+    degraded: &mut Vec<Degradation>,
+) {
+    if let Some(ranking) = results
+        && let Err(error) = ranking.load_missing(conn, hits)
+    {
+        // 一部だけ結果根拠がある順位へ黙って切り替えず、既存順位と劣化を返す。
+        *results = None;
+        degraded.push(Degradation::MainSearch {
+            detail: format!("result ranking: {error}"),
+        });
+    }
+}
+
+fn rank_hits(
+    hits: &mut [Hit],
+    query: &str,
+    intent: QueryIntent,
+    results: Option<&ResultRanking>,
+    event_notes: &std::collections::HashSet<String>,
+) {
     hits.sort_by_key(|hit| {
         (
             !exact_title_match(query, hit.title.as_deref()),
+            std::cmp::Reverse(
+                results
+                    .map(|ranking| ranking.for_hit(hit))
+                    .unwrap_or_default(),
+            ),
             std::cmp::Reverse(hit.intent_alignment(intent)),
             !hit.anchor_matched(),
+            // 来歴一致はanchorと同じ強さの弱い加点。候補は増やさず順位だけ動かす。
+            !event_notes.contains(&hit.id),
             hit.authority_priority(),
         )
     });
+}
+
+/// 来歴イベントの申告文が当たったノートID。候補追加ではなく既存候補の加点に使う
+/// (イベントは本文ではないので、これ単独で本文の無いノートを上位に出さない)。
+fn event_matched_notes(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<std::collections::HashSet<String>> {
+    // ORで引く。intentを立てる語(「理由」「当時」)はquery側にしか出ないことが多く、
+    // ANDにすると申告文へ同じ語が入っている場合しか当たらない。加点対象は既に
+    // 本文検索で見つかっている候補だけなので、ORでも無関係なノートは入らない。
+    let expr = crate::tokenize::match_expr_any(query);
+    if expr.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    let mut statement = conn.prepare_cached(
+        "SELECT note_id FROM fts_events
+         WHERE fts_events MATCH ?1 ORDER BY rank LIMIT ?2",
+    )?;
+    let rows = statement.query_map(rusqlite::params![expr, limit as i64], |row| {
+        row.get::<_, String>(0)
+    })?;
+    Ok(rows.collect::<std::result::Result<std::collections::HashSet<_>, _>>()?)
 }
 
 fn merge_anchor_hits(hits: &mut Vec<Hit>, anchor_hits: Vec<Hit>) {
@@ -248,7 +348,8 @@ fn merge_anchor_hits(hits: &mut Vec<Hit>, anchor_hits: Vec<Hit>) {
 }
 
 fn main_search(conn: &Connection, query: &str, policy: &SearchPolicy) -> Result<Vec<Hit>> {
-    main_search_excluding(conn, query, policy, None)
+    let mut results = ResultRanking::from_query(query);
+    main_search_excluding(conn, query, policy, None, results.as_mut())
 }
 
 fn main_search_excluding(
@@ -256,9 +357,12 @@ fn main_search_excluding(
     query: &str,
     policy: &SearchPolicy,
     excluded: Option<&str>,
+    mut results: Option<&mut ResultRanking>,
 ) -> Result<Vec<Hit>> {
     let limit = policy.limit;
-    let expr = if policy.any_terms {
+    let expr = if let Some(ranking) = results.as_ref() {
+        ranking.match_expr(policy.any_terms)
+    } else if policy.any_terms {
         crate::tokenize::match_expr_any(query)
     } else {
         match_expr(query)
@@ -282,6 +386,7 @@ fn main_search_excluding(
     let rows = stmt.query_map(
         rusqlite::params![expr, candidate_limit as i64, excluded],
         |r| {
+            let id = r.get::<_, String>(0)?;
             let title = r.get::<_, Option<String>>(1)?;
             let tags = r.get::<_, Option<String>>(5)?;
             let namespace = r.get::<_, Option<String>>(9)?;
@@ -290,6 +395,27 @@ fn main_search_excluding(
             let body = r.get::<_, String>(14)?;
             let authority_role = r.get::<_, Option<String>>(10)?;
             let authority_status = r.get::<_, Option<String>>(11)?;
+            let result_alignment = results
+                .as_deref_mut()
+                .map(|ranking| {
+                    ranking.remember(
+                        &id,
+                        &FieldValues {
+                            title: title.as_deref(),
+                            description: description.as_deref(),
+                            tags: tags.as_deref(),
+                            namespace: namespace.as_deref(),
+                            scope: authority_scope.as_deref(),
+                            body: &body,
+                        },
+                        AuthorityValues {
+                            namespace: namespace.as_deref(),
+                            role: authority_role.as_deref(),
+                            status: authority_status.as_deref(),
+                        },
+                    )
+                })
+                .unwrap_or_default();
             let field_score = field_score(
                 query,
                 &field_terms,
@@ -315,7 +441,7 @@ fn main_search_excluding(
             );
             Ok((
                 Hit {
-                    id: r.get(0)?,
+                    id,
                     title,
                     status: r.get(2)?,
                     snippet: r.get(3)?,
@@ -333,6 +459,7 @@ fn main_search_excluding(
                 },
                 RankingScore {
                     exact_title: field_score.exact_title,
+                    result_alignment,
                     intent_alignment,
                     weighted_term_matches: field_score.weighted_term_matches,
                 },
@@ -529,6 +656,7 @@ struct FieldScore {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RankingScore {
     exact_title: bool,
+    result_alignment: ResultScore,
     intent_alignment: u8,
     weighted_term_matches: usize,
 }
@@ -854,63 +982,83 @@ fn split_tags(t: Option<String>) -> Vec<String> {
         .collect()
 }
 
-/// タグの使用数(deprecated 除く・多い順)。一覧のフィルタチップ用。
+/// タグの使用数(deprecated 除く・多い順)。既存語彙のbootstrapにも使う。
 pub fn tag_counts(conn: &Connection, limit: usize) -> Result<Vec<(String, usize)>> {
-    let mut stmt = conn.prepare_cached("SELECT tags FROM notes WHERE status != 'deprecated'")?;
-    let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
-    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for row in rows {
-        for t in split_tags(row?) {
-            *counts.entry(t).or_default() += 1;
-        }
-    }
-    let mut v: Vec<(String, usize)> = counts.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    v.truncate(limit);
-    Ok(v)
+    let mut counts: Vec<_> = count_tags(conn, "status != 'deprecated'")?
+        .into_iter()
+        .collect();
+    counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    counts.truncate(limit);
+    Ok(counts)
 }
 
-/// タグの一覧(使用数+説明)。**説明はアプリが持たず KB の「タグ運用」ノートから読む**
-/// (タグの意味づけは AI とユーザーの会話で決まる — 2026-08-10 方針)。
-/// 表(| タグ | 説明 |)と箇条書き(- タグ — 説明 / - タグ: 説明)の両方を拾う。
+fn count_tags(
+    conn: &Connection,
+    condition: &str,
+) -> Result<std::collections::BTreeMap<String, usize>> {
+    let mut stmt = conn.prepare_cached(&format!("SELECT tags FROM notes WHERE {condition}"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+    let mut counts = std::collections::BTreeMap::new();
+    for row in rows {
+        // 旧importなどで同じタグが重複していても、ノート数を水増ししない。
+        for tag in split_tags(row?)
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            *counts.entry(tag).or_default() += 1;
+        }
+    }
+    Ok(counts)
+}
+
+/// 通常参照ノートの使用数と、AIが語彙の正本で定めた役割。UIは意味づけを持たない。
 #[derive(Debug, Clone, serde::Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct TagInfo {
     pub tag: String,
     pub count: usize,
     pub description: Option<String>,
+    /// 使用実績だけでは正式な語彙へ昇格させない。
+    pub registered: bool,
 }
 
-pub fn tag_overview(conn: &Connection) -> Result<(Vec<TagInfo>, Option<String>)> {
-    // 読み取りは tags::glossary が正本(`## 語彙` 節の表だけ・形式検証つき)。
-    // 以前はこの関数が本文全体を舐めており、普通の箇条書きや URL が偽タグとして
-    // 一覧に出た(2026-08-12)。
-    let glossary = crate::tags::glossary(conn)?;
-    let (desc, note_id) = (glossary.entries, glossary.note_id);
-    let counts = tag_counts(conn, 500)?;
-    let mut out: Vec<TagInfo> = counts
+#[derive(Debug, serde::Serialize)]
+pub struct TagOverview {
+    pub tags: Vec<TagInfo>,
+    pub glossary_note: Option<String>,
+    pub source_status: crate::tags::SourceStatus,
+    pub skipped_count: usize,
+}
+
+pub fn tag_overview(conn: &Connection) -> Result<TagOverview> {
+    let vocabulary = crate::tags::vocabulary_overview(conn)?;
+    let descriptions = if vocabulary.source_status == crate::tags::SourceStatus::Pinned {
+        vocabulary.entries
+    } else {
+        // 未指定のbootstrap語彙を、役割が確定した語彙として表示しない。
+        std::collections::BTreeMap::new()
+    };
+    let mut counts = count_tags(conn, browse::VISIBLE_NOTES)?;
+    // 件数を上位語だけに制限すると、下位の登録語が「0件」に化けてしまう。
+    for tag in descriptions.keys() {
+        counts.entry(tag.clone()).or_default();
+    }
+    let mut tags: Vec<_> = counts
         .into_iter()
-        .map(|(tag, count)| {
-            let description = desc.get(&tag).cloned();
-            TagInfo {
-                tag,
-                count,
-                description,
-            }
+        .map(|(tag, count)| TagInfo {
+            count,
+            description: descriptions.get(&tag).cloned(),
+            registered: descriptions.contains_key(&tag),
+            tag,
         })
         .collect();
-    // 合意済みだがまだ使われていないタグも見せる(語彙として存在するため)
-    for (tag, d) in desc {
-        if !out.iter().any(|t| t.tag == tag) {
-            out.push(TagInfo {
-                tag,
-                count: 0,
-                description: Some(d),
-            });
-        }
-    }
-    out.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
-    Ok((out, note_id))
+    tags.sort_by(|a, b| b.count.cmp(&a.count).then(a.tag.cmp(&b.tag)));
+    Ok(TagOverview {
+        tags,
+        glossary_note: vocabulary.glossary_note,
+        source_status: vocabulary.source_status,
+        skipped_count: vocabulary.skipped.len(),
+    })
 }
 
 /// 指定ノートと意味が近いノート(自分自身・リンク済み・退役は除く)。
@@ -1369,6 +1517,347 @@ mod tests {
         (dir, vault, conn)
     }
 
+    /// 来歴の申告文は「当時の理由」を聞かれたときだけ弱く効く。intentが立たない
+    /// queryでは索引を引かないので、既存の順位は1件も動かない(契約20 / ADR-0023)。
+    #[test]
+    fn revision_summaries_boost_only_historical_and_rationale_queries() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        // タイトルに語を持つAが、通常のqueryでは常に先。
+        vault
+            .propose_for_test(
+                "青い彗星の運用",
+                "青い彗星 当時 の運用手順を書く。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let boosted = vault
+            .propose_for_test(
+                "紫の記録",
+                "青い彗星 当時 の話を書く。",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        // 本文は変えず、改版の申告だけを足す(申告文はノート本文には入らない)。
+        vault
+            .agent_update_note(
+                &conn,
+                crate::vault::NoteUpdate {
+                    id: &boosted,
+                    title: None,
+                    body: None,
+                    description: None,
+                    tags: None,
+                    authority: None,
+                    relations: None,
+                    judgment: None,
+                    allow_new_tags: false,
+                    client: "test/client",
+                    actor: None,
+                    revision: Some(crate::provenance::RevisionInput {
+                        kind: Some(crate::provenance::RevisionKind::Correct),
+                        summary: Some("青い彗星の当時の判断へ戻した".into()),
+                        ..crate::provenance::RevisionInput::default()
+                    }),
+                },
+            )
+            .unwrap();
+
+        let neutral = super::search(&conn, "青い彗星", 10);
+        assert!(neutral.degraded.is_empty(), "{:?}", neutral.degraded);
+        let neutral_order = neutral
+            .hits
+            .iter()
+            .map(|hit| hit.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(neutral_order, ["notes/青い彗星の運用", boosted.as_str()]);
+
+        let historical = super::search(&conn, "青い彗星 当時", 10);
+        assert!(historical.degraded.is_empty(), "{:?}", historical.degraded);
+        assert_eq!(
+            historical.hits.first().map(|hit| hit.id.as_str()),
+            Some(boosted.as_str()),
+            "来歴の申告文が加点されていない: {:?}",
+            historical.hits
+        );
+
+        // 索引が使えないときも検索は止めず、baseline順位へ落ちたことを型で示す。
+        conn.execute_batch("DROP TABLE fts_events").unwrap();
+        let fallback = super::search(&conn, "青い彗星 当時", 10);
+        assert_eq!(
+            fallback
+                .hits
+                .iter()
+                .map(|hit| hit.id.as_str())
+                .collect::<Vec<_>>(),
+            neutral_order
+        );
+        assert!(
+            fallback.degraded.iter().any(|item| matches!(
+                item,
+                crate::degradation::Degradation::ArtifactNotReady { artifact, .. }
+                    if artifact == "fts_events"
+            )),
+            "{:?}",
+            fallback.degraded
+        );
+    }
+
+    /// 2026-09-08: 副経路だけで見つかった実施記録も、短いsnippetではなく本文で順位を決める。
+    #[test]
+    fn completion_results_from_secondary_routes_use_full_body_before_limit() {
+        let query = "is lumen migration completed";
+        for route in ["anchor", "rescue"] {
+            let (_dir, _vault, conn) = setup();
+            let body = format!(
+                "{}\nLumen migration completed.\n{query}",
+                "Background. ".repeat(30)
+            );
+            for (id, role, body) in [
+                ("results/policy", "canonical", "Migration criteria"),
+                ("results/record", "record", body.as_str()),
+            ] {
+                conn.execute(
+                    "INSERT INTO notes(id,title,status,body,tags,namespace,authority_role,authority_status,authority_scope,normal_reference_allowed)
+                     VALUES (?1,'Lumen migration','stable',?2,'test','records',?3,'active',?1,1)",
+                    rusqlite::params![id, body, role],
+                ).unwrap();
+            }
+            // 各経路の返す候補を分けた人工索引で、主経路だけで順位が直る見かけの成功を防ぐ。
+            conn.execute(
+                "INSERT INTO fts_main(id,text) VALUES ('results/policy','lumen migration')",
+                [],
+            )
+            .unwrap();
+            if route == "anchor" {
+                conn.execute("INSERT INTO fts_anchor(src,dst,text) VALUES ('results/policy','results/record',?1)",
+                    [crate::tokenize::wakati(query)]).unwrap();
+            } else {
+                conn.execute(
+                    "INSERT INTO fts_tri(id,text) VALUES ('results/record',?1)",
+                    [&body],
+                )
+                .unwrap();
+            }
+            let policy = super::SearchPolicy {
+                semantic: false,
+                ..super::SearchPolicy::exact(1)
+            };
+            let result = super::search_with(&conn, query, &policy);
+            assert!(result.degraded.is_empty(), "{route}: {:?}", result.degraded);
+            assert_eq!(result.hits.len(), 1);
+            assert_eq!(result.hits[0].id, "results/record", "{route}");
+            assert_eq!(result.hits[0].via, route);
+
+            if route == "rescue" {
+                assert!(!result.hits[0].snippet.contains("completed"));
+                // モデル推論は使わず、実際のRRFへKNNの返り値を与えて共通の本文順位を確認する。
+                let main = super::main_search(&conn, query, &policy).unwrap();
+                let mut vector_hit = result.hits[0].clone();
+                vector_hit.via = "vec";
+                let mut fused = super::fuse(main, vec![(vector_hit, 0.1)], 2);
+                let mut ranking = super::ResultRanking::from_query(query);
+                let mut degraded = Vec::new();
+                super::load_result_scores(&conn, &fused, &mut ranking, &mut degraded);
+                super::rank_hits(
+                    &mut fused,
+                    query,
+                    super::QueryIntent::from_query(query),
+                    ranking.as_ref(),
+                    &std::collections::HashSet::new(),
+                );
+                assert!(degraded.is_empty());
+                assert_eq!(fused[0].id, "results/record");
+
+                // 本文の再取得が失敗しても候補を返し、片側だけ加点した順位を黙って返さない。
+                let mut ranking = super::ResultRanking::from_query(query);
+                fused[0].id = "results/missing".into();
+                super::load_result_scores(&conn, &fused, &mut ranking, &mut degraded);
+                assert!(ranking.is_none());
+                assert!(matches!(
+                    degraded.as_slice(),
+                    [crate::degradation::Degradation::MainSearch { .. }]
+                ));
+                assert_eq!(fused.len(), 2);
+            }
+        }
+    }
+
+    /// 2026-09-08: 閲覧用の件数は未採用提案を含めず、遷移先の全件探索と一致させる。
+    #[test]
+    fn tag_overview_counts_browsable_notes_and_keeps_unused_registered_terms() {
+        let (_dir, vault, conn) = setup();
+        let source = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| タグ | 説明 |\n|---|---|\n| used | AIが定めた役割 |\n| unused | 未使用の役割 |\n| 日本語 | 不正な語彙 |\n",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &source).unwrap();
+        for (id, status, allowed, tags) in [
+            ("notes/visible", "stable", 1, "used used legacy"),
+            ("other/visible", "stable", 1, "used"),
+            ("proposals/hidden", "stable", 0, "used hidden-only"),
+            ("notes/retired", "deprecated", 1, "used retired-only"),
+        ] {
+            conn.execute(
+                "INSERT INTO notes(id,title,status,body,tags,normal_reference_allowed) VALUES (?1,?1,?2,'',?4,?3)",
+                rusqlite::params![id, status, allowed, tags],
+            ).unwrap();
+        }
+        let overview = super::tag_overview(&conn).unwrap();
+        assert_eq!(overview.source_status, crate::tags::SourceStatus::Pinned);
+        assert_eq!(overview.glossary_note, Some(source));
+        assert_eq!(overview.skipped_count, 1);
+        let tags: std::collections::BTreeMap<_, _> = overview
+            .tags
+            .iter()
+            .map(|row| (row.tag.as_str(), row))
+            .collect();
+        assert_eq!(tags["used"].count, 2);
+        assert_eq!(tags["used"].description.as_deref(), Some("AIが定めた役割"));
+        assert!(tags["used"].registered);
+        assert_eq!(tags["unused"].count, 0);
+        assert!(tags["unused"].registered);
+        assert_eq!(tags["legacy"].count, 1);
+        assert!(!tags["legacy"].registered);
+        assert!(tags["legacy"].description.is_none());
+        assert!(!tags.contains_key("hidden-only"));
+        assert!(!tags.contains_key("retired-only"));
+        assert!(!tags.contains_key("日本語"));
+        for row in &overview.tags {
+            let page = super::browse_notes(
+                &conn,
+                std::slice::from_ref(&row.tag),
+                super::NoteBrowsePeriod::All,
+                super::NoteBrowseSort::Updated,
+                None,
+                10,
+            )
+            .unwrap();
+            assert_eq!(row.count, page.total, "{}", row.tag);
+        }
+    }
+
+    /// 2026-09-08: 従来の上位500語の制限で、下位の登録語が誤って0件になっていた。
+    #[test]
+    fn tag_overview_does_not_truncate_usage_before_adding_registered_terms() {
+        let (_dir, vault, conn) = setup();
+        let source = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| タグ | 説明 |\n|---|---|\n| z-last | 下位の登録語 |\n",
+                None,
+                &["z-last".into()],
+                "test/client",
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &source).unwrap();
+        let transaction = conn.unchecked_transaction().unwrap();
+        for number in 0..501 {
+            let tag = format!("tag-{number:03}");
+            transaction.execute(
+                "INSERT INTO notes(id,title,status,body,tags,normal_reference_allowed) VALUES (?1,?1,'stable','',?1,1)",
+                [tag],
+            ).unwrap();
+        }
+        transaction.commit().unwrap();
+        let overview = super::tag_overview(&conn).unwrap();
+        assert_eq!(overview.tags.len(), 503);
+        let last = overview
+            .tags
+            .iter()
+            .find(|row| row.tag == "z-last")
+            .unwrap();
+        assert_eq!(last.count, 1);
+        assert!(last.registered);
+        assert_eq!(overview.tags.last().unwrap().tag, "z-last");
+    }
+
+    /// 2026-09-08: 語彙正本が未指定でも、候補や現用語を正式な役割へ自動昇格させない。
+    #[test]
+    fn tag_overview_exposes_unconfigured_source_without_promoting_candidate_roles() {
+        let (_dir, vault, conn) = setup();
+        for with_candidate in [false, true] {
+            if with_candidate {
+                vault
+                    .propose_for_test(
+                        "タグ運用の候補",
+                        "## 語彙\n| タグ | 説明 |\n|---|---|\n| candidate | 未指定候補の役割 |\n",
+                        None,
+                        &["test".into()],
+                        "test/client",
+                    )
+                    .unwrap();
+                sync(&vault, &conn).unwrap();
+            }
+            let overview = super::tag_overview(&conn).unwrap();
+            assert_eq!(
+                overview.source_status,
+                crate::tags::SourceStatus::Unconfigured
+            );
+            assert!(overview.glossary_note.is_none());
+            assert_eq!(overview.tags.len(), 1);
+            assert_eq!(overview.tags[0].tag, "test");
+            assert!(!overview.tags[0].registered);
+            assert!(overview.tags[0].description.is_none());
+        }
+    }
+
+    /// 2026-09-08: 正本が参照不能・欠損でも別の候補に切り替えず、使用数と状態を返す。
+    #[test]
+    fn tag_overview_reports_missing_and_unavailable_sources() {
+        let (_dir, vault, conn) = setup();
+        let source = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| タグ | 説明 |\n|---|---|\n| source-only | 閲覧できない役割 |\n",
+                None,
+                &["test".into()],
+                "test/client",
+            )
+            .unwrap();
+        sync(&vault, &conn).unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &source).unwrap();
+        conn.execute(
+            "UPDATE notes SET normal_reference_allowed=0 WHERE id=?1",
+            [&source],
+        )
+        .unwrap();
+        for status in [
+            crate::tags::SourceStatus::Unavailable,
+            crate::tags::SourceStatus::Missing,
+        ] {
+            if status == crate::tags::SourceStatus::Missing {
+                conn.execute("DELETE FROM notes WHERE id=?1", [&source])
+                    .unwrap();
+            }
+            let overview = super::tag_overview(&conn).unwrap();
+            assert_eq!(overview.source_status, status);
+            assert!(overview.glossary_note.is_none());
+            assert_eq!(overview.tags.len(), 1);
+            assert_eq!(overview.tags[0].count, 3);
+            assert!(!overview.tags[0].registered);
+            assert!(overview.tags[0].description.is_none());
+        }
+    }
+
+    #[test]
+    fn tag_overview_does_not_mask_a_database_failure_as_an_empty_catalog() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        assert!(super::tag_overview(&conn).is_err());
+    }
+
     #[test]
     fn two_char_word_hits_via_main() {
         let (_d, _v, conn) = setup();
@@ -1675,6 +2164,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: true,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap()
@@ -1725,6 +2216,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
@@ -1760,6 +2253,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1782,6 +2277,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -1848,6 +2345,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1870,6 +2369,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -1911,6 +2412,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1933,6 +2436,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -1993,6 +2498,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -2014,6 +2521,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -2036,6 +2545,8 @@ mod tests {
                         relations: Vec::new(),
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .unwrap();
@@ -2071,6 +2582,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -2102,6 +2615,8 @@ mod tests {
                         }],
                         allow_new_tags: false,
                         client: "test/client",
+                        actor: None,
+                        revision: None,
                     },
                 )
                 .is_err()
@@ -2127,6 +2642,8 @@ mod tests {
                     }],
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -2148,7 +2665,7 @@ mod tests {
         assert!(vault.agent_removal_candidate(&conn, &target).is_err());
         assert!(
             vault
-                .agent_delete_note(&conn, &target, "蒸留後の整理", "test/client")
+                .agent_delete_note(&conn, &target, "蒸留後の整理", "test/client", None)
                 .is_err()
         );
         vault
@@ -2165,11 +2682,13 @@ mod tests {
                     relations: Some(Vec::new()),
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
         vault
-            .agent_delete_note(&conn, &target, "蒸留後の整理", "test/client")
+            .agent_delete_note(&conn, &target, "蒸留後の整理", "test/client", None)
             .unwrap();
     }
 
@@ -2316,6 +2835,34 @@ mod tests {
         assert!(main.iter().any(|hit| hit.id == target_id));
         assert!(rescue.iter().any(|hit| hit.id == target_id));
 
+        // 2026-09-08: 主経路だけの計測では、完了照会の融合・最終再順位の退行を拾えない。
+        // 最終5件の8倍に当たる40候補を使い、モデル導入状況によらず同じ経路を測る。
+        let completion_policy = super::SearchPolicy {
+            semantic: false,
+            ..super::SearchPolicy::any_terms(5)
+        };
+        let completion_record_id = performance_note_id(completion_policy.candidate_limit() - 1);
+        let (completion, completion_search) = timed(|| {
+            repeat_last(100, || {
+                super::search_with(&conn, "auroramigration は完了したか", &completion_policy)
+            })
+        });
+        assert!(completion.degraded.is_empty(), "{:?}", completion.degraded);
+        assert_eq!(completion.hits.len(), completion_policy.limit);
+        assert_eq!(
+            completion.hits.first().map(|hit| hit.id.as_str()),
+            Some(completion_record_id.as_str())
+        );
+        let ordinary = super::search_with(&conn, "auroramigration", &completion_policy);
+        assert!(ordinary.degraded.is_empty(), "{:?}", ordinary.degraded);
+        assert_eq!(
+            ordinary
+                .hits
+                .first()
+                .and_then(|hit| hit.authority_role.as_deref()),
+            Some("canonical")
+        );
+
         let mut query = vec![0.0f32; PERFORMANCE_VECTOR_DIM];
         query[PERFORMANCE_TARGET % PERFORMANCE_VECTOR_DIM] = 1.0;
         let (neighbors, semantic_search) =
@@ -2397,8 +2944,18 @@ mod tests {
             update_note.body =
                 format!("単一更新回帰 {round:03}。派生索引の増分維持と埋め込み無効化を通す本文。");
             let ((), elapsed) = timed(|| {
-                crate::note_store::put(&vault, &conn, &update_id, &update_note, "perf", "perf")
-                    .unwrap()
+                crate::note_store::put(
+                    &vault,
+                    &conn,
+                    &update_id,
+                    &update_note,
+                    crate::note_store::WriteAttribution::new(
+                        "perf",
+                        "perf",
+                        &crate::provenance::test_context(),
+                    ),
+                )
+                .unwrap()
             });
             update_samples.push(elapsed);
         }
@@ -2436,6 +2993,11 @@ mod tests {
             (
                 "keyword_search_x100",
                 keyword_search,
+                Duration::from_millis(500),
+            ),
+            (
+                "completion_search_x100",
+                completion_search,
                 Duration::from_millis(500),
             ),
             (
@@ -2500,6 +3062,7 @@ mod tests {
     }
 
     fn write_performance_fixture(vault: &Vault) {
+        let completion_candidate_limit = super::SearchPolicy::any_terms(5).candidate_limit();
         for index in 0..PERFORMANCE_NOTE_COUNT {
             let id = performance_note_id(index);
             let previous_link = if index > 0 {
@@ -2521,12 +3084,45 @@ mod tests {
                 by: "test/performance-gate".into(),
                 at: "2026-08-16T00:00:00Z".into(),
             });
-            let note = Note {
-                front,
-                body: format!(
+            let body = if index < completion_candidate_limit {
+                let is_result = index == completion_candidate_limit - 1;
+                front.title = Some(format!("auroramigration 性能fixture {index:05}"));
+                front.note_uid = Some(crate::authority::NoteUid::at(index as u64 + 1));
+                front.authority = Some(Authority {
+                    namespace: if is_result {
+                        NoteNamespace::Records
+                    } else {
+                        NoteNamespace::Knowledge
+                    },
+                    role: if is_result {
+                        AuthorityRole::Record
+                    } else {
+                        AuthorityRole::Canonical
+                    },
+                    status: if is_result {
+                        AuthorityStatus::Historical
+                    } else {
+                        AuthorityStatus::Active
+                    },
+                    scope: format!("test/performance-completion/{index:05}"),
+                });
+                if is_result {
+                    format!("実施結果: auroramigration は完了した。{previous_link}")
+                } else {
+                    // 同文の計画が多様化で一つになると、40候補の最終順位を測れない。
+                    format!(
+                        "auroramigration 計画 {index:05}。作業単位 {}、工程 {}、対象 {} の完了条件を確認する。{previous_link}",
+                        index * 7_919,
+                        index * 1_543,
+                        index * 3_571,
+                    )
+                }
+            } else {
+                format!(
                     "{marker}。合成ナレッジ {index:05} の本文。性能回帰と検索品質を検査する。{previous_link}"
-                ),
+                )
             };
+            let note = Note { front, body };
             vault.write_note_fixture(&id, &note).unwrap();
         }
     }

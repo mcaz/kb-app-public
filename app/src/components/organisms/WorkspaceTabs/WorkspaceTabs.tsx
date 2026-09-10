@@ -6,6 +6,7 @@ import {
   NotebookText,
   Paperclip,
   Plus,
+  Tags,
   Waypoints,
   X,
 } from "lucide-react";
@@ -23,6 +24,7 @@ const viewIcons = {
   home: House,
   notes: NotebookText,
   files: Paperclip,
+  tags: Tags,
   graph: Waypoints,
   proposals: ClipboardCheck,
 } satisfies Record<View, typeof House>;

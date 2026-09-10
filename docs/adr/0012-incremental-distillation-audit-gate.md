@@ -55,6 +55,16 @@ baseline無しの初回は全ノートをworksetにする。これにより初�
 aheadだけを読み、pull、fetch、GitHub API等のnetwork I/Oは行わない。remoteのprivate性・到達性・実際の
 最新性を能動確認する検査はこのgateの保証外とする。
 
+2026-09-08、Issue #88: StorageReportの`legacy_files`は引き続き物理総数。
+`legacy_inventory`で未昇格Artifact数と、現役・保持・未分類の物理path数を分ける。
+新昇格の構造化証拠と現在の参照・実体が一致したものだけを保持へ数える。証拠の壊れたJSON、
+保持を記録した実体の欠損・改変はStorage Contract失敗とし、旧散文しかない実体は未分類に残す。
+詳細は[Artifact監査](../artifact-audit.md)。
+
+cadence runがbaselineを受け入れる際は7番目の`artifact_metadata_stable`検査を追加する。
+監査前後の台帳識別値が一致しなければ失敗させ、変更後のgateを含めてaudit IDを再計算する。
+standalone auditは従来の6検査を返し、それだけでcadenceの受入baselineを進めない。
+
 ### 4. auditとcheckpointはread-onlyで実行権限を持たない
 
 監査は準備済みDBをread-onlyで開き、remote pull、schema migration、索引同期、care、outbox更新を行わない。

@@ -197,6 +197,8 @@ fn partial_or_default<T: Default>(
 pub struct TagOverview {
     tags: Vec<kb_core::search::TagInfo>,
     glossary_note: Option<String>,
+    source_status: kb_core::tags::SourceStatus,
+    skipped_count: usize,
     degraded: Vec<kb_core::degradation::Degradation>,
 }
 
@@ -205,10 +207,12 @@ pub struct TagOverview {
 #[specta::specta]
 pub fn tag_overview(state: State<'_, AppState>) -> AppResult<TagOverview> {
     state.with_db(|_, conn, degraded| {
-        let (tags, glossary_note) = kb_core::search::tag_overview(conn).map_err(AppError::index)?;
+        let overview = kb_core::search::tag_overview(conn).map_err(AppError::index)?;
         Ok(TagOverview {
-            tags,
-            glossary_note,
+            tags: overview.tags,
+            glossary_note: overview.glossary_note,
+            source_status: overview.source_status,
+            skipped_count: overview.skipped_count,
             degraded,
         })
     })
@@ -296,6 +300,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();

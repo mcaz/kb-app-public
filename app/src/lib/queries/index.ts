@@ -3,6 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { useLocalDayBoundaries } from "@/hooks/useLocalDayBoundaries";
 import {
   api,
+  type ActivityFilter,
   type Favorite,
   type Period,
   type SortKey,
@@ -10,12 +11,14 @@ import {
   type ObservationTrend,
   type ObservationTrendFilter,
   type DistillationAiProvider,
+  type RegistrationClient,
 } from "@/lib/api";
 
 import { currentNoteMutationScope, queryKeys } from "./keys";
 import { liveQueryOptions } from "./refreshPolicy";
 
 export { queryKeys };
+export { useAppUpdateStatus, useAppUpdateAction } from "./appUpdate";
 
 /** 起動モードはプロセス固定。復旧画面から通常queryを開始しない。 */
 export const useAppBootMode = () =>
@@ -177,6 +180,15 @@ export function useInstallAiGuard() {
     onSuccess: (status) => {
       qc.setQueryData(queryKeys.aiGuard, status);
     },
+    onSettled: async () => {
+      // 保護設定とbindingは別書込み。途中失敗も再取得して、古い成功表示を残さない。
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.aiGuard }),
+        qc.invalidateQueries({ queryKey: queryKeys.connect }),
+        qc.invalidateQueries({ queryKey: queryKeys.clientRegistrations }),
+        qc.invalidateQueries({ queryKey: queryKeys.clientDiagnostics }),
+      ]);
+    },
   });
 }
 
@@ -186,6 +198,14 @@ export function useEnableAiGuardDevelopmentMode() {
     mutationFn: api.settingsEnableAiGuardDevelopmentMode,
     onSuccess: (status) => {
       qc.setQueryData(queryKeys.aiGuard, status);
+    },
+    onSettled: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.aiGuard }),
+        qc.invalidateQueries({ queryKey: queryKeys.connect }),
+        qc.invalidateQueries({ queryKey: queryKeys.clientRegistrations }),
+        qc.invalidateQueries({ queryKey: queryKeys.clientDiagnostics }),
+      ]);
     },
   });
 }
@@ -316,6 +336,27 @@ export const useGraphData = () =>
 export const useConnectState = () =>
   useQuery({ queryKey: queryKeys.connect, queryFn: api.connectState });
 
+export const useClientRegistrations = () =>
+  useQuery({ queryKey: queryKeys.clientRegistrations, queryFn: api.connectClientRegistrations });
+
+export const useClientDiagnostics = () =>
+  useQuery({ queryKey: queryKeys.clientDiagnostics, queryFn: api.connectClientDiagnostics });
+
+export function useRegisterClient() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (client: RegistrationClient) => api.connectRegisterClient(client),
+    onSettled: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.clientRegistrations }),
+        qc.invalidateQueries({ queryKey: queryKeys.clientDiagnostics }),
+        qc.invalidateQueries({ queryKey: queryKeys.aiGuard }),
+        qc.invalidateQueries({ queryKey: queryKeys.connect }),
+      ]);
+    },
+  });
+}
+
 /** 復旧前の証拠なので、自動実行・キャッシュの無効化・再試行は行わない。 */
 export const useInspectRuntimeStorage = () =>
   useMutation({ mutationFn: api.inspectRuntimeStorage, retry: false });
@@ -339,6 +380,29 @@ export const useNote = (id: string | null) =>
     queryFn: () => api.noteGet(id!),
     enabled: id !== null,
     ...liveQueryOptions,
+  });
+
+export const useNoteProvenance = (id: string | null) =>
+  useQuery({
+    queryKey: queryKeys.noteProvenance(id ?? ""),
+    queryFn: () => api.noteProvenance(id!),
+    enabled: id !== null,
+  });
+
+/** `withDiff` はユーザーが「差分を表示」を押したときだけ true にする(既定は本文diffを運ばない)。 */
+export const useNoteHistory = (id: string | null, limit: number, withDiff: boolean) =>
+  useQuery({
+    queryKey: queryKeys.noteHistory(id ?? "", limit, withDiff),
+    queryFn: () => api.noteHistory(id!, limit, withDiff),
+    enabled: id !== null,
+  });
+
+/** ホームの活動ビュー。summary/clients/models はfilterの影響を受けない(kb-core側の仕様)。 */
+export const useActivityFeed = (limit: number, filter: ActivityFilter) =>
+  useQuery({
+    queryKey: queryKeys.activityFeed(limit, filter),
+    queryFn: () => api.activityFeed(limit, filter),
+    placeholderData: (previous) => previous,
   });
 
 export const useNoteCategories = (enabled = true) =>
@@ -381,21 +445,26 @@ export const useNoteSearch = (query: string, enabled = true) =>
     ...liveQueryOptions,
   });
 
-export function useOnboard() {
+export function useOnboard(onReady?: () => void) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.onboard,
-    onSuccess: async () => {
+    onSuccess: async (setup) => {
+      // 初回画面が再取得で外れる前に、次の案内へ移る意図を親へ渡す。
+      onReady?.();
+      qc.setQueryData(queryKeys.setup, setup);
       await qc.invalidateQueries();
     },
   });
 }
 
-export function useOnboardExisting() {
+export function useOnboardExisting(onReady?: () => void) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (url: string) => api.onboardExisting(url),
-    onSuccess: async () => {
+    onSuccess: async (setup) => {
+      onReady?.();
+      qc.setQueryData(queryKeys.setup, setup);
       await qc.invalidateQueries();
     },
     onError: async () => {
@@ -541,8 +610,11 @@ export function useConnectDesktop() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.connectDesktop,
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: queryKeys.connect });
+    onSettled: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.connect }),
+        qc.invalidateQueries({ queryKey: queryKeys.aiGuard }),
+      ]);
     },
   });
 }

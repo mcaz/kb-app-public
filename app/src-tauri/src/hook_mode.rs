@@ -527,9 +527,35 @@ fn append_observation(
     context: EventContext<'_>,
     measurement: MeasurementContext,
     observation: HookObservation,
+    structured: Option<&Value>,
 ) -> Result<AppendOutcome> {
-    let event = LedgerEvent::hook(context, session_ledger::now_ms(), observation)?
+    let mut event = LedgerEvent::hook(context, session_ledger::now_ms(), observation)?
         .with_measurement(measurement)?;
+    if let Some(structured) = structured
+        && !structured["rule_identity"].is_null()
+        && !structured["workspace_rule_identity"].is_null()
+    {
+        // 子MCPの検索版であり、initialize案内をhostへ転送したという記録にはしない。
+        let checked = (|| {
+            event
+                .clone()
+                .with_rule_evidence(session_ledger::rule_delivery::RuleEvidence {
+                    rules: serde_json::from_value(structured["rule_identity"].clone())?,
+                    workspace: serde_json::from_value(
+                        structured["workspace_rule_identity"].clone(),
+                    )?,
+                })
+        })();
+        event = match checked {
+            Ok(event) => event,
+            Err(error) => {
+                // 失敗した最新観測を失うと以前の成功を現行版として示してしまう。
+                // 版なしの準備だけを残し、通知を含む最終stdoutは確定済みとしない。
+                ledger.append(&event)?;
+                return Err(error);
+            }
+        };
+    }
     ledger.append(&event)
 }
 
@@ -610,6 +636,7 @@ fn execute_hook_with_measurement(
                         reason,
                         timings: attempt.timings,
                     },
+                    None,
                 )
                 .is_err()
             {
@@ -628,6 +655,7 @@ fn execute_hook_with_measurement(
                         stage: attempt.error_stage,
                         timings: attempt.timings,
                     },
+                    None,
                 )
                 .is_err();
             let failure_notice = attempt.failure_notice.unwrap_or(RETRIEVAL_FAILURE);
@@ -684,6 +712,7 @@ fn execute_hook_with_measurement(
                 timings: attempt.timings,
                 cap_assumption: CapAssumption::for_surface(surface),
             },
+            Some(&retrieved.structured),
         ) {
             Ok(appended) => receipt = appended.receipt,
             Err(_) => {
@@ -1292,6 +1321,96 @@ mod tests {
             responses: VecDeque::from([initialized(Some(true)), search_response()]),
             ..Default::default()
         }
+    }
+
+    /// 2026-09-08: 子MCPの規則版を出力receiptへ結ぶが、本文やhost受信の証拠を捏造しない。
+    #[test]
+    fn hook_records_search_rule_identity_without_recording_documents() {
+        for fail_flush in [false, true] {
+            let mut searched = search_response();
+            searched["result"]["structuredContent"]["rule_identity"] =
+                serde_json::to_value(kb_core::mcp::rule_identity_for(
+                    "codex-cli/gpt",
+                    kb_core::mcp::ToolSurface::Read,
+                    true,
+                ))
+                .unwrap();
+            searched["result"]["structuredContent"]["workspace_rule_identity"] = json!({
+                "schema": 1, "workspace_id": WORKSPACE,
+                "vocabulary": {"source_status":"unconfigured", "source_note_uid":null,
+                    "source_revision":null, "source_document_sha256":null}
+            });
+            let mut rpc = FakeRpc {
+                responses: VecDeque::from([initialized(Some(true)), searched]),
+                ..Default::default()
+            };
+            let mut ledger = TestLedger::new();
+            let mut output = TestOutput::new(&ledger);
+            output.fail_flush = fail_flush;
+            let result = execute_hook(
+                &mut rpc,
+                &user_payload(),
+                "codex-cli/gpt",
+                &mut ledger,
+                &mut output,
+            );
+            assert_eq!(result.is_err(), fail_flush);
+            assert_eq!(ledger.events.len(), 1);
+            assert_eq!(
+                ledger.events[0]["rule_evidence"]["workspace"]["workspace_id"],
+                WORKSPACE
+            );
+            assert_eq!(
+                ledger.events[0]["rule_evidence"]["rules"]["tool_surface"],
+                "read"
+            );
+            assert!(!ledger.events[0].to_string().contains("PRIVATE_BODY_MARKER"));
+            assert_eq!(
+                ledger.finalized,
+                vec![if fail_flush {
+                    HookEmissionOutcome::StdoutFailed
+                } else {
+                    HookEmissionOutcome::Emitted
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn mismatched_rule_identity_keeps_retrieval_but_marks_observation_unverified() {
+        let mut searched = search_response();
+        searched["result"]["structuredContent"]["rule_identity"] =
+            serde_json::to_value(kb_core::mcp::rule_identity_for(
+                "claude-code/claude",
+                kb_core::mcp::ToolSurface::Read,
+                true,
+            ))
+            .unwrap();
+        searched["result"]["structuredContent"]["workspace_rule_identity"] = json!({
+            "schema": 1, "workspace_id": WORKSPACE,
+            "vocabulary": {"source_status":"unconfigured", "source_note_uid":null,
+                "source_revision":null, "source_document_sha256":null}
+        });
+        let mut rpc = FakeRpc {
+            responses: VecDeque::from([initialized(Some(true)), searched]),
+            ..Default::default()
+        };
+        let mut ledger = TestLedger::new();
+        let mut output = TestOutput::new(&ledger);
+        execute_hook(
+            &mut rpc,
+            &user_payload(),
+            "codex-cli/gpt",
+            &mut ledger,
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(ledger.events.len(), 1);
+        assert!(ledger.events[0].get("rule_evidence").is_none());
+        assert!(ledger.finalized.is_empty());
+        let text = String::from_utf8(output.bytes).unwrap();
+        assert!(text.contains("PRIVATE_BODY_MARKER"));
+        assert!(text.contains("session_ledger"));
     }
 
     /// 2026-09-06: 開始証拠の照合もOFF・接続未確認のときは保存先を調べない。

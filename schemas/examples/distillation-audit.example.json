@@ -57,12 +57,42 @@
   "gate": {
     "passed": true,
     "checks": [
-      {"code": "no_actionable_entries", "passed": true, "violations": 0, "detail": null},
-      {"code": "no_unresolved_entries", "passed": true, "violations": 0, "detail": null},
-      {"code": "no_non_none_risk_entries", "passed": true, "violations": 0, "detail": null},
-      {"code": "no_pending_markdown_exports", "passed": true, "violations": 0, "detail": null},
-      {"code": "storage_contract_valid", "passed": true, "violations": 0, "detail": null},
-      {"code": "remote_backup_current_or_local_only", "passed": true, "violations": 0, "detail": null}
+      {
+        "code": "no_actionable_entries",
+        "passed": true,
+        "violations": 0,
+        "detail": null
+      },
+      {
+        "code": "no_unresolved_entries",
+        "passed": true,
+        "violations": 0,
+        "detail": null
+      },
+      {
+        "code": "no_non_none_risk_entries",
+        "passed": true,
+        "violations": 0,
+        "detail": null
+      },
+      {
+        "code": "no_pending_markdown_exports",
+        "passed": true,
+        "violations": 0,
+        "detail": null
+      },
+      {
+        "code": "storage_contract_valid",
+        "passed": true,
+        "violations": 0,
+        "detail": null
+      },
+      {
+        "code": "remote_backup_current_or_local_only",
+        "passed": true,
+        "violations": 0,
+        "detail": null
+      }
     ]
   },
   "pending_markdown_exports": 0,
@@ -70,11 +100,17 @@
     "valid": true,
     "report": {
       "schema": "kb-app.repository-snapshot/v1",
-      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "digest": "3333333333333333333333333333333333333333333333333333333333333333",
       "notes": 0,
       "artifacts": 0,
       "artifact_refs": 0,
-      "legacy_files": 0
+      "legacy_files": 0,
+      "legacy_inventory": {
+        "unpromoted_artifacts": 0,
+        "active_legacy_files": 0,
+        "retained_legacy_files": 0,
+        "unclassified_legacy_files": 0
+      }
     },
     "error": null
   },

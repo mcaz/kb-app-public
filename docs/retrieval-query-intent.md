@@ -4,6 +4,9 @@
 - 対象: `query-intent-historical` challenge（3 surface）
 - 比較対象: Field別ランキング適用後
 
+この文書の実測値は2026-08-23の変更だけを対象にする。2026-09-08の完了確認・過去結果の検索拡張は
+[完了・過去結果の検索](retrieval-completion-results.md)を参照し、以下の値を新しい変更の実測として再利用しない。
+
 ## 変更
 
 queryの明示語を次のauthority属性へ対応付け、完全タイトル一致の次に再順位付けする。
@@ -18,6 +21,11 @@ queryの明示語を次のauthority属性へ対応付け、完全タイトル一
 明示語が無いqueryにはintent加点を行わず、従来のactive canonical優先を維持する。複数intentは
 加算できるため、「当時の監査理由」のようなqueryはhistorical recordを選べる。SQLite schemaや
 既存indexは変更しない。
+
+完了確認・過去結果の質問はauthority属性との整合だけで決めない。質問の対象と本文に残る結果の
+根拠が一致する候補を評価し、完了・成功の記録だけに限定しない。`historical` statusそのものは完了の
+証拠ではなく、結果確認のために過去記録全体を昇格しない。完了条件・分類方法の質問、完全タイトル、
+現行方針への明示質問、意図なしqueryの既定順を対照として維持する。
 
 ## 実測
 

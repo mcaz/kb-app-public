@@ -1,0 +1,35 @@
+{
+  "nav": "Getting started",
+  "title": "Save something in a conversation, then find it again",
+  "lead": "Use this guide to access “{{name}}” from your AI. Try these steps with the AI you want to use.",
+  "homeHint": "Connect your AI, then try saving and finding your first note.",
+  "openGuide": "Open the getting started guide",
+  "afterConnection": "Once connected, try asking your AI to save a note and find it again.",
+  "selectedKnowledgeBase": "the selected knowledge base",
+  "copied": "Prompt copied. Paste it into a conversation with your connected AI.",
+  "copyFailed": "Could not copy. Select the displayed prompt and copy it manually.",
+  "connect": {
+    "title": "Connect your AI",
+    "description": "Codex, Claude Code, and Claude Desktop are supported. Install and sign in to the AI you want to use, then register the selected knowledge base in Connections. Codex and Claude Code also require AI access protection.",
+    "open": "Open AI connections",
+    "protection": "Open AI access protection",
+    "reconnect": "After changing registration or protection, restart that AI and reconnect its kb-app MCP servers. “Registered” means the settings match; it does not confirm that the AI has used the knowledge base."
+  },
+  "record": {
+    "title": "Ask your AI to save your first note",
+    "description": "Copy the prompt below into a conversation with your connected AI. Then share one preference or decision you want it to remember.",
+    "prompt": "Verify that the connected knowledge base is “{{name}}”. Save the fact or preference I share next as an ordinary record note for future reference. Check related existing notes and the tag vocabulary, and avoid duplicates. If I have not yet provided anything to record, ask me for one item. After saving, show the title, ID, and contents of the note that was actually saved.",
+    "copy": "Copy the save prompt",
+    "check": "Check the save result, title, and contents in the AI’s response. If it reports a failure or an unknown result, work through the cause with the AI."
+  },
+  "search": {
+    "title": "Find that note with the same AI",
+    "description": "After checking the save result, paste this prompt into the same AI conversation.",
+    "prompt": "In “{{name}}”, search for the ordinary record note saved earlier in this conversation. Do not answer from conversation memory alone: retrieve the full text of a search result, verify it, and show its title, ID, and saved contents. If no matching note is found, say so and report the search terms you used; do not save another copy.",
+    "copy": "Copy the search prompt",
+    "open": "Open search in the app",
+    "check": "Check that the title, ID, and full text match the note you saved. In the app, you can search using the same title or words from its contents."
+  },
+  "evidence": "This is a usage guide. Registration and copying a prompt do not establish that the AI successfully saved or found a note. Verify the actual result in the AI’s response and the retrieved note’s full text.",
+  "returnHint": "You can close this guide at any time and return from Getting started in Settings or from Home."
+}

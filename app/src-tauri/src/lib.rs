@@ -9,6 +9,8 @@
 //!
 //! このファイルは Builder の組み立てだけを持つ。
 
+pub mod app_update_runtime;
+pub mod app_update_supervisor;
 pub mod background;
 pub mod commands;
 mod distillation_worker;
@@ -23,14 +25,19 @@ use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events};
 
 use commands::{
-    background as background_commands, connect, distillation, favorites, files, home, notes,
-    proposals, settings, setup, workspace_tabs as workspace_tab_commands,
+    app_update, background as background_commands, connect, distillation, favorites, files, home,
+    notes, proposals, provenance, settings, setup, workspace_tabs as workspace_tab_commands,
 };
 
 /// GUI が呼べるコマンドとイベントの全集合。ここが `app/src/lib/bindings.ts` の正本。
 fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     tauri_specta::Builder::<tauri::Wry>::new()
         .commands(collect_commands![
+            app_update::app_update_status,
+            app_update::app_update_check,
+            app_update::app_update_download,
+            app_update::app_update_install,
+            app_update::app_update_boot_ready,
             recovery_mode::app_boot_mode,
             recovery_mode::recovery_plan,
             recovery_mode::recovery_apply,
@@ -76,6 +83,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             notes::note_categories,
             notes::note_list,
             notes::graph_data,
+            provenance::note_provenance,
+            provenance::note_history,
+            provenance::activity_feed,
             favorites::favorites_list,
             favorites::favorite_add,
             favorites::favorite_remove,
@@ -92,6 +102,9 @@ fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             files::file_preview,
             files::legacy_open,
             connect::connect_state,
+            connect::connect_client_diagnostics,
+            connect::connect_client_registrations,
+            connect::connect_register_client,
             connect::inspect_runtime_storage,
             connect::plan_runtime_recovery,
             connect::github_auth_state,
@@ -152,6 +165,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(recovery_mode::AppBootMode::Normal)
+        .manage(app_update_runtime::UpdateState::default())
+        .plugin(app_update_runtime::plugin())
         // ファイルを選ぶ経路。取り込みに渡すのはパスだけなので、
         // 中身を JS 側へ載せない選択肢がこれしかない(ADR-0003 決定8)
         .plugin(tauri_plugin_dialog::init())
