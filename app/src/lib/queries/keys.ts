@@ -1,10 +1,12 @@
-import type { DistillationAiProvider, ObservationTrendFilter } from "@/lib/api";
+import type { ActivityFilter, DistillationAiProvider, ObservationTrendFilter } from "@/lib/api";
 
 export const currentNoteMutationScope = { id: "current-note-context" } as const;
+export const appUpdateMutationKey = ["appUpdate", "action"] as const;
 
 /** キャッシュキーの一覧。無効化のたびに文字列を書くのをやめ、ここへ集約する。 */
 export const queryKeys = {
   appBootMode: ["appBootMode"] as const,
+  appUpdate: ["appUpdate"] as const,
   setup: ["setup"] as const,
   settings: ["settings"] as const,
   distillationSettings: ["distillation", "settings"] as const,
@@ -29,9 +31,15 @@ export const queryKeys = {
   favorites: ["favorites"] as const,
   graph: ["graph"] as const,
   connect: ["connect"] as const,
+  clientRegistrations: ["clientRegistrations"] as const,
+  clientDiagnostics: ["clientDiagnostics"] as const,
   githubAuth: ["githubAuth"] as const,
   notes: ["note"] as const,
   note: (id: string) => ["note", id] as const,
+  noteProvenance: (id: string) => ["noteProvenance", id] as const,
+  noteHistory: (id: string, limit: number, withDiff: boolean) =>
+    ["noteHistory", id, limit, withDiff] as const,
+  activityFeed: (limit: number, filter: ActivityFilter) => ["activityFeed", limit, filter] as const,
   noteFiles: (id: string) => ["noteFiles", id] as const,
   files: ["files"] as const,
   filePreview: (id: string) => ["filePreview", id] as const,

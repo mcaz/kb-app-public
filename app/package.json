@@ -1,7 +1,7 @@
 {
   "name": "kb-app-shell",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
     "prepare:git-lfs": "node ../scripts/prepare-git-lfs.mjs",
+    "prepare:git": "node ../scripts/prepare-git.mjs",
     "tauri": "tauri",
     "update:app": "bash ../scripts/install-macos.sh",
     "install:app": "npm run update:app"

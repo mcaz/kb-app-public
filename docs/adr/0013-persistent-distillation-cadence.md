@@ -27,15 +27,27 @@ cadence runは保存済みcheckpointを`audit`へ渡す。actionable、unresolve
 Storage Contract、local Git backupの全体gateが1つでも失敗した場合、checkpointと完了時刻を更新しない。
 失敗audit ID・lane・failed checkだけを状態へ残し、次回も同じ差分を未処理として返す。
 
+2026-09-08、Issue #88: 本文checkpointとは別に`accepted_artifact_stamp`を保存する。
+manifest/ref JSONとaliasesの存在・内容の識別値を監査前後で比較し、一致した監査の値だけを受け入れる。
+監査中の変更・監査後の読取失敗では`artifact_metadata_stable`が失敗し、checkpoint・台帳baseline・完了時刻を保持する。
+監査前から台帳を読めない場合はrunをエラーとして停止し、baselineを更新しない。
+毎発話の確認でLFSや旧添付のpayloadを再hashしない。payloadの検査はStorage Contract監査時に行う。
+これは監査前後の一致確認であり、外部プロセスの変更をロックで排除したsnapshotを保証するものではない。
+
 ### 3. laneは固定深度として扱う
 
-- `after_write`: accepted checkpointとの差分があればdue。追加・変更・移動を直接確認し、削除時は依存閉包も含める。
+- `after_write`: accepted checkpointまたはArtifact台帳stampとの差分があればdue。追加・変更・移動を直接確認し、削除時は依存閉包も含める。昇格・rollback・ref/aliasだけの変更も監査する。
 - `daily`: 24時間ごと。増分workset全体を確認する。
 - `weekly`: 7日ごと。増分worksetに全active canonicalを加えて統合漏れを確認する。
 - `monthly`: 30日ごと。全noteを鮮度・archive・delete候補の確認範囲にする。
 
 端末timezoneと月の日数で結果が揺れないよう、v1の月次は暦月でなく30日間隔にする。初回は全laneをdueとし、
 全体受入を通ったcheckpointをbaselineにする。明示laneは診断・再実行用で、省略時はdue laneを1回のauditへまとめる。
+
+旧v1 stateで台帳baselineが欠落している場合は、現在値を受入済みと補完せず一度dueにする。
+新コードは旧stateを読めるが、新field保存後のstateは旧バイナリの`deny_unknown_fields`により読めない。
+バイナリだけのダウングレード互換を保証しない。旧hook出力のstatusはstamp未確認として読み込める。
+本文plannerの派生cacheは維持し、cacheから読む場合も台帳stampと期限を再確認する。
 
 ### 4. cadenceはsemantic writeの権限ではない
 

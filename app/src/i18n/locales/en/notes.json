@@ -92,6 +92,38 @@
     "showSource": "Show source",
     "showPreview": "Show preview"
   },
+  "history": {
+    "head": "History",
+    "empty": "No provenance recorded (writes before 2026-09-10 can only be backfilled with the author)",
+    "sectionAuthorsHead": "Last writer per heading",
+    "sectionAuthorsEmpty": "No heading attribution yet",
+    "showDiff": "Show diff",
+    "diffTruncated": "Diff omitted (over the size limit)",
+    "reason": "Reason: {{reason}}",
+    "originClaim": "Stated basis: {{origin}}",
+    "changesHead": "Frontmatter changes",
+    "changeItem": "{{field}}: {{from}} → {{to}}",
+    "noSummary": "(no summary)",
+    "operation": {
+      "propose": "Propose",
+      "update": "Update",
+      "remove": "Remove",
+      "distill": "Distill",
+      "closure": "Initiative closure",
+      "import": "Import",
+      "human_edit": "Human edit",
+      "other": "Other"
+    },
+    "kind": {
+      "create": "Create",
+      "amend": "Amend",
+      "reverse": "Reverse",
+      "correct": "Correct",
+      "normalize": "Normalize",
+      "remove": "Remove",
+      "unknown": "Unknown"
+    }
+  },
   "file": {
     "label": "Files:",
     "added": "Added",

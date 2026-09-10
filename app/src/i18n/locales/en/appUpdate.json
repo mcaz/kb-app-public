@@ -1,0 +1,42 @@
+{
+  "title": "App updates",
+  "currentVersion": "Current version: {{version}}",
+  "loading": "Loading update status…",
+  "stopped": "The update operation stopped. Check the guidance below.",
+  "bootReadyFailed": "Could not notify the update monitor that the initial screen loaded.",
+  "readFailed": "Could not read update status. Reload the status to try again.",
+  "actionFailed": "Could not confirm the update result. Reload the status before trying again.",
+  "reloadStatus": "Reload status",
+  "check": "Check for updates",
+  "openSettings": "Open update settings",
+  "download": "Download update",
+  "install": "Update and restart",
+  "readyVersion": "Version to install: {{version}}",
+  "downloadProgress": "Update download progress",
+  "downloaded": "{{downloaded}} received · Total size unknown",
+  "downloadedOf": "{{downloaded}} / {{total}} ({{percent}}%)",
+  "reconnect": "After updating, reconnect kb-app MCP in each AI app you use. Restarting kb-app alone does not update the AI connections.",
+  "phases": {
+    "unavailable": "Updates are unavailable in this app.",
+    "idle": "Use the button below to check for updates.",
+    "checking": "Checking for updates…",
+    "up_to_date": "This app is up to date.",
+    "available": "Version {{version}} is available to download.",
+    "downloading": "Downloading the update…",
+    "verifying": "Checking the update signature and compatibility…",
+    "ready": "The update has been verified. Restart to apply it.",
+    "installing": "Applying the update. Please wait for the app to restart…"
+  },
+  "failures": {
+    "not_configured": "This distribution has no update service configured. Please wait for a distribution that supports updates.",
+    "unsupported_platform": "In-app updates require a supported macOS app. They are unavailable in browser previews and other environments.",
+    "busy": "Another update operation is in progress. Wait for it to finish, then try again.",
+    "network": "Could not connect to the update service. Check your connection and try again.",
+    "signature": "Could not verify the update signature. Check for updates again, then download it again.",
+    "invalid_package": "Could not verify the update package. Check for updates again, then download it again.",
+    "incompatible": "This update is incompatible with your stored data or environment. Check again for a compatible update.",
+    "storage": "Could not read or write update files. Check available storage and access permissions, then try again.",
+    "install_failed": "Could not install the update. Check available storage and access permissions, then try again.",
+    "restart_failed": "The updated app could not start, so the previous version was restored. Check for updates again."
+  }
+}

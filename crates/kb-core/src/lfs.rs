@@ -43,7 +43,7 @@ fn rel(hash: &ContentHash) -> String {
 }
 
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    let mut command = crate::external_tools::git_command();
+    let mut command = crate::external_tools::git_command()?;
     command
         .args(args)
         .current_dir(&vault.root)
@@ -173,7 +173,7 @@ fn shrink_to_pointer(vault: &Vault, hash: &ContentHash) -> Result<()> {
     }
     fs::remove_file(&path)?;
     let rel = rel(hash);
-    let out = crate::external_tools::git_command()
+    let out = crate::external_tools::git_command()?
         .args(["checkout", "--", &rel])
         .current_dir(&vault.root)
         .env("GIT_LFS_SKIP_SMUDGE", "1") // 実体を書き戻させない

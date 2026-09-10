@@ -8,7 +8,7 @@ use super::{Hit, split_tags};
 use crate::degradation::Degradation;
 use crate::error::CoreError;
 
-const VISIBLE_NOTES: &str = "status != 'deprecated' AND normal_reference_allowed = 1";
+pub(super) const VISIBLE_NOTES: &str = "status != 'deprecated' AND normal_reference_allowed = 1";
 // ページ間で条件や同値の並び順を持ち越す。ノート本文はcursorへ含めない。
 const MAX_CURSOR_BYTES: usize = 65_536;
 const DAY_MS: i64 = 86_400_000;

@@ -1073,7 +1073,17 @@ mod tests {
         variants.push(changed);
         for changed in variants {
             assert_error(
-                note_store::put(&vault, &conn, id, &changed, "test", "test"),
+                note_store::put(
+                    &vault,
+                    &conn,
+                    id,
+                    &changed,
+                    crate::note_store::WriteAttribution::new(
+                        "test",
+                        "test",
+                        &crate::provenance::test_context(),
+                    ),
+                ),
                 "proposal_protected",
             );
             assert_eq!(document(&conn, id), original);
@@ -1084,8 +1094,11 @@ mod tests {
                 &conn,
                 "notes/forged-ticket",
                 &before,
-                "test",
-                "test",
+                crate::note_store::WriteAttribution::new(
+                    "test",
+                    "test",
+                    &crate::provenance::test_context(),
+                ),
             ),
             "proposal_protected",
         );
@@ -1094,12 +1107,32 @@ mod tests {
             "proposal_protected",
         );
         assert_error(
-            note_store::delete(&vault, &conn, id, "test", "test"),
+            note_store::delete(
+                &vault,
+                &conn,
+                id,
+                crate::note_store::WriteAttribution::new(
+                    "test",
+                    "test",
+                    &crate::provenance::test_context(),
+                ),
+            ),
             "proposal_protected",
         );
         let mut metadata = before;
         metadata.front.description = Some("関連する提案の概要".into());
-        note_store::put(&vault, &conn, id, &metadata, "test", "test").unwrap();
+        note_store::put(
+            &vault,
+            &conn,
+            id,
+            &metadata,
+            crate::note_store::WriteAttribution::new(
+                "test",
+                "test",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         assert_eq!(get(&conn, id).unwrap().etag, created.etag);
     }
 
@@ -1563,7 +1596,18 @@ mod tests {
             .unwrap();
         let mut legacy = note_store::read(&conn, &legacy_id).unwrap();
         legacy.front.authority = Some(authority(&input()));
-        note_store::put(&vault, &conn, &legacy_id, &legacy, "test", "test").unwrap();
+        note_store::put(
+            &vault,
+            &conn,
+            &legacy_id,
+            &legacy,
+            crate::note_store::WriteAttribution::new(
+                "test",
+                "test",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         vault.flush_note_exports(&conn).unwrap();
         assert!(normal_reference_allowed(&conn, &legacy_id).unwrap());
         expected.push((legacy_id.clone(), document(&conn, &legacy_id), true));

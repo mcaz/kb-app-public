@@ -38,8 +38,28 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
 /// 検知を1周回し、新しい提案を受信箱へ積む。戻り値 = 新規提案数。
 /// 既知(open/dismissed 問わず)の key は再提案しない — 「いいえ」は尊重される。
-pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
+pub fn detect(conn: &Connection, vault: &Vault) -> Result<usize> {
+    crate::tag_vocabulary_source::ensure_workspace(vault, conn)?;
     init_schema(conn)?;
+    let overview = crate::tags::vocabulary_overview(conn)?;
+    let source_problem = overview.source_problem();
+    let source_key = source_problem.as_ref().map(|_| {
+        let identity = overview
+            .source
+            .as_ref()
+            .map(|source| source.revision.as_str())
+            .unwrap_or("unconfigured");
+        format!(
+            "glossary-source:{identity}:{:?}:{}",
+            overview.source_status,
+            overview.candidates.len()
+        )
+    });
+    // 正本の修復後に、古い修復案内だけが残って操作を促さないようにする。
+    conn.execute(
+        "UPDATE care_proposals SET status='resolved' WHERE status='open' AND key LIKE 'glossary-source:%' AND key != coalesce(?1, '')",
+        [source_key.as_deref()],
+    )?;
     let open_now: usize = conn.query_row(
         "SELECT count(*) FROM care_proposals WHERE status='open'",
         [],
@@ -66,13 +86,40 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
         })?;
         rows.collect::<std::result::Result<_, _>>()?
     };
+    // 正本の欠損を全ノートのタグ違反として水増しせず、修復対象を1件だけ示す。
+    let source_detail = match overview.source_status {
+        crate::tags::SourceStatus::Unconfigured => {
+            "タグ語彙の正本が未指定です。AIに語彙の確認と指定を頼めます。"
+        }
+        crate::tags::SourceStatus::Missing => {
+            "タグ語彙の正本が見つかりません。AIに復元または指定先の確認を頼めます。"
+        }
+        crate::tags::SourceStatus::Unavailable => {
+            "タグ語彙の正本を参照できません。AIに正本の状態や指定先の確認を頼めます。"
+        }
+        crate::tags::SourceStatus::Pinned => "",
+    };
+    if let Some(key) = &source_key
+        && conn.execute(
+            "INSERT INTO care_proposals(key, kind, a, b, detail) VALUES(?1, 'glossary', '', '', ?2)
+             ON CONFLICT(key) DO UPDATE SET status='open', detail=excluded.detail WHERE care_proposals.status='resolved'",
+            [key.as_str(), source_detail],
+        )? != 0
+    {
+        added += 1;
+    }
     let tag_validator = crate::tags::validator(conn)?;
     for (id, title, raw_tags) in notes {
         if added >= budget {
             break;
         }
         let tags: Vec<String> = raw_tags.split_whitespace().map(String::from).collect();
-        let Err(error) = tag_validator.validate(&tags, false) else {
+        let validation = if source_problem.is_some() {
+            crate::tags::validate_structure(&tags)
+        } else {
+            tag_validator.validate(&tags, false)
+        };
+        let Err(error) = validation else {
             continue;
         };
         let (kind, key, detail) = if tags.is_empty() {
@@ -101,17 +148,16 @@ pub fn detect(conn: &Connection, _vault: &Vault) -> Result<usize> {
 
     // ③ 語彙表に読めない行(沈黙しない — fail-open を選んだ経路は劣化を可視化する)。
     // 語彙表の行を黙って捨てると、合意したはずのタグが一覧から消えたまま気づけない。
-    let glossary = crate::tags::glossary(conn)?;
     if added < budget
-        && !glossary.skipped.is_empty()
-        && let Some(note) = glossary.note_id.clone()
+        && !overview.skipped.is_empty()
+        && let Some(note) = overview.glossary_note.clone()
     {
-        let key = format!("glossary:{note}:{}", glossary.skipped.len());
+        let key = format!("glossary:{note}:{}", overview.skipped.len());
         let detail = format!(
             "「タグ運用」ノートの語彙表に、タグとして読めない行が {} 行あります({})。\
 形は英小文字・数字・ハイフンです。",
-            glossary.skipped.len(),
-            glossary.skipped.join("、")
+            overview.skipped.len(),
+            overview.skipped.join("、")
         );
         if insert_new(conn, &key, "glossary", &note, "", &detail)? {
             added += 1;
@@ -240,7 +286,7 @@ mod tests {
     fn all_existing_tag_contract_violations_are_visible() {
         let dir = tempfile::tempdir().unwrap();
         let vault = Vault::create(dir.path().join("v")).unwrap();
-        vault
+        let glossary_id = vault
             .propose_for_test(
                 "タグ運用 — 合意の置き場",
                 "## 語彙\n\n| タグ | 説明 |\n|---|---|\n| kb-app | 主題 |\n| knowledge-base | 主題 |\n| governance | 活動 |\n| ops | 活動 |\n",
@@ -276,6 +322,7 @@ mod tests {
         let conn = open_db(&vault).unwrap();
         let report = crate::index::import_markdown_snapshot(&vault, &conn).unwrap();
         assert!(report.degraded.is_empty());
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &glossary_id).unwrap();
         assert_eq!(detect(&conn, &vault).unwrap(), 3);
         let open = list_open(&conn).unwrap();
         assert_eq!(
@@ -293,5 +340,73 @@ mod tests {
             open.iter()
                 .any(|proposal| proposal.detail.contains("stray"))
         );
+    }
+
+    /// 2026-09-08: 正本未指定を全ノートの語彙違反へ誤変換せず、修復対象を1件だけ示す。
+    #[test]
+    fn missing_source_is_one_care_item_without_false_tag_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        vault
+            .propose_for_test(
+                "既存ノート",
+                "本文",
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
+            .unwrap();
+        let glossary_id = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| kb-app | 主題 |\n",
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        assert_eq!(detect(&conn, &vault).unwrap(), 1);
+        let open = list_open(&conn).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].kind, "glossary");
+        assert!(open[0].detail.contains("未指定"));
+        assert_eq!(detect(&conn, &vault).unwrap(), 0);
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &glossary_id).unwrap();
+        assert_eq!(detect(&conn, &vault).unwrap(), 0);
+        assert!(list_open(&conn).unwrap().is_empty());
+    }
+
+    /// 2026-09-08: 同じ正本の問題が再発したら、修復済みの案内だけを再開し黙らない。
+    #[test]
+    fn repaired_source_problem_is_shown_again_when_it_recurs() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let id = vault
+            .propose_for_test(
+                "タグ運用",
+                "## 語彙\n| kb-app | 主題 |\n",
+                None,
+                &["kb-app".into()],
+                "test/client",
+            )
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &id).unwrap();
+        for (status, expected) in [("deprecated", 1), ("stable", 0), ("deprecated", 1)] {
+            let mut note = crate::note_store::read(&conn, &id).unwrap();
+            note.front.status = Some(status.into());
+            conn.execute(
+                "UPDATE notes SET document=?1, status=?2 WHERE id=?3",
+                rusqlite::params![note.to_file_string().unwrap(), status, id],
+            )
+            .unwrap();
+            assert_eq!(detect(&conn, &vault).unwrap(), expected);
+            assert_eq!(list_open(&conn).unwrap().len(), expected);
+        }
+        let open = list_open(&conn).unwrap();
+        dismiss(&conn, &open[0].key).unwrap();
+        assert_eq!(detect(&conn, &vault).unwrap(), 0);
+        assert!(list_open(&conn).unwrap().is_empty());
     }
 }

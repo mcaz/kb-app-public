@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { Favorite, Period, SortKey } from "@/lib/api";
 
-export type View = "home" | "notes" | "files" | "graph" | "proposals";
+export type View = "home" | "notes" | "files" | "tags" | "graph" | "proposals";
 export type BrowsePane = "list" | "note";
 
 interface NavigationState {

@@ -1,1 +1,1 @@
-export { SettingsDialog, type SettingsDialogProps } from "./SettingsDialog";
+export { SettingsDialog, type SettingsDialogProps, type SettingsSection } from "./SettingsDialog";

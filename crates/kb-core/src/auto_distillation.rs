@@ -287,15 +287,33 @@ fn write_prepared(
     note: &Note,
     run: &str,
     reason: &str,
+    client: &str,
 ) -> Result<()> {
+    // 自動蒸留はアプリ主導の書込。モデルは`--client` hintの位置に依存しないので、
+    // 確定できない間はUnknownのままにする(誤ったモデル名を来歴へ残さない)。
+    let actor =
+        crate::provenance::WriteActor::app_api(crate::provenance::client_product(client), None);
+    let revision = crate::provenance::RevisionInput {
+        kind: Some(crate::provenance::RevisionKind::Amend),
+        summary: Some(reason.to_string()),
+        ..crate::provenance::RevisionInput::default()
+    };
+    let context = crate::provenance::WriteContext {
+        actor: &actor,
+        revision: Some(&revision),
+        operation: crate::provenance::Operation::Distill,
+    };
     crate::note_store::queue_put(
         vault,
         conn,
         id,
         note,
         &format!("{run}:{id}"),
-        &format!("**自動蒸留**: [{id}](/{id}.md)。理由: {reason}"),
-        &format!("distill: {id} ({run})"),
+        crate::note_store::WriteAttribution::new(
+            &format!("**自動蒸留**: [{id}](/{id}.md)。理由: {reason}"),
+            &format!("distill: {id} ({run})"),
+            &context,
+        ),
     )
 }
 
@@ -841,6 +859,8 @@ mod tests {
                     relations: vec![],
                     allow_new_tags: true,
                     client: "codex-cli/test",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap()
@@ -1345,7 +1365,18 @@ mod tests {
         let (_temp, vault, conn, id, lease, context) = setup();
         let mut note = crate::note_store::read(&conn, &id).unwrap();
         note.body.push_str("\n後から判明した条件B。");
-        crate::note_store::put(&vault, &conn, &id, &note, "変更", "test").unwrap();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "変更",
+                "test",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         assert!(
             complete(
                 &vault,
@@ -1553,7 +1584,18 @@ mod tests {
             front,
             body: "authority移行前の原証拠。".into(),
         };
-        crate::note_store::put(&vault, &conn, &id, &note, "旧形式のfixture", "test").unwrap();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "旧形式のfixture",
+                "test",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         assert_eq!(distillation_jobs::status(&conn).unwrap().pending, 1);
 
         // 対象判定が後退しても未設定AIとして失敗し、実設定の読取りやモデル実行へ到達させない。
@@ -1922,8 +1964,11 @@ mod tests {
                 &conn,
                 &source,
                 &updated,
-                "試験用の後続更新",
-                "test: source update",
+                crate::note_store::WriteAttribution::new(
+                    "試験用の後続更新",
+                    "test: source update",
+                    &crate::provenance::test_context(),
+                ),
             )?;
             Ok(serde_json::to_value(no_change())?)
         })

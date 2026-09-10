@@ -13,9 +13,9 @@ use crate::frontmatter::Note;
 use crate::tokenize::wakati;
 use crate::vault::Vault;
 
-const SCHEMA_VERSION: &str = "10";
+const SCHEMA_VERSION: &str = "14";
 /// 現行schema versionの数値形。migration state machineの比較はこちらを使う。
-const CURRENT_SCHEMA: u32 = 10;
+pub(crate) const CURRENT_SCHEMA: u32 = 14;
 /// 加算migrationを持つ最古のversion。これより古い宣言versionはfail-closed
 /// (unknown versionを破壊的rebuildの合図にしない)。
 const OLDEST_SUPPORTED_SCHEMA: u32 = 3;
@@ -40,10 +40,13 @@ pub struct OpenDbOutcome {
 
 pub fn open_db_with_outcome(vault: &Vault) -> Result<OpenDbOutcome> {
     let conn = open_db_recovery(vault)?;
+    crate::tag_vocabulary_source::ensure_workspace(vault, &conn)?;
     // 派生索引の修復はMarkdown復元・importより前 — 復元経由のupsertも
     // 修復済みのobjectへ書けるようにする。health OKなら書込は発生しない。
     let repair = crate::derived_index::check_and_repair(vault, &conn)?;
     restore_missing_documents(vault, &conn)?;
+    // v8→v9直後・DB作り直し直後は索引が空。来歴の正本は`.kb-events`側なので復元する。
+    crate::provenance::restore_events_if_empty(vault, &conn)?;
     if !runtime_store_is_db(&conn) {
         let report = import_markdown_snapshot(vault, &conn)?;
         if !report.degraded.is_empty() {
@@ -110,6 +113,7 @@ pub fn open_db_read_only(vault: &Vault) -> Result<Connection> {
     if schema != SCHEMA_VERSION {
         bail!("read-only plannerはschema {SCHEMA_VERSION}の準備済みDBを必要とする(現在: {schema})")
     }
+    crate::tag_vocabulary_source::ensure_workspace(vault, &conn)?;
     Ok(conn)
 }
 
@@ -188,7 +192,7 @@ fn restore_missing_documents(vault: &Vault, conn: &Connection) -> Result<usize> 
 enum SchemaState {
     /// DBオブジェクトが1つもない空DB。registry生成DDLの唯一の対象。
     Fresh,
-    /// 加算migrationで現行へ到達できる宣言version({3..=10})。
+    /// 加算migrationで現行へ到達できる宣言version({3..=13})。
     Supported(u32),
 }
 
@@ -243,6 +247,27 @@ fn classify_schema(conn: &Connection) -> Result<SchemaState> {
              未知の旧versionを破壊的rebuildの合図にはしない"
         );
     }
+    if version < 13 && crate::tag_vocabulary_history::rollback_table_present(conn)? {
+        bail!("index.dbのschema宣言と語彙復元履歴が不整合。自動migration・再作成は行わない");
+    }
+    if version < 12 {
+        let history_tables: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('tag_vocabulary_runs','tag_vocabulary_run_notes')",
+            [], |row| row.get(0),
+        )?;
+        if history_tables != 0 {
+            bail!("index.dbのschema宣言と語彙変更履歴が不整合。自動migration・再作成は行わない");
+        }
+    }
+    if version < 11 {
+        let source_tables: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('tag_vocabulary_sources','tag_vocabulary_source_exports')",
+            [], |row| row.get(0),
+        )?;
+        if source_tables != 0 {
+            bail!("index.dbのschema宣言と語彙正本の台帳が不整合。自動migration・再作成は行わない");
+        }
+    }
     // 2026-09-07: 旧バイナリの非transaction再作成はschemaだけを9へ戻し、
     // v10の台帳を残し得る。加算migrationやWAL変換で原状を動かす前に止める。
     if version < 10 {
@@ -280,12 +305,24 @@ fn required_durable_tables(version: u32) -> Vec<&'static str> {
         required.push("distillation_jobs");
         required.push("distillation_job_runs");
     }
+    if version >= 11 {
+        required.extend(crate::tag_vocabulary_source::TABLES);
+    }
+    if version >= 12 {
+        required.extend(crate::tag_vocabulary_history::TABLES);
+    }
+    if version >= 13 {
+        required.extend(crate::tag_vocabulary_history::ROLLBACK_TABLES);
+    }
+    if version >= 14 {
+        required.push("note_events");
+    }
     required
 }
 
 /// durable tableの欠落は空表作成で隠さずfail-closed。distillation_runsや
 /// action_receiptsの喪失は復元不能で、空表を作ると喪失自体が見えなくなる。
-fn verify_durable_tables(conn: &Connection, version: u32) -> Result<()> {
+pub(crate) fn verify_durable_tables(conn: &Connection, version: u32) -> Result<()> {
     let mut missing = Vec::new();
     for table in required_durable_tables(version) {
         let found: i64 = conn.query_row(
@@ -306,6 +343,15 @@ fn verify_durable_tables(conn: &Connection, version: u32) -> Result<()> {
     }
     if version >= 10 {
         crate::distillation_jobs::verify_schema(conn)?;
+    }
+    if version >= 11 {
+        crate::tag_vocabulary_source::verify_schema(conn)?;
+    }
+    if version >= 12 {
+        crate::tag_vocabulary_history::verify_schema(conn)?;
+    }
+    if version >= 13 {
+        crate::tag_vocabulary_history::verify_rollback_schema(conn)?;
     }
     Ok(())
 }
@@ -380,9 +426,34 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
             issuer TEXT NOT NULL,
             receipt_id TEXT NOT NULL UNIQUE REFERENCES action_receipts(receipt_id)
         );
+        CREATE TABLE note_events(
+            event_id TEXT PRIMARY KEY,
+            note_uid TEXT,
+            note_id TEXT NOT NULL,
+            at TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            actor_client TEXT NOT NULL,
+            actor_client_version TEXT,
+            actor_surface TEXT NOT NULL,
+            actor_model TEXT,
+            actor_model_basis TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            summary TEXT,
+            payload TEXT NOT NULL,
+            exported INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX note_events_uid ON note_events(note_uid, event_id);
+        CREATE INDEX note_events_note ON note_events(note_id, event_id);
+        CREATE INDEX note_events_client ON note_events(actor_client, at);
+        CREATE INDEX note_events_model ON note_events(actor_model, at);
+        CREATE INDEX note_events_kind ON note_events(kind, at);
+        CREATE INDEX note_events_at ON note_events(at);
         ",
     )?;
     transaction.execute_batch(crate::distillation_jobs::SCHEMA_SQL)?;
+    transaction.execute_batch(crate::tag_vocabulary_source::SCHEMA_SQL)?;
+    transaction.execute_batch(crate::tag_vocabulary_history::SCHEMA_SQL)?;
+    transaction.execute_batch(crate::tag_vocabulary_history::ROLLBACK_SCHEMA_SQL)?;
     for artifact in crate::derived_index::DerivedArtifact::ALL {
         for object in artifact.spec().objects {
             transaction.execute_batch(object.create_sql)?;
@@ -396,14 +467,14 @@ fn create_fresh_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// supported versionからの加算migration。明示step列(v3→v4→…→v10)を単一transactionで
+/// supported versionからの加算migration。明示step列(v3→v4→…→v14)を単一transactionで
 /// 適用し、meta version書込は最後。途中失敗は全stepをrollbackして旧versionのまま残す。
 fn migrate_schema(conn: &Connection, from: u32) -> Result<()> {
     if from == CURRENT_SCHEMA {
         return Ok(());
     }
     type MigrationStep = fn(&Connection) -> Result<()>;
-    const STEPS: [(u32, &str, MigrationStep); 7] = [
+    const STEPS: [(u32, &str, MigrationStep); 11] = [
         (3, "v3→v4", migrate_v3_to_v4),
         (4, "v4→v5", migrate_v4_to_v5),
         (5, "v5→v6", migrate_v5_to_v6),
@@ -411,6 +482,10 @@ fn migrate_schema(conn: &Connection, from: u32) -> Result<()> {
         (7, "v7→v8", migrate_v7_to_v8),
         (8, "v8→v9", migrate_v8_to_v9),
         (9, "v9→v10", migrate_v9_to_v10),
+        (10, "v10→v11", migrate_v10_to_v11),
+        (11, "v11→v12", migrate_v11_to_v12),
+        (12, "v12→v13", migrate_v12_to_v13),
+        (13, "v13→v14", migrate_v13_to_v14),
     ];
     let transaction = conn.unchecked_transaction()?;
     for (source, label, step) in STEPS {
@@ -424,6 +499,52 @@ fn migrate_schema(conn: &Connection, from: u32) -> Result<()> {
         [SCHEMA_VERSION],
     )?;
     transaction.commit()?;
+    Ok(())
+}
+
+/// v14: ノート来歴の追記専用イベント(契約20)。durable tableなので空表を作るだけにし、
+/// 既存vaultの`.kb-events`からの復元はopen時の`restore_events_if_empty`が行う
+/// (migration段ではvaultを触らない)。
+fn migrate_v13_to_v14(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS note_events(
+             event_id TEXT PRIMARY KEY,
+             note_uid TEXT,
+             note_id TEXT NOT NULL,
+             at TEXT NOT NULL,
+             operation TEXT NOT NULL,
+             actor_client TEXT NOT NULL,
+             actor_client_version TEXT,
+             actor_surface TEXT NOT NULL,
+             actor_model TEXT,
+             actor_model_basis TEXT NOT NULL,
+             kind TEXT NOT NULL,
+             summary TEXT,
+             payload TEXT NOT NULL,
+             exported INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE INDEX IF NOT EXISTS note_events_uid ON note_events(note_uid, event_id);
+         CREATE INDEX IF NOT EXISTS note_events_note ON note_events(note_id, event_id);
+         CREATE INDEX IF NOT EXISTS note_events_client ON note_events(actor_client, at);
+         CREATE INDEX IF NOT EXISTS note_events_model ON note_events(actor_model, at);
+         CREATE INDEX IF NOT EXISTS note_events_kind ON note_events(kind, at);
+         CREATE INDEX IF NOT EXISTS note_events_at ON note_events(at);",
+    )?;
+    Ok(())
+}
+
+fn migrate_v12_to_v13(conn: &Connection) -> Result<()> {
+    conn.execute_batch(crate::tag_vocabulary_history::ROLLBACK_SCHEMA_SQL)?;
+    Ok(())
+}
+
+fn migrate_v11_to_v12(conn: &Connection) -> Result<()> {
+    conn.execute_batch(crate::tag_vocabulary_history::SCHEMA_SQL)?;
+    Ok(())
+}
+
+fn migrate_v10_to_v11(conn: &Connection) -> Result<()> {
+    conn.execute_batch(crate::tag_vocabulary_source::SCHEMA_SQL)?;
     Ok(())
 }
 
@@ -696,11 +817,15 @@ pub fn sync_with_degradations(vault: &Vault, conn: &Connection) -> Result<SyncRe
 
 /// fresh clone・明示import・Git pullだけがMarkdownからDBへ入る入口。
 pub fn import_markdown_snapshot(vault: &Vault, conn: &Connection) -> Result<SyncReport> {
-    if crate::note_store::pending_count(conn)? != 0 {
+    if crate::note_store::pending_count(conn)? != 0
+        || crate::tag_vocabulary_source::pending_count(conn)? != 0
+    {
         bail!("未出力のDB更新があるためMarkdownをimportできない");
     }
     let files = vault.list_note_files()?;
     let report = sync_files(vault, conn, files)?;
+    // clone・pull・明示importで運ばれた来歴イベントも、同じ入口で実行時索引へ入れる。
+    crate::provenance::restore_from_files(vault, conn)?;
     if report.degraded.is_empty() {
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES('runtime_store', 'db-v1')",
@@ -732,6 +857,7 @@ fn sync_files(
     conn: &Connection,
     files: Vec<(String, std::path::PathBuf)>,
 ) -> Result<SyncReport> {
+    let source_document = crate::tag_vocabulary_source::read_export_document(vault)?;
     let mut updated = 0usize;
     let mut degraded = Vec::new();
 
@@ -748,6 +874,8 @@ fn sync_files(
     // 2026-08-16の10k fixtureでは1件ごとのautocommitが再構築20秒の大半を占めた。
     // 全件を同じ派生索引versionとして反映し、途中失敗も半端な索引を残さない。
     let transaction = conn.unchecked_transaction()?;
+    let imported_vocabulary =
+        crate::tag_vocabulary_source::import_binding(&transaction, source_document.as_deref())?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (id, path) in files {
         seen.insert(id.clone());
@@ -808,13 +936,15 @@ fn sync_files(
             .transpose()?;
         // 復元・pullも採否履歴を短縮したり分岐した内容で置換しない。
         crate::proposal_workflow::guard_import(before.as_ref(), &note)?;
-        upsert(&transaction, vault, &id, mtime, &note)?;
+        // 語彙と使用先の両方が変わるimportは、全note同期後に削除語の使用を検査する。
+        upsert_with_deferred_vocabulary_check(&transaction, vault, &id, mtime, &note)?;
         updated += 1;
     }
 
     for gone in known.keys().filter(|k| !seen.contains(*k)) {
         let previous = crate::note_store::read(&transaction, gone)?;
         crate::proposal_workflow::guard_note_delete(&previous)?;
+        crate::tag_vocabulary_source::guard_source_note_id_removal(&transaction, gone)?;
         // 派生行の削除(inbound relation存在時の拒否を含む)はregistry走査へ統一。
         // durableのnotes行だけをここで消す。
         let note_uid: Option<String> = transaction
@@ -835,6 +965,7 @@ fn sync_files(
         updated += 1;
     }
     validate_authority_index(&transaction)?;
+    crate::tag_vocabulary_source::validate_imported_binding(&transaction, imported_vocabulary)?;
     transaction.commit()?;
     Ok(SyncReport { updated, degraded })
 }
@@ -931,6 +1062,18 @@ pub(crate) fn upsert(
     mtime: i64,
     note: &Note,
 ) -> Result<()> {
+    crate::tags::guard_source_vocabulary_write(conn, id, note)?;
+    upsert_with_deferred_vocabulary_check(conn, vault, id, mtime, note)
+}
+
+fn upsert_with_deferred_vocabulary_check(
+    conn: &Connection,
+    vault: &Vault,
+    id: &str,
+    mtime: i64,
+    note: &Note,
+) -> Result<()> {
+    crate::tag_vocabulary_source::guard_source_note_write(conn, note)?;
     let old_uid = upsert_row(conn, id, mtime, note, &note.to_file_string()?)?;
     // 派生索引は通常の保存と同じtransaction内で追従する。
     crate::derived_index::apply_note_change(
@@ -1062,6 +1205,8 @@ pub(crate) fn restore_document_row(
 
 pub(crate) fn finish_runtime_recovery(conn: &Connection) -> Result<()> {
     anyhow::ensure!(!conn.is_autocommit(), "復旧確定にはtransactionが必要");
+    crate::tag_vocabulary_source::initialize_recovery_schema(conn)?;
+    crate::tag_vocabulary_history::initialize_recovery_schema(conn)?;
     verify_durable_tables(conn, CURRENT_SCHEMA)?;
     let affected = conn.execute(
         "UPDATE meta SET value=?1 WHERE key='schema'",
@@ -1173,7 +1318,7 @@ pub(crate) mod test_support {
     use rusqlite::{Connection, OpenFlags};
 
     /// spec S-1のdurable table集合(metaはclassifyで検証されるがdumpには含める)。
-    pub(crate) const DURABLE_TABLES: [&str; 8] = [
+    pub(crate) const DURABLE_TABLES: [&str; 14] = [
         "meta",
         "notes",
         "note_exports",
@@ -1182,6 +1327,12 @@ pub(crate) mod test_support {
         "action_capability_uses",
         "distillation_jobs",
         "distillation_job_runs",
+        "tag_vocabulary_sources",
+        "tag_vocabulary_source_exports",
+        "tag_vocabulary_runs",
+        "tag_vocabulary_run_notes",
+        "tag_vocabulary_rollbacks",
+        "note_events",
     ];
 
     /// 2026-09-06: 旧schema fixtureへ現行triggerを残すと列削除や後続migrationが
@@ -1194,6 +1345,11 @@ pub(crate) mod test_support {
              DROP TRIGGER distillation_jobs_delete;
              DROP TABLE distillation_job_runs;
              DROP TABLE distillation_jobs;
+             DROP TABLE tag_vocabulary_sources;
+             DROP TABLE tag_vocabulary_source_exports;
+             DROP TABLE tag_vocabulary_rollbacks;
+             DROP TABLE tag_vocabulary_run_notes;
+             DROP TABLE tag_vocabulary_runs;
              ALTER TABLE notes DROP COLUMN distillation_allowed;",
         )
         .unwrap();
@@ -1429,6 +1585,8 @@ mod tests {
                     relations: None,
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1840,6 +1998,108 @@ mod tests {
         assert_eq!(indexed, 0);
     }
 
+    fn vocabulary_import_fixture() -> (tempfile::TempDir, Vault, Connection, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        let source = vault
+            .propose_for_test(
+                "語彙正本",
+                "## 語彙\n| old | 変更前の語彙 |\n",
+                None,
+                &["old".into()],
+                "test/client",
+            )
+            .unwrap();
+        let user = vault
+            .propose_for_test("語彙の使用先", "本文", None, &["old".into()], "test/client")
+            .unwrap();
+        let conn = open_db(&vault).unwrap();
+        crate::tag_vocabulary_source::pin_for_test(&vault, &conn, &source).unwrap();
+        (dir, vault, conn, source, user)
+    }
+
+    /// 2026-09-08: 正本の語彙削除と使用先のretagを、Markdown列挙順に依存させない。
+    #[test]
+    fn import_checks_vocabulary_after_every_note_regardless_of_order() {
+        for source_first in [true, false] {
+            let (_dir, vault, conn, source, user) = vocabulary_import_fixture();
+            let mut source_note = crate::note_store::read(&conn, &source).unwrap();
+            source_note.body = "## 語彙\n| next | 変更後の語彙 |\n".into();
+            source_note.front.tags = vec!["next".into()];
+            vault.write_note_fixture(&source, &source_note).unwrap();
+            let mut user_note = crate::note_store::read(&conn, &user).unwrap();
+            user_note.front.tags = vec!["next".into()];
+            vault.write_note_fixture(&user, &user_note).unwrap();
+            let mut files = vec![
+                (source.clone(), vault.note_path(&source).unwrap()),
+                (user.clone(), vault.note_path(&user).unwrap()),
+            ];
+            if !source_first {
+                files.reverse();
+            }
+            assert!(
+                sync_files(&vault, &conn, files)
+                    .unwrap()
+                    .degraded
+                    .is_empty()
+            );
+            assert_eq!(
+                crate::note_store::read(&conn, &source).unwrap().body,
+                source_note.body
+            );
+            assert_eq!(
+                crate::note_store::read(&conn, &user).unwrap().front.tags,
+                vec!["next"]
+            );
+            assert_eq!(
+                crate::tags::registered_vocabulary(&conn).unwrap(),
+                std::collections::BTreeSet::from(["next".into()])
+            );
+        }
+    }
+
+    /// 2026-09-08: 使用語が残るimportは全体rollbackし、同時に使用先を消すimportは許す。
+    #[test]
+    fn import_rejects_used_removal_atomically_but_allows_deleted_usage() {
+        let (_dir, vault, conn, source, user) = vocabulary_import_fixture();
+        let before = logical_snapshot(&vault.index_db_path());
+        let mut source_note = crate::note_store::read(&conn, &source).unwrap();
+        source_note.body = "## 語彙\n| next | 変更後の語彙 |\n".into();
+        source_note.front.tags = vec!["next".into()];
+        vault.write_note_fixture(&source, &source_note).unwrap();
+        let mut user_note = crate::note_store::read(&conn, &user).unwrap();
+        user_note.body = "失敗時に取り込まない本文".into();
+        vault.write_note_fixture(&user, &user_note).unwrap();
+        let error = sync_files(
+            &vault,
+            &conn,
+            vec![
+                (user.clone(), vault.note_path(&user).unwrap()),
+                (source.clone(), vault.note_path(&source).unwrap()),
+            ],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("使用中の語彙「old」"), "{error}");
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+
+        fs::remove_file(vault.note_path(&user).unwrap()).unwrap();
+        assert!(
+            sync_files(
+                &vault,
+                &conn,
+                vec![(source.clone(), vault.note_path(&source).unwrap())]
+            )
+            .unwrap()
+            .degraded
+            .is_empty()
+        );
+        assert!(!crate::note_store::contains(&conn, &user).unwrap());
+        assert_eq!(
+            crate::tags::registered_vocabulary(&conn).unwrap(),
+            std::collections::BTreeSet::from(["next".into()])
+        );
+    }
+
     #[test]
     fn explicit_import_rejects_a_dangling_typed_relation_atomically() {
         let dir = tempfile::tempdir().unwrap();
@@ -2220,6 +2480,34 @@ mod tests {
             conn.execute("UPDATE meta SET value='10' WHERE key='schema'", [])
                 .unwrap();
         }
+        if version >= 11 {
+            migrate_v10_to_v11(&conn).unwrap();
+            conn.execute("UPDATE meta SET value='11' WHERE key='schema'", [])
+                .unwrap();
+        }
+        if version >= 12 {
+            migrate_v11_to_v12(&conn).unwrap();
+            conn.execute("UPDATE meta SET value='12' WHERE key='schema'", [])
+                .unwrap();
+        }
+        if version >= 13 {
+            migrate_v12_to_v13(&conn).unwrap();
+            conn.execute("UPDATE meta SET value='13' WHERE key='schema'", [])
+                .unwrap();
+        }
+        if version >= 14 {
+            // v14: ノート来歴の追記専用イベント台帳(契約20)
+            migrate_v13_to_v14(&conn).unwrap();
+            conn.execute_batch(
+                "INSERT INTO note_events(
+                     event_id, note_id, at, operation, actor_client, actor_surface,
+                     actor_model_basis, kind, payload, exported
+                 ) VALUES('event:matrix', 'notes/migrate', '2026-09-01T00:00:00Z', 'propose',
+                          'test-client', 'unknown', 'unknown', 'create', '{}', 1);
+                 UPDATE meta SET value='14' WHERE key='schema';",
+            )
+            .unwrap();
+        }
         document
     }
 
@@ -2539,6 +2827,105 @@ mod tests {
             format!("{error:#}").contains("distillation_runs"),
             "{error:#}"
         );
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+    }
+
+    /// 2026-09-08: 旧v11だけを加算移行し、v12の履歴消失や宣言巻戻りは隠さない。
+    #[test]
+    fn vocabulary_history_migrates_from_v11_and_missing_or_downgraded_tables_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 11);
+        let conn = open_db(&vault).unwrap();
+        crate::tag_vocabulary_history::verify_integrity(&conn).unwrap();
+        let execution_id = crate::tag_vocabulary_history::record_for_test(&conn);
+        let before = test_support::durable_rows_snapshot(&conn);
+        drop(conn);
+        let conn = open_db(&vault).unwrap();
+        assert_eq!(before, test_support::durable_rows_snapshot(&conn));
+        assert!(
+            crate::tag_vocabulary_history::get(&conn, &execution_id, None, None)
+                .unwrap()
+                .is_some()
+        );
+        conn.execute("UPDATE meta SET value='11' WHERE key='schema'", [])
+            .unwrap();
+        drop(conn);
+        let before = logical_snapshot(&vault.index_db_path());
+        assert!(open_db(&vault).is_err());
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+
+        for table in crate::tag_vocabulary_history::TABLES {
+            let dir = tempfile::tempdir().unwrap();
+            let vault = Vault::create(dir.path().join("v")).unwrap();
+            let conn = open_db(&vault).unwrap();
+            conn.execute_batch(&format!("DROP TABLE {table}")).unwrap();
+            drop(conn);
+            let before = logical_snapshot(&vault.index_db_path());
+            let error = open_db(&vault).unwrap_err();
+            assert!(format!("{error:#}").contains(table));
+            assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+        }
+    }
+
+    /// 2026-09-08: v12の変更前後原文を残して復元台帳だけを加算し、v13の喪失を再生成しない。
+    #[test]
+    fn vocabulary_rollback_migrates_from_v12_and_protects_durable_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("v")).unwrap();
+        build_versioned_fixture(&vault, 12);
+        let conn = Connection::open(vault.index_db_path()).unwrap();
+        let execution_id = crate::tag_vocabulary_history::record_for_test(&conn);
+        let original: String = conn
+            .query_row(
+                "SELECT before_document FROM tag_vocabulary_run_notes",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+        let conn = open_db(&vault).unwrap();
+        crate::tag_vocabulary_history::verify_rollback_integrity(&conn).unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT before_document FROM tag_vocabulary_run_notes",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            original
+        );
+        let rollback_id =
+            crate::tag_vocabulary_history::record_rollback_for_test(&conn, &execution_id);
+        let before = test_support::durable_rows_snapshot(&conn);
+        drop(conn);
+        let conn = open_db(&vault).unwrap();
+        assert_eq!(before, test_support::durable_rows_snapshot(&conn));
+        assert_eq!(
+            crate::tag_vocabulary_history::get(&conn, &execution_id, None, None)
+                .unwrap()
+                .unwrap()
+                .run
+                .rollback
+                .unwrap()
+                .rollback_id,
+            rollback_id
+        );
+        conn.execute("UPDATE meta SET value='12' WHERE key='schema'", [])
+            .unwrap();
+        drop(conn);
+        let before = logical_snapshot(&vault.index_db_path());
+        assert!(open_db(&vault).is_err());
+        assert_eq!(before, logical_snapshot(&vault.index_db_path()));
+
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::create(dir.path().join("missing")).unwrap();
+        let conn = open_db(&vault).unwrap();
+        conn.execute_batch("DROP TABLE tag_vocabulary_rollbacks")
+            .unwrap();
+        drop(conn);
+        let before = logical_snapshot(&vault.index_db_path());
+        assert!(open_db(&vault).is_err());
         assert_eq!(before, logical_snapshot(&vault.index_db_path()));
     }
 

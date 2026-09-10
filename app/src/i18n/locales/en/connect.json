@@ -22,12 +22,12 @@
   },
   "ai": {
     "name": "AI app (Claude)",
-    "desc": "Your knowledge base gets pulled into conversations, and what you learn there comes back as drafts.",
-    "connected": "Connected",
+    "desc": "Set up AI access to search and record knowledge. Registration and observed use are shown separately.",
+    "connected": "Registered",
     "notFound": "Claude Desktop not found",
     "notConnected": "Not connected",
     "connect": "Connect",
-    "done": "Connected. Restart Claude Desktop to start using it.",
+    "done": "Connection settings saved. Restart Claude Desktop and reconnect kb-app MCP.",
     "failed": "Could not connect: {{error}}"
   },
   "smartSearch": {
@@ -58,5 +58,106 @@
     "connect": "Connect",
     "needUrl": "Please enter the repository URL",
     "done": "Backup destination set, and the first copy has been sent"
+  },
+  "clients": {
+    "title": "AI app registration and activity",
+    "description": "Register an AI app, then inspect its settings and observed activity.",
+    "selectedKnowledgeBase": "Selected knowledge base: {{name}}",
+    "recheck": "Check all again",
+    "registrationLoadFailed": "Could not inspect registration: {{error}}",
+    "diagnosticsLoadFailed": "Some activity checks are unavailable: {{error}}",
+    "previousCheck": "Previous check",
+    "unverified": "Unverified",
+    "names": {
+      "codex": "Codex",
+      "claude_code": "Claude Code",
+      "claude_desktop": "Claude Desktop"
+    },
+    "registrationStates": {
+      "registered": "Registered",
+      "missing": "Not registered",
+      "needs_repair": "Repair needed",
+      "blocked": "Check settings",
+      "unsupported": "Registration unsupported on this OS"
+    },
+    "binding": "Knowledge base match",
+    "bindingStates": {
+      "matched": "Matches the selected knowledge base",
+      "missing": "No binding saved",
+      "mismatch": "Bound to another knowledge base",
+      "unavailable": "Could not inspect binding"
+    },
+    "protection": "Direct access protection",
+    "protectionNotApplicable": "Not applicable (no local hook)",
+    "guardStates": {
+      "enforced": "Protection configured",
+      "development": "Development access allowed",
+      "missing": "Protection not configured",
+      "conflict": "Conflicting settings",
+      "unsupported": "Unsupported on this OS",
+      "outdated": "Protection update needed"
+    },
+    "ruleOutput": "Rule output record",
+    "outputStates": {
+      "not_observed": "No output record with a verified rule version",
+      "current_rules": "Last output matches current rules",
+      "different_rules": "Last output differs from current rules",
+      "stdout_failed": "Output failed",
+      "prepared_only": "Prepared; output unverified",
+      "not_applicable": "Not applicable (no local hook)",
+      "vocabulary_unverified": "Vocabulary source unverified",
+      "concurrent_outputs": "Mixed outputs at the same time; order unverified"
+    },
+    "receipt": "Rules received by AI",
+    "runningVersion": "Running AI app version",
+    "operations": "Save and update responses",
+    "operationCounts": "Last {{days}} days: {{proposed}} saved, {{updated}} updated, {{errors}} failed",
+    "issues": {
+      "missing_config": "The AI app configuration file is missing.",
+      "missing_server": "Some purpose-specific MCP registrations are missing.",
+      "legacy_registration": "A legacy MCP registration exists.",
+      "executable_mismatch": "A different executable is registered.",
+      "vault_mismatch": "A different knowledge base is registered.",
+      "client_mismatch": "The registration is for another AI app.",
+      "arguments_mismatch": "The MCP launch settings differ from the current format.",
+      "disabled_server": "The MCP registration is disabled.",
+      "invalid_config": "The configuration format could not be read. Check settings in the AI app.",
+      "unreadable_config": "The configuration file could not be read. Check its permissions.",
+      "managed_policy_conflict": "The registration conflicts with managed settings. Contact your administrator.",
+      "managed_policy_unverified": "The effect of managed settings is unverified. Contact your administrator.",
+      "scoped_override": "Project or other scoped settings override registration. Check those settings in the AI app.",
+      "unsafe_path": "This configuration location cannot be updated safely. Check settings in the AI app.",
+      "unsupported_platform": "Automatic registration and repair are unavailable on this OS.",
+      "tool_policy_restriction": "Available MCP tools are restricted by configuration. Review the required tool permissions in the AI app."
+    },
+    "protectionHint": "Review and configure protection in Knowledge base access.",
+    "register": "Register",
+    "repair": "Repair registration",
+    "registering": "Saving registration…",
+    "registered": "Registration saved. Restart the AI app and reconnect MCP.",
+    "reconnect": "Restart {{client}} and reconnect kb-app MCP, then select Check all again. Checking settings alone cannot confirm that reconnection is complete.",
+    "details": "Rule versions and output time",
+    "serverVersion": "Inspected kb-app version",
+    "contractVersion": "Shared contract identifier",
+    "instructionsVersion": "Client instructions identifier",
+    "lastOutput": "Last output record",
+    "evidenceNote": "Registered means the configuration matches. Output records describe the last hook output; save and update counts describe MCP responses. Neither confirms a current connection, receipt of rules, or AI compliance. Project and launch-time overrides are detected only where they can be inspected.",
+    "knowledgeBaseDetails": "Knowledge base, vocabulary source, and OS details",
+    "workspaceIdentity": "Knowledge base identifier",
+    "vocabularySource": "Vocabulary source",
+    "vocabularyStates": {
+      "unconfigured": "Not configured",
+      "pinned": "Pinned and verified",
+      "missing": "Pinned source is missing",
+      "unavailable": "Pinned source cannot be verified"
+    },
+    "vocabularyRevision": "Vocabulary source revision",
+    "lastCheck": "Inspected at",
+    "os": "Inspected OS",
+    "capabilities": "MCP purposes",
+    "capabilitySummary": "Separate search, save, and maintenance registrations",
+    "supportedOs": "Automatic registration and protection configuration support macOS. Availability on other operating systems must be checked separately.",
+    "vocabularyNote": "Vocabulary source note identifier",
+    "vocabularyDocument": "Vocabulary source document identifier"
   }
 }

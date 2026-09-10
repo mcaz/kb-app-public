@@ -9,6 +9,7 @@ client-neutral trace schema consumed by `kb eval rule-delivery-score`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -23,7 +24,13 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = "1.0.0"
 MODES = ("semantic_only", "rules_top_k", "always_topic", "always_topic_event")
-KB_TOOLS = ("search", "get", "attach", "recent", "propose", "update", "remove")
+KB_TOOLS = (
+    "search", "get", "attach", "recent", "tag_vocabulary", "set_tag_vocabulary_source",
+    "plan_tag_vocabulary_change", "apply_tag_vocabulary_change",
+    "list_tag_vocabulary_changes", "get_tag_vocabulary_change",
+    "plan_tag_vocabulary_rollback", "rollback_tag_vocabulary_change", "get_tag_vocabulary_stats",
+    "propose", "update", "remove"
+)
 ONE_PIXEL_PNG_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
@@ -308,7 +315,7 @@ def parse_claude_output(
         event_type = event.get("type")
         if event_type == "system" and event.get("subtype") == "init":
             model = str(event.get("model") or model)
-            raw_version = event.get("claude_code_version") or event.get("version")
+            raw_version = event.get("claude_code_version")
             version = str(raw_version) if raw_version else version
         elif event_type == "assistant":
             message = event.get("message") or {}
@@ -456,6 +463,59 @@ def unique_ordered(values: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(value for value in values if value))
 
 
+def parse_initialize_evidence(
+    path: Path,
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """サーバーが生成した応答の観測。stdout完了・host受信・モデル遵守は未確認。"""
+    observations: list[dict[str, Any]] = []
+    versions: list[dict[str, str]] = []
+    if not path.exists():
+        return None, None
+    def object_value(value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    for entry in json_lines(path.read_text(encoding="utf-8")):
+        request = object_value(entry.get("request"))
+        if request.get("method") != "initialize":
+            continue
+        response = object_value(entry.get("response"))
+        result = object_value(response.get("result"))
+        if response.get("error") or request.get("id") is None or response.get("id") != request["id"]:
+            continue
+        instructions = result.get("instructions")
+        if not isinstance(instructions, str):
+            continue
+        capabilities = object_value(result.get("capabilities"))
+        experimental = object_value(capabilities.get("experimental"))
+        identity = object_value(experimental.get("kbApp")).get("rule_identity")
+        observations.append({
+            "source": "mcp_initialize_server_response",
+            "instructions": instructions,
+            "rule_identity": identity if isinstance(identity, dict) else None,
+        })
+        client_info = object_value(object_value(request.get("params")).get("clientInfo"))
+        version = client_info.get("version")
+        if isinstance(version, str) and version:
+            versions.append({"value": version, "source": "mcp_initialize_request.clientInfo.version"})
+    # 再接続で異なる応答を観測した場合、都合のよい1件を配信証拠に選ばない。
+    observation = observations[0] if observations and all(item == observations[0] for item in observations) else None
+    version = versions[0] if versions and all(item == versions[0] for item in versions) else None
+    return observation, version
+
+
+def observed_rule_ids(
+    initialize: dict[str, Any] | None, prepared: dict[str, Any]
+) -> list[str]:
+    if initialize is None:
+        return []
+    parts = initialize["instructions"].split("\n\n[Delivered Rules]\n")
+    expected_context = prepared.get("prompt_context") or "なし"
+    if len(parts) != 2 or parts[1] != expected_context:
+        return []
+    # IDは実応答の規則本文と計画の完全一致から導出する。計画だけでは観測扱いにしない。
+    return list(prepared.get("delivered_rule_ids") or [])
+
+
 def response_client_error(response: str) -> str | None:
     return next(
         (line.strip() for line in response.splitlines() if line.strip().startswith("Client error:")),
@@ -494,6 +554,7 @@ def run_one(
     model_override: str | None,
     timeout: int,
 ) -> dict[str, Any]:
+    suite_sha256 = hashlib.sha256(suite_path.read_bytes()).hexdigest()
     raw_case_dir.mkdir(parents=True, exist_ok=False)
     mcp_trace = raw_case_dir / "mcp.jsonl"
     mcp_args = mcp_arguments(
@@ -537,6 +598,9 @@ def run_one(
         response = "\n".join(part for part in [response, client_error] if part)
 
     tool_calls, event_rule_ids, injected = parse_mcp_trace(mcp_trace)
+    initialize, cli_version = parse_initialize_evidence(mcp_trace)
+    if client == "claude" and version:
+        cli_version = {"value": version, "source": "claude_system_init.claude_code_version"}
     attach_pre_tool_text(tool_calls, pre_tool)
     tool_calls.extend(builtin_calls)
     degraded_codes = unique_ordered(list(prepared.get("degraded_codes") or []) + injected)
@@ -545,10 +609,15 @@ def run_one(
         "mode": mode,
         "client_surface": client,
         "model": model,
-        "model_version": version,
+        "model_version": None,
+        "evidence": {
+            "suite_sha256": suite_sha256,
+            "cli_version": cli_version,
+            "initialize_response": initialize,
+        },
         "os": os_label(),
         "run": run_number,
-        "delivered_rule_ids": list(prepared.get("delivered_rule_ids") or []),
+        "delivered_rule_ids": observed_rule_ids(initialize, prepared),
         "event_rule_ids": event_rule_ids,
         "degraded_codes": degraded_codes,
         "tool_calls": tool_calls,
@@ -569,6 +638,22 @@ def main(argv: list[str] | None = None) -> int:
     for path, label in ((suite_path, "suite"), (kb_bin, "kb binary"), (eval_mcp_bin, "eval MCP binary")):
         if not path.is_file():
             raise FileNotFoundError(f"{label} not found: {path}")
+    # 長いmatrix中に元suiteが編集されても、plan・fixture・MCP・hashを同じ入力へ固定する。
+    suite_bytes = suite_path.read_bytes()
+    with tempfile.TemporaryDirectory(prefix="kb-rule-eval-") as temporary:
+        fixed_suite = Path(temporary) / "suite.snapshot.json"
+        fixed_suite.write_bytes(suite_bytes)
+        return run_matrix(args, clients, kb_bin, eval_mcp_bin, fixed_suite, Path(temporary))
+
+
+def run_matrix(
+    args: argparse.Namespace,
+    clients: list[str],
+    kb_bin: Path,
+    eval_mcp_bin: Path,
+    suite_path: Path,
+    temporary: Path,
+) -> int:
     suite = load_suite(suite_path)
     case_map = {case["id"]: case for case in suite.get("cases", [])}
     modes = csv_values(args.modes, MODES, "mode")
@@ -604,47 +689,49 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError(f"raw directory is not empty: {raw_dir}")
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
+    # 一時実行先を破棄した後にも、trace digestの元バイト列で再採点できるよう残す。
+    with (raw_dir / "suite.snapshot.json").open("xb") as saved_suite:
+        saved_suite.write(suite_path.read_bytes())
     traces: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="kb-rule-eval-") as temporary:
-        fixture_template = Path(temporary) / "fixture-template"
-        create_fixture(kb_bin, suite_path, fixture_template)
-        completed = 0
-        for client in clients:
-            for mode in modes:
-                for case_id in case_ids:
-                    for run_number in range(1, args.runs + 1):
-                        completed += 1
-                        label = f"{client}/{mode}/{case_id}/run-{run_number}"
-                        print(f"[{completed}/{planned_runs}] {label}", file=sys.stderr, flush=True)
-                        fixture = Path(temporary) / f"fixture-{completed}"
-                        shutil.copytree(fixture_template, fixture)
-                        raw_case_dir = raw_dir / client / mode / case_id / f"run-{run_number}"
-                        trace = run_one(
-                            client=client,
-                            suite_path=suite_path,
-                            eval_mcp_bin=eval_mcp_bin,
-                            mode=mode,
-                            case=case_map[case_id],
-                            prepared=prepared[(mode, case_id)],
-                            run_number=run_number,
-                            fixture=fixture,
-                            raw_case_dir=raw_case_dir,
-                            model_override=args.model,
-                            timeout=args.timeout,
+    fixture_template = Path(temporary) / "fixture-template"
+    create_fixture(kb_bin, suite_path, fixture_template)
+    completed = 0
+    for client in clients:
+        for mode in modes:
+            for case_id in case_ids:
+                for run_number in range(1, args.runs + 1):
+                    completed += 1
+                    label = f"{client}/{mode}/{case_id}/run-{run_number}"
+                    print(f"[{completed}/{planned_runs}] {label}", file=sys.stderr, flush=True)
+                    fixture = Path(temporary) / f"fixture-{completed}"
+                    shutil.copytree(fixture_template, fixture)
+                    raw_case_dir = raw_dir / client / mode / case_id / f"run-{run_number}"
+                    trace = run_one(
+                        client=client,
+                        suite_path=suite_path,
+                        eval_mcp_bin=eval_mcp_bin,
+                        mode=mode,
+                        case=case_map[case_id],
+                        prepared=prepared[(mode, case_id)],
+                        run_number=run_number,
+                        fixture=fixture,
+                        raw_case_dir=raw_case_dir,
+                        model_override=args.model,
+                        timeout=args.timeout,
+                    )
+                    traces.append(trace)
+                    output.write_text(
+                        json.dumps(
+                            {"schema_version": SCHEMA_VERSION, "traces": traces},
+                            ensure_ascii=False,
+                            indent=2,
                         )
-                        traces.append(trace)
-                        output.write_text(
-                            json.dumps(
-                                {"schema_version": SCHEMA_VERSION, "traces": traces},
-                                ensure_ascii=False,
-                                indent=2,
-                            )
-                            + "\n",
-                            encoding="utf-8",
-                        )
-                        client_error = response_client_error(str(trace.get("response") or ""))
-                        if client_error:
-                            raise RuntimeError(f"{label} failed before valid inference: {client_error}")
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    client_error = response_client_error(str(trace.get("response") or ""))
+                    if client_error:
+                        raise RuntimeError(f"{label} failed before valid inference: {client_error}")
     print(output)
     return 0
 

@@ -73,6 +73,7 @@ pub struct ClientCapabilities {
     pub raw_vault_boundary: RawVaultBoundary,
     pub pre_answer_retrieval: PreAnswerRetrieval,
     pub current_note_argument_optional: bool,
+    /// 語彙検証を直接上書きする能力。正本指定・一括語彙変更・語彙ノート本文の通常updateとは区別する。
     pub new_tag_write_available: bool,
     pub conversation_events_version: u8,
 }
@@ -154,7 +155,7 @@ impl ClientSurface {
             raw_vault_boundary,
             pre_answer_retrieval,
             current_note_argument_optional,
-            // 新語追加は trusted UI / CLI の別承認経路だけに残し、AI用MCPには公開しない。
+            // 語彙の一括変更・復元もcoreで検証する。直接overrideはAI用MCPへ公開しない。
             new_tag_write_available: false,
             conversation_events_version: 1,
         }

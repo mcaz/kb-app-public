@@ -10,11 +10,34 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::frontmatter::Note;
 use crate::note_id::NoteId;
+use crate::provenance::{NoteEvent, Operation, WriteActor, WriteContext};
 use crate::vault::Vault;
 use crate::write_rejection::WriteRejection;
 
 const UPSERT: &str = "upsert";
 const DELETE: &str = "delete";
+
+/// 1回の書込に添える説明一式。log行・commit message・来歴contextをまとめて渡す
+/// (個別引数にすると`queue_put`が8引数になり、clippyのtoo_many_argumentsで落ちる)。
+pub(crate) struct WriteAttribution<'a> {
+    pub log_entry: &'a str,
+    pub commit_message: &'a str,
+    pub context: &'a WriteContext<'a>,
+}
+
+impl<'a> WriteAttribution<'a> {
+    pub fn new(
+        log_entry: &'a str,
+        commit_message: &'a str,
+        context: &'a WriteContext<'a>,
+    ) -> WriteAttribution<'a> {
+        WriteAttribution {
+            log_entry,
+            commit_message,
+            context,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct PendingExport {
@@ -65,21 +88,12 @@ pub(crate) fn put(
     conn: &Connection,
     raw: &str,
     note: &Note,
-    log_entry: &str,
-    commit_message: &str,
+    attribution: WriteAttribution<'_>,
 ) -> Result<()> {
     let transaction = conn.unchecked_transaction()?;
     let op_id = crate::authority::NoteUid::new().to_string();
-    queue_put(
-        vault,
-        &transaction,
-        raw,
-        note,
-        &op_id,
-        log_entry,
-        commit_message,
-    )
-    .map_err(crate::write_rejection::confirm_before_write)?;
+    queue_put(vault, &transaction, raw, note, &op_id, attribution)
+        .map_err(crate::write_rejection::confirm_before_write)?;
     transaction.commit()?;
     Ok(())
 }
@@ -91,12 +105,11 @@ pub(crate) fn queue_put(
     raw: &str,
     note: &Note,
     op_id: &str,
-    log_entry: &str,
-    commit_message: &str,
+    attribution: WriteAttribution<'_>,
 ) -> Result<()> {
     let before = contains(conn, raw)?.then(|| read(conn, raw)).transpose()?;
     crate::proposal_workflow::guard_note_write(before.as_ref(), note)?;
-    queue_put_document(vault, conn, raw, note, op_id, log_entry, commit_message)
+    queue_put_document(vault, conn, raw, note, op_id, attribution)
 }
 
 pub(crate) fn queue_proposal_put(
@@ -107,14 +120,24 @@ pub(crate) fn queue_proposal_put(
     _permit: &crate::proposal_workflow::ProposalWritePermit,
 ) -> Result<()> {
     let op_id = crate::authority::NoteUid::new().to_string();
+    // 提案履歴の更新もノートへの書込。来歴を発行しない迂回経路を作らない。
+    let actor = WriteActor::app_api("kb-app-proposal", None);
+    let context = WriteContext {
+        actor: &actor,
+        revision: None,
+        operation: Operation::Update,
+    };
     queue_put_document(
         vault,
         conn,
         raw,
         note,
         &op_id,
-        &format!("**Proposal workflow**: [{raw}](/{raw}.md) の提案履歴を更新。"),
-        &format!("proposal: update {raw}"),
+        WriteAttribution::new(
+            &format!("**Proposal workflow**: [{raw}](/{raw}.md) の提案履歴を更新。"),
+            &format!("proposal: update {raw}"),
+            &context,
+        ),
     )
 }
 
@@ -124,12 +147,12 @@ fn queue_put_document(
     raw: &str,
     note: &Note,
     op_id: &str,
-    log_entry: &str,
-    commit_message: &str,
+    attribution: WriteAttribution<'_>,
 ) -> Result<()> {
     // governance台帳(note_relations)が欠損・不整合の間はnote writeをfail-closed。
     // open時の自己修復が成功していれば透過(spec S-3の修復契約)。
     crate::derived_index::require_governance_ready(conn)?;
+    crate::tag_vocabulary_source::ensure_workspace(vault, conn)?;
     let id = NoteId::parse(raw)?;
     let base_document = conn
         .query_row(
@@ -138,8 +161,21 @@ fn queue_put_document(
             |row| row.get::<_, String>(0),
         )
         .optional()?;
+    let document = note.to_file_string()?;
+    // 来歴は書込と同じtransactionで確定させる。ノートだけ変わって台帳が欠ける状態を作らない。
+    let event = NoteEvent::for_upsert(
+        op_id,
+        id.as_str(),
+        base_document.as_deref(),
+        &document,
+        attribution.context,
+    )?;
     crate::index::upsert(conn, vault, id.as_str(), now_nanos()?, note)?;
     validate_authority_write(conn, id.as_str(), note)?;
+    crate::provenance::insert_event(conn, &event)?;
+    // 来歴の派生索引は`apply_note_change`では維持できない(NoteChangeがイベントを
+    // 運ばない)。台帳への挿入と同じtransactionで、専用hookから足す。
+    crate::derived_index::apply_event(conn, &event)?;
     conn.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -148,9 +184,9 @@ fn queue_put_document(
             id.as_str(),
             UPSERT,
             base_document,
-            note.to_file_string()?,
-            log_entry,
-            commit_message
+            document,
+            attribution.log_entry,
+            attribution.commit_message
         ],
     )?;
     Ok(())
@@ -160,11 +196,11 @@ pub(crate) fn delete(
     vault: &Vault,
     conn: &Connection,
     raw: &str,
-    log_entry: &str,
-    commit_message: &str,
+    attribution: WriteAttribution<'_>,
 ) -> Result<()> {
     // queue_putと同じfail-closedゲート。削除もgovernance台帳を書き換える。
     crate::derived_index::require_governance_ready(conn)?;
+    crate::tag_vocabulary_source::ensure_workspace(vault, conn)?;
     let id = NoteId::parse(raw)?;
     let transaction = conn.unchecked_transaction()?;
     let base_document = transaction
@@ -176,6 +212,7 @@ pub(crate) fn delete(
         .optional()?
         .with_context(|| format!("削除するノートが見つからない: {id}"))?;
     crate::proposal_workflow::guard_note_delete(&Note::parse(&base_document)?)?;
+    crate::tag_vocabulary_source::guard_source_note_id_removal(&transaction, id.as_str())?;
     let note_uid: Option<String> = transaction
         .query_row(
             "SELECT note_uid FROM notes WHERE id = ?1",
@@ -194,10 +231,29 @@ pub(crate) fn delete(
         },
     )?;
     transaction.execute("DELETE FROM notes WHERE id = ?1", [id.as_str()])?;
+    // op_idはSQL側の乱数ではなくRustで発行する — 来歴イベントのevent_idと同じ値にして、
+    // Markdown出力・commit・台帳を1つの操作として突き合わせられるようにする。
+    let op_id = crate::authority::NoteUid::new().to_string();
+    let event = NoteEvent::for_remove(
+        &op_id,
+        id.as_str(),
+        note_uid.as_deref(),
+        &base_document,
+        attribution.context,
+    )?;
+    crate::provenance::insert_event(&transaction, &event)?;
+    crate::derived_index::apply_event(&transaction, &event)?;
     transaction.execute(
         "INSERT INTO note_exports(op_id, note_id, operation, base_document, document, log_entry, commit_message)
-         VALUES (lower(hex(randomblob(16))), ?1, ?2, ?3, NULL, ?4, ?5)",
-        rusqlite::params![id.as_str(), DELETE, base_document, log_entry, commit_message],
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+        rusqlite::params![
+            op_id,
+            id.as_str(),
+            DELETE,
+            base_document,
+            attribution.log_entry,
+            attribution.commit_message
+        ],
     )?;
     // inbound relation検査(apply_note_change)はsupersedes**元**の削除を素通り
     // させる。元を消すとorphaned superseded canonicalがdurable(相手のdocument)
@@ -360,7 +416,14 @@ mod tests {
         let conn = crate::index::open_db(&vault).unwrap();
         let id = "notes/db-first";
 
-        put(&vault, &conn, id, &note("DB本文"), "export", "export note").unwrap();
+        put(
+            &vault,
+            &conn,
+            id,
+            &note("DB本文"),
+            WriteAttribution::new("export", "export note", &crate::provenance::test_context()),
+        )
+        .unwrap();
 
         assert_eq!(read(&conn, id).unwrap().body, "DB本文\n");
         assert_eq!(pending_count(&conn).unwrap(), 1);
@@ -377,7 +440,14 @@ mod tests {
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let conn = crate::index::open_db(&vault).unwrap();
         let id = "notes/db-first";
-        put(&vault, &conn, id, &note("DB本文"), "export", "export note").unwrap();
+        put(
+            &vault,
+            &conn,
+            id,
+            &note("DB本文"),
+            WriteAttribution::new("export", "export note", &crate::provenance::test_context()),
+        )
+        .unwrap();
         vault.flush_note_exports(&conn).unwrap();
 
         vault.write_note_fixture(id, &note("外部編集")).unwrap();
@@ -400,8 +470,7 @@ mod tests {
             &conn,
             id,
             &note("元の本文"),
-            "export",
-            "export note",
+            WriteAttribution::new("export", "export note", &crate::provenance::test_context()),
         )
         .unwrap();
         vault.flush_note_exports(&conn).unwrap();
@@ -412,8 +481,7 @@ mod tests {
             &conn,
             id,
             &note("DBの更新"),
-            "update",
-            "update note",
+            WriteAttribution::new("update", "update note", &crate::provenance::test_context()),
         )
         .unwrap();
 
@@ -435,10 +503,23 @@ mod tests {
         let vault = Vault::create(dir.path().join("v")).unwrap();
         let conn = crate::index::open_db(&vault).unwrap();
         let id = "notes/db-first";
-        put(&vault, &conn, id, &note("本文"), "export", "export note").unwrap();
+        put(
+            &vault,
+            &conn,
+            id,
+            &note("本文"),
+            WriteAttribution::new("export", "export note", &crate::provenance::test_context()),
+        )
+        .unwrap();
         vault.flush_note_exports(&conn).unwrap();
 
-        delete(&vault, &conn, id, "delete", "delete note").unwrap();
+        delete(
+            &vault,
+            &conn,
+            id,
+            WriteAttribution::new("delete", "delete note", &crate::provenance::test_context()),
+        )
+        .unwrap();
         assert!(read(&conn, id).is_err());
         assert!(vault.note_path(id).unwrap().exists());
 
@@ -457,8 +538,7 @@ mod tests {
             &conn,
             id,
             &note("復元する本文"),
-            "export",
-            "export note",
+            WriteAttribution::new("export", "export note", &crate::provenance::test_context()),
         )
         .unwrap();
         vault.flush_note_exports(&conn).unwrap();
@@ -533,7 +613,13 @@ mod tests {
             .agent_removal_candidate(&conn, "notes/current")
             .unwrap();
         let error = vault
-            .agent_delete_note(&conn, "notes/current", "統合済みのため削除", "test/client")
+            .agent_delete_note(
+                &conn,
+                "notes/current",
+                "統合済みのため削除",
+                "test/client",
+                None,
+            )
             .unwrap_err();
         assert!(format!("{error:#}").contains("supersedes継承"), "{error:#}");
 
@@ -577,6 +663,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -584,7 +672,16 @@ mod tests {
         let original = changed.front.note_uid.clone();
         changed.front.note_uid = Some(NoteUid::at(999));
 
-        assert!(put(&vault, &conn, &id, &changed, "update", "update note").is_err());
+        assert!(
+            put(
+                &vault,
+                &conn,
+                &id,
+                &changed,
+                WriteAttribution::new("update", "update note", &crate::provenance::test_context(),),
+            )
+            .is_err()
+        );
         assert_eq!(read(&conn, &id).unwrap().front.note_uid, original);
 
         // 同じSQLite UNIQUE codeでもuid重複はcanonical scope衝突ではない。
@@ -595,8 +692,7 @@ mod tests {
             &conn,
             "notes/duplicate-uid",
             &duplicate_uid,
-            "fixture",
-            "fixture",
+            WriteAttribution::new("fixture", "fixture", &crate::provenance::test_context()),
         )
         .unwrap_err();
         assert_eq!(WriteRejection::from_error(&error), None);

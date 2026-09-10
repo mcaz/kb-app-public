@@ -7,6 +7,7 @@
   "required": ["schema_version", "rules", "notes", "cases"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
+    "tag_vocabulary_source": {"type": ["string", "null"], "minLength": 1, "description": "fixtureで明示指定するnotes内のexpected_id。省略時は自動選択しない。"},
     "rules": {
       "type": "array",
       "minItems": 1,

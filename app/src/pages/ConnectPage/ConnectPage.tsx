@@ -1,4 +1,4 @@
-import { Cloud, MessageSquare, Sparkles } from "lucide-react";
+import { Cloud, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -13,7 +13,6 @@ import {
   useBackupNow,
   useBackupCreateRepository,
   useBackupSetRemote,
-  useConnectDesktop,
   useConnectState,
   useEmbedEnable,
   useGitHubAuthState,
@@ -22,6 +21,7 @@ import {
 } from "@/lib/queries";
 import { useRuntimeReportCopy } from "./useRuntimeReportCopy";
 import { connectPageVariants } from "./variants";
+import { ClientConnections } from "./ClientConnections";
 
 /** 「繋ぐ」画面(AI アプリ・かしこい検索・バックアップ)。 */
 export function ConnectPage() {
@@ -31,7 +31,6 @@ export function ConnectPage() {
   const errorText = useErrorText();
   const backupErrorText = useBackupErrorText();
   const embedProgress = useEmbedProgress();
-  const connectDesktop = useConnectDesktop();
   const embedEnable = useEmbedEnable();
   const backupSetRemote = useBackupSetRemote();
   const backupCreateRepository = useBackupCreateRepository();
@@ -83,6 +82,7 @@ export function ConnectPage() {
     return (
       <SinglePaneLayout>
         <h1 className="px-5 pt-4 text-lg font-bold">{t("common:nav.connect")}</h1>
+        <ClientConnections />
         {isError ? (
           loadFailure
         ) : (
@@ -99,39 +99,9 @@ export function ConnectPage() {
   return (
     <SinglePaneLayout>
       <h1 className="px-5 pt-4 text-lg font-bold">{t("common:nav.connect")}</h1>
+      <ClientConnections />
       {loadFailure}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(230px,1fr))] content-start gap-3 px-5 py-4">
-        <ConnectCard
-          name={t("ai.name")}
-          icon={MessageSquare}
-          description={t("ai.desc")}
-          state={{
-            ok: state.desktop === "connected",
-            label:
-              state.desktop === "connected"
-                ? t("ai.connected")
-                : state.desktop === "not_found"
-                  ? t("ai.notFound")
-                  : t("ai.notConnected"),
-          }}
-        >
-          {state.desktop === "not_connected" && (
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={connectDesktop.isPending}
-              onClick={() =>
-                connectDesktop.mutate(undefined, {
-                  onSuccess: () => toast(t("ai.done")),
-                  onError: (e) => toast(t("ai.failed", { error: errorText(e) })),
-                })
-              }
-            >
-              {t("ai.connect")}
-            </Button>
-          )}
-        </ConnectCard>
-
         <ConnectCard
           name={t("smartSearch.name")}
           icon={Sparkles}

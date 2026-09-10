@@ -7,6 +7,7 @@ import {
   Paperclip,
   Search,
   Settings,
+  Tags,
   Waypoints,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -107,6 +108,14 @@ export function Sidebar({
         collapsed={visuallyCollapsed}
         active={view === "files"}
         onClick={() => go("files")}
+      />
+
+      <NavButton
+        icon={Tags}
+        label={t("nav.tags")}
+        collapsed={visuallyCollapsed}
+        active={view === "tags"}
+        onClick={() => go("tags")}
       />
 
       <NavButton

@@ -79,7 +79,13 @@ function guardStatusKey(state: GuardTargetState) {
 export function KnowledgeBaseSettingsPage() {
   const { t } = useTranslation("common");
   const { data: settings, isPending, error } = useSettings();
-  const { data: guard, isPending: isGuardPending, error: guardError } = useAiGuardStatus();
+  const {
+    data: guard,
+    isPending: isGuardPending,
+    isFetching: isGuardFetching,
+    error: guardError,
+    refetch: refetchGuard,
+  } = useAiGuardStatus();
   const installGuard = useInstallAiGuard();
   const enableDevelopmentMode = useEnableAiGuardDevelopmentMode();
   const setAiKbEnabled = useSetAiKbEnabled();
@@ -95,7 +101,7 @@ export function KnowledgeBaseSettingsPage() {
   const guardConflict = guard?.codex === "conflict" || guard?.claude === "conflict";
   const guardUnsupported = guard?.codex === "unsupported" || guard?.claude === "unsupported";
   const guardDevelopment = guard?.codex === "development";
-  const guardReady = guard?.ready ?? false;
+  const guardReady = !guardError && (guard?.ready ?? false);
   const guardActionPending = installGuard.isPending || enableDevelopmentMode.isPending;
   // 接続の再設定が必要でも、稼働中の旧MCPをOFFにする操作は残す。
   const switchesDisabled = isPending || isSaving;
@@ -213,6 +219,17 @@ export function KnowledgeBaseSettingsPage() {
                   )}
                 </Button>
               )}
+              <Button
+                type="button"
+                className="mt-3 ml-2"
+                disabled={isGuardFetching || guardActionPending}
+                onClick={() => void refetchGuard()}
+              >
+                {t(isGuardFetching ? "state.checking" : "settings.aiGuardRecheck")}
+              </Button>
+              <p className="text-muted mt-3 text-xs leading-relaxed">
+                {t("settings.aiGuardRestartNote")}
+              </p>
             </div>
           </div>
         </div>

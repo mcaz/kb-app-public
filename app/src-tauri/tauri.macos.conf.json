@@ -1,0 +1,19 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run prepare:git-lfs && npm run prepare:git && npm run dev",
+    "beforeBuildCommand": "npm run prepare:git-lfs && npm run prepare:git && npm run build"
+  },
+  "bundle": {
+    "externalBin": ["binaries/git-lfs", "binaries/git"],
+    "resources": {
+      "git-runtime/git-core/": "git-core/",
+      "git-runtime/templates/": "git-templates/",
+      "git-runtime/licenses/": "licenses/git/",
+      "git-runtime/source/": "git-source/",
+      "git-runtime/provenance.json": "git-provenance.json"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

@@ -333,6 +333,28 @@ fn inspect_tables(
     tables: &BTreeSet<String>,
     report: &mut RuntimeDiagnosticsReport,
 ) {
+    let vocabulary_absent_before_v11 = report
+        .declared_schema
+        .as_deref()
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version < 11)
+        && crate::tag_vocabulary_source::TABLES
+            .iter()
+            .all(|table| !tables.contains(*table));
+    let tag_history_absent_before_v12 = report
+        .declared_schema
+        .as_deref()
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version < 12)
+        && crate::tag_vocabulary_history::TABLES
+            .iter()
+            .all(|table| !tables.contains(*table));
+    let tag_rollback_absent_before_v13 = report
+        .declared_schema
+        .as_deref()
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version < 13)
+        && !tables.contains("tag_vocabulary_rollbacks");
     for index in 0..report.durable_tables.len() {
         let name = report.durable_tables[index].table.clone();
         let present = tables.contains(&name);
@@ -347,9 +369,34 @@ fn inspect_tables(
                 &name,
             );
             report.durable_tables[index].rows = rows;
-        } else {
+        } else if !((vocabulary_absent_before_v11
+            && crate::tag_vocabulary_source::TABLES.contains(&name.as_str()))
+            || (tag_history_absent_before_v12
+                && crate::tag_vocabulary_history::TABLES.contains(&name.as_str()))
+            || (tag_rollback_absent_before_v13
+                && crate::tag_vocabulary_history::ROLLBACK_TABLES.contains(&name.as_str())))
+        {
             report.issue("durable_table_missing", Some(&name), None);
         }
+    }
+    if crate::tag_vocabulary_source::TABLES
+        .iter()
+        .all(|table| tables.contains(*table))
+        && crate::tag_vocabulary_source::verify_schema(conn).is_err()
+    {
+        report.issue("tag_vocabulary_tables_invalid", None, None);
+    }
+    if crate::tag_vocabulary_history::TABLES
+        .iter()
+        .all(|table| tables.contains(*table))
+        && crate::tag_vocabulary_history::verify_integrity(conn).is_err()
+    {
+        report.issue("tag_vocabulary_history_invalid", None, None);
+    }
+    if tables.contains("tag_vocabulary_rollbacks")
+        && crate::tag_vocabulary_history::verify_rollback_integrity(conn).is_err()
+    {
+        report.issue("tag_vocabulary_rollback_history_invalid", None, None);
     }
     if tables.contains("notes") {
         let columns = (|| -> rusqlite::Result<Vec<String>> {
@@ -645,6 +692,49 @@ fn compare_sources(
 }
 
 fn detect_findings(report: &mut RuntimeDiagnosticsReport) {
+    if report
+        .declared_schema
+        .as_deref()
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version < 13)
+        && report
+            .table("tag_vocabulary_rollbacks")
+            .is_some_and(|table| table.present == Some(true))
+    {
+        report
+            .findings
+            .push("schema_declaration_conflicts_with_v13_tables".into());
+    }
+    if report
+        .declared_schema
+        .as_deref()
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version < 12)
+        && crate::tag_vocabulary_history::TABLES.iter().any(|name| {
+            report
+                .table(name)
+                .is_some_and(|table| table.present == Some(true))
+        })
+    {
+        report
+            .findings
+            .push("schema_declaration_conflicts_with_v12_tables".into());
+    }
+    if report
+        .declared_schema
+        .as_deref()
+        .and_then(|version| version.parse::<u32>().ok())
+        .is_some_and(|version| version < 11)
+        && crate::tag_vocabulary_source::TABLES.iter().any(|name| {
+            report
+                .table(name)
+                .is_some_and(|table| table.present == Some(true))
+        })
+    {
+        report
+            .findings
+            .push("schema_declaration_conflicts_with_v11_tables".into());
+    }
     let v10_jobs = ["distillation_jobs", "distillation_job_runs"]
         .iter()
         .all(|name| {
@@ -757,6 +847,13 @@ mod tests {
         assert!(report.database_snapshot_complete);
         assert_eq!(report.declared_schema.as_deref(), Some("9"));
         assert_eq!(report.runtime_store, None);
+        for table in crate::tag_vocabulary_source::TABLES {
+            assert_eq!(report.table(table).unwrap().present, Some(false));
+            assert_eq!(report.table(table).unwrap().rows, None);
+            assert!(!report.issues.iter().any(|issue| {
+                issue.code == "durable_table_missing" && issue.table.as_deref() == Some(table)
+            }));
+        }
         assert!(
             report
                 .findings
@@ -865,6 +962,184 @@ mod tests {
                 .iter()
                 .any(|issue| issue.code == "markdown_read_failed")
         );
+    }
+
+    /// 2026-09-08: v11導入前の両表不在と、片欠損・現行schemaの欠損を区別する。
+    #[test]
+    fn vocabulary_table_absence_is_versioned_without_hiding_partial_loss() {
+        for (schema, partial, expected_missing) in [(9, false, 0), (9, true, 1), (11, false, 2)] {
+            let (_dir, vault) = setup();
+            let conn = crate::index::open_db(&vault).unwrap();
+            conn.execute_batch("DROP TABLE tag_vocabulary_source_exports")
+                .unwrap();
+            if !partial {
+                conn.execute_batch("DROP TABLE tag_vocabulary_sources")
+                    .unwrap();
+            }
+            conn.execute(
+                "UPDATE meta SET value=?1 WHERE key='schema'",
+                [schema.to_string()],
+            )
+            .unwrap();
+            conn.execute_batch("PRAGMA journal_mode=DELETE").unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = inspect(&vault).unwrap();
+            let missing = report
+                .issues
+                .iter()
+                .filter(|issue| {
+                    issue.code == "durable_table_missing"
+                        && issue.table.as_deref().is_some_and(|table| {
+                            crate::tag_vocabulary_source::TABLES.contains(&table)
+                        })
+                })
+                .count();
+            assert_eq!(missing, expected_missing);
+            assert_eq!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| { finding == "schema_declaration_conflicts_with_v11_tables" }),
+                partial
+            );
+            assert_eq!(fs::read(vault.index_db_path()).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn vocabulary_history_absence_is_versioned_and_invalid_originals_are_not_exposed() {
+        for (schema, partial, expected_missing) in [(11, false, 0), (11, true, 1), (12, false, 2)] {
+            let (_dir, vault) = setup();
+            let conn = crate::index::open_db(&vault).unwrap();
+            conn.execute_batch("DROP TABLE tag_vocabulary_run_notes")
+                .unwrap();
+            if !partial {
+                conn.execute_batch("DROP TABLE tag_vocabulary_runs")
+                    .unwrap();
+            }
+            conn.execute(
+                "UPDATE meta SET value=?1 WHERE key='schema'",
+                [schema.to_string()],
+            )
+            .unwrap();
+            conn.execute_batch("PRAGMA journal_mode=DELETE").unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = inspect(&vault).unwrap();
+            assert_eq!(
+                report
+                    .issues
+                    .iter()
+                    .filter(|issue| issue.code == "durable_table_missing"
+                        && issue.table.as_deref().is_some_and(|table| {
+                            crate::tag_vocabulary_history::TABLES.contains(&table)
+                        }))
+                    .count(),
+                expected_missing
+            );
+            assert_eq!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| finding == "schema_declaration_conflicts_with_v12_tables"),
+                partial
+            );
+            assert_eq!(fs::read(vault.index_db_path()).unwrap(), before);
+        }
+        let (_dir, vault) = setup();
+        let conn = crate::index::open_db(&vault).unwrap();
+        crate::tag_vocabulary_history::record_for_test(&conn);
+        conn.execute_batch(
+            "UPDATE tag_vocabulary_run_notes SET before_document='private broken original'",
+        )
+        .unwrap();
+        drop(conn);
+        let report = inspect(&vault).unwrap();
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "tag_vocabulary_history_invalid")
+        );
+        assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+    }
+
+    #[test]
+    fn vocabulary_rollback_absence_and_downgrade_are_versioned_without_mutating_database() {
+        for (schema, keep_table) in [(12, false), (13, false), (12, true)] {
+            let (_dir, vault) = setup();
+            let conn = crate::index::open_db(&vault).unwrap();
+            if !keep_table {
+                conn.execute_batch("DROP TABLE tag_vocabulary_rollbacks")
+                    .unwrap();
+            }
+            conn.execute(
+                "UPDATE meta SET value=?1 WHERE key='schema'",
+                [schema.to_string()],
+            )
+            .unwrap();
+            conn.execute_batch("PRAGMA journal_mode=DELETE").unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = inspect(&vault).unwrap();
+            assert_eq!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.code == "durable_table_missing"
+                        && issue.table.as_deref() == Some("tag_vocabulary_rollbacks")),
+                schema == 13
+            );
+            assert_eq!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| finding == "schema_declaration_conflicts_with_v13_tables"),
+                keep_table
+            );
+            assert_eq!(before, fs::read(vault.index_db_path()).unwrap());
+        }
+        let (_dir, vault) = setup();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let execution_id = crate::tag_vocabulary_history::record_for_test(&conn);
+        crate::tag_vocabulary_history::record_rollback_for_test(&conn, &execution_id);
+        conn.execute_batch("UPDATE tag_vocabulary_rollbacks SET restored_at='private broken time'")
+            .unwrap();
+        drop(conn);
+        let report = inspect(&vault).unwrap();
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "tag_vocabulary_rollback_history_invalid")
+        );
+        assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+    }
+
+    /// 2026-09-08: 指定JSONやoutbox破損を空の正本扱いにせず、内容を診断JSONへ漏らさない。
+    #[test]
+    fn invalid_vocabulary_documents_are_reported_without_mutation_or_content() {
+        for alteration in [
+            "INSERT INTO tag_vocabulary_sources VALUES(1,'private broken document')",
+            "INSERT INTO tag_vocabulary_source_exports VALUES(1,'op',NULL,'private broken document','log','commit')",
+        ] {
+            let (_dir, vault) = setup();
+            let conn = crate::index::open_db(&vault).unwrap();
+            conn.execute_batch(alteration).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=DELETE").unwrap();
+            drop(conn);
+            let before = fs::read(vault.index_db_path()).unwrap();
+            let report = inspect(&vault).unwrap();
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| { issue.code == "tag_vocabulary_tables_invalid" })
+            );
+            assert_eq!(fs::read(vault.index_db_path()).unwrap(), before);
+            assert!(!serde_json::to_string(&report).unwrap().contains("private"));
+        }
     }
 
     #[test]

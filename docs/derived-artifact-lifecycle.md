@@ -4,8 +4,8 @@
 - 根拠: R4討議 I-4(amend)。「durable schema versionとderived artifact formatの分離」は
   approveだが、旧writerによるstale化・incompatible format・削除時の世代間ping-pongを
   防ぐ規約が必須、という条件を機構に落としたもの
-- 適用範囲: **coreの既存6 artifact(fts_main / fts_tri / links / fts_anchor /
-  note_relations / note_vecs)には適用しない**。機構+テストのみをcoreへ置き、最初の
+- 適用範囲: **coreのregistry artifact(fts_main / fts_tri / links / fts_anchor /
+  fts_events / note_relations / note_vecs)には適用しない**。機構+テストのみをcoreへ置き、最初の
   利用者は評価用ブランチの `fts_entry_v1` / `note_context_v1` / `link_anchors_v1`。
   既存registry object名・durable table名は `validate_artifact_name` が拒否する
 

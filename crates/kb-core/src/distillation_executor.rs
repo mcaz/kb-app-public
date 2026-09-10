@@ -225,33 +225,50 @@ pub fn execute(
         });
     }
 
+    // 蒸留はアプリ主導の書込。モデルは`--client` hintの位置に依存しないので、
+    // 確定できない間はUnknownのままにする(誤ったモデル名を来歴へ残さない)。
+    let actor =
+        crate::provenance::WriteActor::app_api(crate::provenance::client_product(client), None);
     for (index, change) in prepared.iter().enumerate() {
         let op_id = format!(
             "{}:apply:{index}",
             execution_id.trim_start_matches("sha256:")
         );
+        let revision = crate::provenance::RevisionInput {
+            kind: Some(crate::provenance::RevisionKind::Amend),
+            summary: Some(change.reason.clone()),
+            ..crate::provenance::RevisionInput::default()
+        };
+        let context = crate::provenance::WriteContext {
+            actor: &actor,
+            revision: Some(&revision),
+            operation: crate::provenance::Operation::Distill,
+        };
         crate::note_store::queue_put(
             vault,
             &transaction,
             &change.note,
             &change.after_note,
             &op_id,
-            &format!(
-                "**Distillation {}**: [{}](/{note}.md)をexecution `{execution_id}`で更新。理由: {}",
-                change.operation.as_str(),
-                change
-                    .after_note
-                    .front
-                    .title
-                    .as_deref()
-                    .unwrap_or(&change.note),
-                change.reason,
-                note = change.note
-            ),
-            &format!(
-                "distill: {} {} ({execution_id}, via {client})",
-                change.operation.as_str(),
-                change.note
+            crate::note_store::WriteAttribution::new(
+                &format!(
+                    "**Distillation {}**: [{}](/{note}.md)をexecution `{execution_id}`で更新。理由: {}",
+                    change.operation.as_str(),
+                    change
+                        .after_note
+                        .front
+                        .title
+                        .as_deref()
+                        .unwrap_or(&change.note),
+                    change.reason,
+                    note = change.note
+                ),
+                &format!(
+                    "distill: {} {} ({execution_id}, via {client})",
+                    change.operation.as_str(),
+                    change.note
+                ),
+                &context,
             ),
         )?;
     }
@@ -364,6 +381,18 @@ pub fn rollback(
         .map(|change| (change.note.as_str(), change.operation))
         .collect::<BTreeMap<_, _>>();
     let rollback_id = crate::distillation::sha256(format!("{execution_id}:rollback").as_bytes());
+    let actor =
+        crate::provenance::WriteActor::app_api(crate::provenance::client_product(client), None);
+    let revision = crate::provenance::RevisionInput {
+        kind: Some(crate::provenance::RevisionKind::Reverse),
+        summary: Some(format!("execution {execution_id} のrollback")),
+        ..crate::provenance::RevisionInput::default()
+    };
+    let context = crate::provenance::WriteContext {
+        actor: &actor,
+        revision: Some(&revision),
+        operation: crate::provenance::Operation::Distill,
+    };
     for (index, (note, document)) in stored.before_documents.iter().enumerate() {
         let restored = Note::parse(document)
             .with_context(|| format!("rollback documentをparseできない: {note}"))?;
@@ -381,12 +410,15 @@ pub fn rollback(
             note,
             &restored,
             &op_id,
-            &format!(
-                "**Distillation rollback**: [{}](/{note}.md)の{}を`{execution_id}`以前へ復元。",
-                restored.front.title.as_deref().unwrap_or(note),
-                operation.as_str()
+            crate::note_store::WriteAttribution::new(
+                &format!(
+                    "**Distillation rollback**: [{}](/{note}.md)の{}を`{execution_id}`以前へ復元。",
+                    restored.front.title.as_deref().unwrap_or(note),
+                    operation.as_str()
+                ),
+                &format!("distill: rollback {note} ({rollback_id}, via {client})"),
+                &context,
             ),
-            &format!("distill: rollback {note} ({rollback_id}, via {client})"),
         )?;
     }
     crate::index::validate_authority_index(&transaction)?;
@@ -705,6 +737,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -730,6 +764,8 @@ mod tests {
                     }],
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -969,6 +1005,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: false,
                     client: "test/other",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1002,6 +1040,8 @@ mod tests {
                     relations: None,
                     allow_new_tags: false,
                     client: "test/other",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1067,6 +1107,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1124,6 +1166,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();

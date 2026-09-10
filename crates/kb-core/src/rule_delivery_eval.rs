@@ -9,6 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::vault::{NoteProposal, Vault};
 
@@ -53,6 +54,8 @@ pub struct RuleDeliverySuite {
     pub rules: Vec<RuleFixture>,
     #[serde(default)]
     pub notes: Vec<NoteFixture>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_vocabulary_source: Option<String>,
     pub cases: Vec<RuleCase>,
 }
 
@@ -152,7 +155,10 @@ pub struct RunTrace {
     pub mode: DeliveryMode,
     pub client_surface: String,
     pub model: String,
+    /// 旧trace互換。CLIの版をモデルの版として再利用しない。
     pub model_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<RunEvidence>,
     pub os: String,
     pub run: u32,
     #[serde(default)]
@@ -166,6 +172,53 @@ pub struct RunTrace {
     pub response: String,
     pub input_tokens: Option<u64>,
     pub latency_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunEvidence {
+    /// 実行開始時に読んだsuiteファイルのバイト列のSHA-256。
+    pub suite_sha256: String,
+    pub cli_version: Option<CliVersionEvidence>,
+    pub initialize_response: Option<InitializeResponseEvidence>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CliVersionEvidence {
+    pub value: String,
+    pub source: CliVersionSource,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum CliVersionSource {
+    #[serde(rename = "claude_system_init.claude_code_version")]
+    ClaudeSystemInit,
+    #[serde(rename = "mcp_initialize_request.clientInfo.version")]
+    McpInitializeClientInfo,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InitializeResponseEvidence {
+    pub source: InitializeResponseSource,
+    pub instructions: String,
+    pub rule_identity: Option<crate::rule_identity::RuleIdentity>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitializeResponseSource {
+    /// traceへの記録はstdout書込み前。host受信やモデルの遵守を意味しない。
+    McpInitializeServerResponse,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryEvidenceStatus {
+    Unverified,
+    ServerResponseObserved,
+    Mismatch,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -209,6 +262,8 @@ pub struct TraceReport {
     pub mode: DeliveryMode,
     pub client_surface: String,
     pub model: String,
+    pub delivery_evidence: DeliveryEvidenceStatus,
+    pub evidence: Option<RunEvidence>,
     pub os: String,
     pub run: u32,
     pub passed: bool,
@@ -251,6 +306,12 @@ pub fn validate_suite(suite: &RuleDeliverySuite) -> Result<()> {
         "note fixture",
         suite.notes.iter().map(|note| note.expected_id.as_str()),
     )?;
+
+    if let Some(source) = &suite.tag_vocabulary_source
+        && !suite.notes.iter().any(|note| &note.expected_id == source)
+    {
+        bail!("tag_vocabulary_sourceはnotes内のexpected_idを明示する: {source}");
+    }
 
     let rule_ids = suite
         .rules
@@ -298,7 +359,10 @@ pub fn create_fixture(suite: &RuleDeliverySuite, path: &Path) -> Result<Vault> {
     }
     let vault = Vault::create(path)?;
     let conn = crate::index::open_db(&vault)?;
-    for note in &suite.notes {
+    // 明示正本を先に固定すれば、先行する別候補の有無やnotesの並び順でfixture作成が止まらない。
+    let mut notes = suite.notes.iter().collect::<Vec<_>>();
+    notes.sort_by_key(|note| suite.tag_vocabulary_source.as_ref() != Some(&note.expected_id));
+    for note in notes {
         let id = vault.propose(
             &conn,
             NoteProposal {
@@ -316,6 +380,8 @@ pub fn create_fixture(suite: &RuleDeliverySuite, path: &Path) -> Result<Vault> {
                 relations: Vec::new(),
                 allow_new_tags: true,
                 client: "rule-delivery-eval/fixture",
+                actor: None,
+                revision: None,
             },
         )?;
         if id != note.expected_id {
@@ -324,6 +390,27 @@ pub fn create_fixture(suite: &RuleDeliverySuite, path: &Path) -> Result<Vault> {
                 note.expected_id,
                 id
             );
+        }
+        // fixtureも候補の題名では選ばない。宣言された正本を作成した直後に固定し、
+        // 後続ノートの検証が未指定状態で止まるのを防ぐ。
+        if suite.tag_vocabulary_source.as_deref() == Some(id.as_str()) {
+            let source = vault.read_note_from_db(&conn, &id)?;
+            let uid = source
+                .front
+                .note_uid
+                .context("fixtureの語彙正本にnote_uidがない")?;
+            let result = crate::tag_vocabulary_source::set_source(
+                &vault,
+                &conn,
+                &crate::workspace::stored_workspace_id(&vault)?,
+                uid.as_str(),
+                None,
+                "suiteに宣言されたfixture語彙正本",
+                "rule-delivery-eval/fixture",
+            )?;
+            if result.export_pending {
+                bail!("fixture語彙正本の書き出しが未完了");
+            }
         }
     }
     crate::index::sync(&vault, &conn)?;
@@ -528,6 +615,7 @@ fn score_trace(
     trace: &RunTrace,
 ) -> TraceReport {
     let mut failures = Vec::new();
+    let delivery_evidence = check_delivery_evidence(prepared, trace, &mut failures);
     if trace.delivered_rule_ids != prepared.delivered_rule_ids {
         failures.push("delivered_rule_ids_mismatch".into());
     }
@@ -563,6 +651,15 @@ fn score_trace(
                 "search"
                     | "get"
                     | "recent"
+                    | "tag_vocabulary"
+                    | "set_tag_vocabulary_source"
+                    | "plan_tag_vocabulary_change"
+                    | "apply_tag_vocabulary_change"
+                    | "list_tag_vocabulary_changes"
+                    | "get_tag_vocabulary_change"
+                    | "plan_tag_vocabulary_rollback"
+                    | "rollback_tag_vocabulary_change"
+                    | "get_tag_vocabulary_stats"
                     | "propose"
                     | "update"
                     | "prepare_remove"
@@ -586,7 +683,13 @@ fn score_trace(
             .find(|call| {
                 matches!(
                     call.name.as_str(),
-                    "propose" | "update" | "prepare_remove" | "commit_remove" | "attach"
+                    "propose"
+                        | "update"
+                        | "prepare_remove"
+                        | "commit_remove"
+                        | "attach"
+                        | "apply_tag_vocabulary_change"
+                        | "rollback_tag_vocabulary_change"
                 )
             })
             .and_then(|call| call.pre_tool_text.as_deref())
@@ -685,6 +788,8 @@ fn score_trace(
         mode: trace.mode,
         client_surface: trace.client_surface.clone(),
         model: trace.model.clone(),
+        delivery_evidence,
+        evidence: trace.evidence.clone(),
         os: trace.os.clone(),
         run: trace.run,
         passed: failures.is_empty(),
@@ -695,6 +800,44 @@ fn score_trace(
         estimated_rule_tokens: prepared.estimated_rule_tokens,
         input_tokens: trace.input_tokens,
         latency_ms: trace.latency_ms,
+    }
+}
+
+fn check_delivery_evidence(
+    prepared: &PreparedCase,
+    trace: &RunTrace,
+    failures: &mut Vec<String>,
+) -> DeliveryEvidenceStatus {
+    let Some(evidence) = &trace.evidence else {
+        // 旧traceの採点は保つが、計画からコピーされたIDを実配信の証拠へ昇格しない。
+        return DeliveryEvidenceStatus::Unverified;
+    };
+    let Some(initialize) = &evidence.initialize_response else {
+        return DeliveryEvidenceStatus::Unverified;
+    };
+    let expected = if prepared.prompt_context.is_empty() {
+        "なし"
+    } else {
+        &prepared.prompt_context
+    };
+    let mut sections = initialize.instructions.split("\n\n[Delivered Rules]\n");
+    sections.next();
+    let context_matches = sections.next() == Some(expected) && sections.next().is_none();
+    if !context_matches {
+        failures.push("initialize_rule_context_mismatch".into());
+    }
+    let identity_matches = initialize.rule_identity.as_ref().is_none_or(|identity| {
+        identity.validate().is_ok()
+            && identity.instructions_sha256
+                == format!("{:x}", Sha256::digest(initialize.instructions.as_bytes()))
+    });
+    if !identity_matches {
+        failures.push("initialize_rule_identity_mismatch".into());
+    }
+    if context_matches && identity_matches {
+        DeliveryEvidenceStatus::ServerResponseObserved
+    } else {
+        DeliveryEvidenceStatus::Mismatch
     }
 }
 
@@ -842,9 +985,14 @@ fn summarize(mode: DeliveryMode, reports: &[TraceReport]) -> Option<ModeSummary>
 }
 
 pub fn render_report_markdown(report: &RuleDeliveryReport) -> String {
+    let observed = report
+        .traces
+        .iter()
+        .filter(|trace| trace.delivery_evidence == DeliveryEvidenceStatus::ServerResponseObserved)
+        .count();
     let mut out = format!(
-        "# Rule Delivery evaluation\n\n- traces: {}\n- schema: {}\n\n| mode | pass | hard failures | irrelevant rules | avg rule tokens | avg input tokens | avg latency ms |\n|---|---:|---:|---:|---:|---:|---:|\n",
-        report.trace_count, report.schema_version
+        "# Rule Delivery evaluation\n\n- traces: {}\n- schema: {}\n- initialize規則本文のサーバー応答観測: {}/{}（host受信・モデル遵守は未確認。旧traceの計画IDは観測件数へ含めない）\n\n| mode | pass | hard failures | irrelevant rules | avg rule tokens | avg input tokens | avg latency ms |\n|---|---:|---:|---:|---:|---:|---:|\n",
+        report.trace_count, report.schema_version, observed, report.trace_count
     );
     for summary in &report.summaries {
         out.push_str(&format!(
@@ -889,6 +1037,7 @@ mod tests {
         RuleDeliverySuite {
             schema_version: RULE_DELIVERY_SCHEMA_VERSION.into(),
             notes: Vec::new(),
+            tag_vocabulary_source: None,
             rules: vec![
                 RuleFixture {
                     id: "always.search-personal".into(),
@@ -936,6 +1085,121 @@ mod tests {
         }
     }
 
+    /// 2026-09-08: 旧traceの計画IDやCLI版を受信証拠・モデル版へ読み替えない。
+    #[test]
+    fn scorer_keeps_legacy_scores_but_reports_delivery_as_unverified() {
+        let mut suite = suite();
+        suite.cases[0].expected = CaseExpectation::default();
+        let prepared = prepare(&suite, DeliveryMode::AlwaysTopic).unwrap();
+        let traces: TraceSuite = serde_json::from_value(serde_json::json!({
+            "schema_version": "1.0.0",
+            "traces": [{
+                "case_id": "A1", "mode": "always_topic", "client_surface": "claude",
+                "model": "synthetic-model", "model_version": "legacy-cli-version",
+                "os": "synthetic-os", "run": 1,
+                "delivered_rule_ids": prepared.cases[0].delivered_rule_ids,
+                "response": "合成回答", "input_tokens": null, "latency_ms": null
+            }]
+        }))
+        .unwrap();
+        let report = score(&suite, &traces).unwrap();
+        assert!(report.traces[0].passed);
+        assert_eq!(
+            report.traces[0].delivery_evidence,
+            DeliveryEvidenceStatus::Unverified
+        );
+        assert!(report.traces[0].evidence.is_none());
+        assert!(render_report_markdown(&report).contains("サーバー応答観測: 0/1"));
+    }
+
+    /// 2026-09-08: 実initializeの本文とhashを照合し、計画IDが合っていても誤配信を通さない。
+    #[test]
+    fn scorer_checks_observed_initialize_context_and_identity() {
+        let mut suite = suite();
+        suite.cases[0].expected = CaseExpectation::default();
+        let prepared = prepare(&suite, DeliveryMode::AlwaysTopic).unwrap();
+        let instructions = format!(
+            "合成評価案内\n\n[Delivered Rules]\n{}",
+            prepared.cases[0].prompt_context
+        );
+        let identity = crate::rule_identity::for_instructions(
+            crate::client_surface::ClientSurface::RuleDeliveryEvaluation,
+            crate::mcp::ToolSurface::All,
+            &instructions,
+        );
+        let mut traces: TraceSuite = serde_json::from_value(serde_json::json!({
+            "schema_version": "1.0.0", "traces": [{
+                "case_id": "A1", "mode": "always_topic", "client_surface": "claude",
+                "model": "synthetic-model", "model_version": null,
+                "os": "synthetic-os", "run": 1,
+                "delivered_rule_ids": prepared.cases[0].delivered_rule_ids,
+                "response": "合成回答", "input_tokens": null, "latency_ms": null,
+                "evidence": {
+                    "suite_sha256": "a".repeat(64),
+                    "cli_version": {"value": "synthetic-cli", "source": "mcp_initialize_request.clientInfo.version"},
+                    "initialize_response": {
+                        "source": "mcp_initialize_server_response",
+                        "instructions": instructions,
+                        "rule_identity": identity,
+                    }
+                }
+            }]
+        })).unwrap();
+        let report = score(&suite, &traces).unwrap();
+        assert!(report.traces[0].passed, "{:?}", report.traces[0].failures);
+        assert_eq!(
+            report.traces[0].delivery_evidence,
+            DeliveryEvidenceStatus::ServerResponseObserved
+        );
+        assert!(render_report_markdown(&report).contains("サーバー応答観測: 1/1"));
+
+        let observed = traces.traces[0]
+            .evidence
+            .as_mut()
+            .unwrap()
+            .initialize_response
+            .as_mut()
+            .unwrap();
+        observed.rule_identity.as_mut().unwrap().instructions_sha256 = "b".repeat(64);
+        let report = score(&suite, &traces).unwrap();
+        assert!(
+            report.traces[0]
+                .failures
+                .contains(&"initialize_rule_identity_mismatch".into())
+        );
+        assert_eq!(
+            report.traces[0].delivery_evidence,
+            DeliveryEvidenceStatus::Mismatch
+        );
+
+        let observed = traces.traces[0]
+            .evidence
+            .as_mut()
+            .unwrap()
+            .initialize_response
+            .as_mut()
+            .unwrap();
+        observed.rule_identity = None;
+        observed.instructions.push_str("\n別規則");
+        let report = score(&suite, &traces).unwrap();
+        assert!(
+            report.traces[0]
+                .failures
+                .contains(&"initialize_rule_context_mismatch".into())
+        );
+
+        traces.traces[0]
+            .evidence
+            .as_mut()
+            .unwrap()
+            .initialize_response = None;
+        let report = score(&suite, &traces).unwrap();
+        assert_eq!(
+            report.traces[0].delivery_evidence,
+            DeliveryEvidenceStatus::Unverified
+        );
+    }
+
     #[test]
     fn modes_keep_always_and_event_delivery_separate() {
         let suite = suite();
@@ -967,6 +1231,7 @@ mod tests {
                 client_surface: "codex".into(),
                 model: "test".into(),
                 model_version: None,
+                evidence: None,
                 os: "macos".into(),
                 run: 1,
                 delivered_rule_ids: prepared.cases[0].delivered_rule_ids.clone(),
@@ -1086,6 +1351,89 @@ mod tests {
         );
     }
 
+    /// 2026-09-08: 語彙の参照もKB利用であり、参照禁止caseを新しいread toolで通過させない。
+    #[test]
+    fn scorer_rejects_tag_vocabulary_when_kb_tools_are_forbidden() {
+        let mut suite = suite();
+        suite.cases[0].expected = CaseExpectation {
+            skip_kb_tools: true,
+            ..Default::default()
+        };
+        let mut traces = TraceSuite {
+            schema_version: RULE_DELIVERY_SCHEMA_VERSION.into(),
+            traces: vec![RunTrace {
+                case_id: "A1".into(),
+                mode: DeliveryMode::SemanticOnly,
+                client_surface: "codex".into(),
+                model: "test".into(),
+                model_version: None,
+                evidence: None,
+                os: "macos".into(),
+                run: 1,
+                delivered_rule_ids: Vec::new(),
+                event_rule_ids: Vec::new(),
+                degraded_codes: Vec::new(),
+                tool_calls: Vec::new(),
+                response: "KBを参照せずに回答する。".into(),
+                input_tokens: None,
+                latency_ms: None,
+            }],
+        };
+        let report = score(&suite, &traces).unwrap();
+        assert!(report.traces[0].passed, "{:?}", report.traces[0].failures);
+
+        traces.traces[0].tool_calls.push(ToolCallTrace {
+            name: "tag_vocabulary".into(),
+            pre_tool_text: None,
+            arguments: serde_json::json!({}),
+            result: serde_json::json!({"entries": {"review": "評価"}}),
+            is_error: false,
+        });
+        for name in [
+            "tag_vocabulary",
+            "set_tag_vocabulary_source",
+            "plan_tag_vocabulary_change",
+            "apply_tag_vocabulary_change",
+            "list_tag_vocabulary_changes",
+            "get_tag_vocabulary_change",
+            "plan_tag_vocabulary_rollback",
+            "rollback_tag_vocabulary_change",
+            "get_tag_vocabulary_stats",
+        ] {
+            traces.traces[0].tool_calls[0].name = name.into();
+            let report = score(&suite, &traces).unwrap();
+            assert_eq!(report.traces[0].failures, ["unexpected_kb_tool"], "{name}");
+        }
+
+        suite.cases[0].expected.skip_kb_tools = false;
+        let report = score(&suite, &traces).unwrap();
+        assert!(report.traces[0].passed, "{:?}", report.traces[0].failures);
+
+        suite.cases[0].expected.pre_tool_must_include = vec!["一括".into()];
+        suite.cases[0].expected.required_conversation_events =
+            vec!["tag_vocabulary_changed".into()];
+        traces.traces[0].tool_calls[0].name = "apply_tag_vocabulary_change".into();
+        let report = score(&suite, &traces).unwrap();
+        assert!(!report.traces[0].passed);
+        traces.traces[0].tool_calls[0].pre_tool_text = Some("タグを一括変更する".into());
+        traces.traces[0].tool_calls[0].result = serde_json::json!({"structuredContent": {
+            "stored":true, "changed_notes":20000,
+            "conversation_events":[{"type":"tag_vocabulary_changed","event":"tag_vocabulary_changed","required":true}]
+        }});
+        let report = score(&suite, &traces).unwrap();
+        assert!(report.traces[0].passed, "{:?}", report.traces[0].failures);
+        suite.cases[0].expected.required_conversation_events =
+            vec!["tag_vocabulary_rolled_back".into()];
+        traces.traces[0].tool_calls[0].name = "rollback_tag_vocabulary_change".into();
+        assert!(!score(&suite, &traces).unwrap().traces[0].passed);
+        traces.traces[0].tool_calls[0].result = serde_json::json!({"structuredContent": {
+            "stored":true, "restored_notes":20000,
+            "conversation_events":[{"type":"tag_vocabulary_rolled_back","event":"tag_vocabulary_rolled_back","required":true}]
+        }});
+        let report = score(&suite, &traces).unwrap();
+        assert!(report.traces[0].passed, "{:?}", report.traces[0].failures);
+    }
+
     #[test]
     fn official_twenty_case_suite_materializes_in_an_isolated_vault() {
         let suite: RuleDeliverySuite = serde_json::from_str(include_str!(
@@ -1108,6 +1456,9 @@ mod tests {
                 "review".to_string(),
             ])
         );
+        let overview = crate::tags::vocabulary_overview(&conn).unwrap();
+        assert_eq!(overview.source_status, crate::tags::SourceStatus::Pinned);
+        assert_eq!(overview.glossary_note, suite.tag_vocabulary_source);
         assert_eq!(suite.cases.len(), 20);
 
         let baseline = prepare(&suite, DeliveryMode::SemanticOnly).unwrap();
@@ -1128,5 +1479,51 @@ mod tests {
         assert_eq!(delivered_c4.degraded_codes.len(), 2);
         assert!(delivered_c4.prompt_context.contains("rule_broken"));
         assert!(delivered_c4.prompt_context.contains("rule_conflict"));
+    }
+
+    /// 2026-09-08: fixtureの宣言誤りは作成前に止め、候補1件でも自動指定をしない。
+    #[test]
+    fn fixture_tag_source_is_explicit_and_validated_before_writes() {
+        let mut suite: RuleDeliverySuite = serde_json::from_str(include_str!(
+            "../../../schemas/examples/rule-delivery-eval.example.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = dir.path().join("invalid");
+        suite.tag_vocabulary_source = Some("notes/存在しない正本".into());
+        assert!(create_fixture(&suite, &invalid).is_err());
+        assert!(!invalid.exists());
+        suite.notes.insert(
+            0,
+            NoteFixture {
+                expected_id: "notes/タグ運用別候補".into(),
+                title: "タグ運用別候補".into(),
+                body: "## 語彙\n| wrong | 未選択 |\n".into(),
+                tags: vec!["kb-app".into()],
+            },
+        );
+        suite.tag_vocabulary_source = Some("notes/タグ運用".into());
+        let explicit = create_fixture(&suite, &dir.path().join("explicit")).unwrap();
+        let conn = crate::index::open_db(&explicit).unwrap();
+        assert_eq!(
+            crate::tags::vocabulary_overview(&conn)
+                .unwrap()
+                .glossary_note,
+            suite.tag_vocabulary_source
+        );
+        suite
+            .notes
+            .retain(|note| note.expected_id == "notes/タグ運用");
+        suite.tag_vocabulary_source = None;
+        let vault = create_fixture(&suite, &dir.path().join("unconfigured")).unwrap();
+        let conn = crate::index::open_db(&vault).unwrap();
+        let overview = crate::tags::vocabulary_overview(&conn).unwrap();
+        assert_eq!(
+            overview.source_status,
+            crate::tags::SourceStatus::Unconfigured
+        );
+        assert!(overview.source.is_none());
+        assert_eq!(overview.candidates.len(), 1);
+        assert!(overview.entries.is_empty());
     }
 }

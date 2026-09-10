@@ -1,9 +1,10 @@
-import { ClipboardCheck, Cloud, Link, NotebookText, RefreshCw } from "lucide-react";
+import { BookOpen, ClipboardCheck, Cloud, Link, NotebookText, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/atoms/ui/button";
 import { DegradedBanner } from "@/components/molecules/DegradedBanner";
 import { StatTile } from "@/components/molecules/StatTile";
+import { ActivityFeed } from "@/components/organisms/ActivityFeed";
 import { NoteCountTrendPanel } from "@/components/organisms/NoteCountTrendPanel";
 import { ObservationHealthPanel } from "@/components/organisms/ObservationHealthPanel";
 import { ObservationTrendPanel } from "@/components/organisms/ObservationTrendPanel";
@@ -19,10 +20,12 @@ import type { Degradation, HomeState } from "@/lib/api";
 export function HomePage({
   home,
   onOpenAllNotes,
+  onOpenGettingStarted,
   refresh,
 }: {
   home: HomeState | undefined;
   onOpenAllNotes: () => void;
+  onOpenGettingStarted?: () => void;
   refresh: {
     updatedAt: number;
     isFetching: boolean;
@@ -31,7 +34,7 @@ export function HomePage({
     retry: () => void;
   };
 }) {
-  const { t, i18n } = useTranslation(["home", "common"]);
+  const { t, i18n } = useTranslation(["home", "common", "gettingStarted"]);
   const { data: connect } = useConnectState();
   const proposals = useProposals();
   const openProposal = useSession((s) => s.openProposal);
@@ -58,6 +61,15 @@ export function HomePage({
   return (
     <SinglePaneLayout>
       <div className="px-6 py-5">
+        {onOpenGettingStarted && (
+          <div className={styles.guideEntry()}>
+            <p>{t("gettingStarted:homeHint")}</p>
+            <Button size="sm" onClick={onOpenGettingStarted}>
+              <BookOpen className={styles.icon()} />
+              {t("gettingStarted:openGuide")}
+            </Button>
+          </div>
+        )}
         <div className={styles.row()}>
           <span className={styles.timestamp()}>
             {refresh.isFetching
@@ -118,6 +130,8 @@ export function HomePage({
         <NoteCountTrendPanel />
         <ObservationTrendPanel />
         <ObservationHealthPanel />
+
+        <ActivityFeed />
       </div>
     </SinglePaneLayout>
   );

@@ -1,0 +1,53 @@
+{
+  "title": "Tags",
+  "readOnly": "Read only",
+  "description": "Browse the roles of AI-managed tags and the notes assigned to each tag.",
+  "search": "Search by tag name or role",
+  "count": "{{count}} of {{total}} tags",
+  "columns": {
+    "name": "Tag name",
+    "role": "Role defined by AI",
+    "notes": "Assigned notes",
+    "count": "Notes"
+  },
+  "viewNotes": "View notes",
+  "notesForTag": "View notes tagged {{tag}} ({{count}})",
+  "unregistered": "Not in vocabulary",
+  "roleMissing": "Role not set",
+  "roleUnavailable": "Role unavailable",
+  "empty": "No tags yet",
+  "emptySearch": "No matching tags",
+  "loading": "Loading…",
+  "loadError": "Could not load the tag list.",
+  "refreshError": "Could not refresh the tag list. Showing the previously loaded data.",
+  "retry": "Retry",
+  "source": {
+    "unconfigured": "The note that defines tag roles has not been set. You can ask AI to configure the tag vocabulary.",
+    "missing": "The note that defines tag roles could not be found. Showing tags in use. You can ask AI to check it.",
+    "unavailable": "Tag roles are unavailable. Showing tags in use. You can ask AI to check them.",
+    "partial": "Some tag roles are unavailable. You can ask AI to check the tag vocabulary."
+  },
+  "notes": {
+    "title": "Notes tagged {{tag}}",
+    "description": "Notes with this tag, ordered by most recently updated.",
+    "list": "List of notes tagged {{tag}}",
+    "close": "Close",
+    "empty": "No notes have this tag",
+    "loadError": "Could not load the note list.",
+    "nextPageError": "Could not load more notes. Showing the notes already loaded.",
+    "refreshError": "Could not refresh the note list. Showing the previously loaded data.",
+    "loaded": "Showing {{loaded}} of {{total}} notes",
+    "loadMore": "Load more",
+    "preview": "Note preview",
+    "previewEmpty": "Select a note to read it here",
+    "previewError": "Could not load this note.",
+    "previewRefreshError": "Could not refresh this note. Showing the previously loaded data.",
+    "back": "Back to list",
+    "open": "Open this note",
+    "keyMove": "↑ ↓ Select",
+    "keyPreview": "Enter Preview",
+    "keyOpen": "Enter Open note",
+    "keyBack": "Esc Back to list",
+    "keyClose": "Esc Close"
+  }
+}

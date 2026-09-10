@@ -1,0 +1,53 @@
+{
+  "title": "タグ",
+  "readOnly": "閲覧専用",
+  "description": "AIが管理するタグの役割と、そのタグが設定されたノートを確認できます。",
+  "search": "タグ名や役割で検索",
+  "count": "{{total}}件中 {{count}}件",
+  "columns": {
+    "name": "タグ名",
+    "role": "AIが決めた役割",
+    "notes": "設定されているノート",
+    "count": "ノート数"
+  },
+  "viewNotes": "ノートを見る",
+  "notesForTag": "{{tag}}が設定されたノートを見る（{{count}}件）",
+  "unregistered": "語彙に未登録",
+  "roleMissing": "役割未設定",
+  "roleUnavailable": "役割を確認できません",
+  "empty": "タグはまだありません",
+  "emptySearch": "該当するタグはありません",
+  "loading": "読み込み中…",
+  "loadError": "タグ一覧を読み込めませんでした。",
+  "refreshError": "タグ一覧を更新できませんでした。前回取得した内容を表示しています。",
+  "retry": "再試行",
+  "source": {
+    "unconfigured": "タグの役割を定めるノートが未設定です。AIにタグ語彙の設定を依頼できます。",
+    "missing": "タグの役割を定めたノートが見つかりません。使用中のタグを表示しています。AIに確認を依頼できます。",
+    "unavailable": "タグの役割を確認できません。使用中のタグを表示しています。AIに確認を依頼できます。",
+    "partial": "一部のタグの役割を確認できません。AIにタグ語彙の確認を依頼できます。"
+  },
+  "notes": {
+    "title": "{{tag}}のノート",
+    "description": "このタグが設定されているノートを更新順に表示します。",
+    "list": "{{tag}}が設定されたノート一覧",
+    "close": "閉じる",
+    "empty": "このタグが設定されているノートはありません",
+    "loadError": "ノート一覧を読み込めませんでした。",
+    "nextPageError": "続きのノートを読み込めませんでした。取得済みのノートを表示しています。",
+    "refreshError": "ノート一覧を更新できませんでした。前回取得した内容を表示しています。",
+    "loaded": "{{total}}件中 {{loaded}}件を表示",
+    "loadMore": "続きを表示",
+    "preview": "ノートのプレビュー",
+    "previewEmpty": "一覧からノートを選ぶと本文が出ます",
+    "previewError": "ノートの本文を読み込めませんでした。",
+    "previewRefreshError": "ノートの本文を更新できませんでした。前回取得した内容を表示しています。",
+    "back": "一覧に戻る",
+    "open": "このノートを開く",
+    "keyMove": "↑ ↓ 選択",
+    "keyPreview": "Enter プレビュー",
+    "keyOpen": "Enter ノートを開く",
+    "keyBack": "Esc 一覧に戻る",
+    "keyClose": "Esc 閉じる"
+  }
+}

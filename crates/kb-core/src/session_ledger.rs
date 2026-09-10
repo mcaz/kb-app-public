@@ -16,6 +16,7 @@ use crate::write_rejection::WriteRejection;
 
 mod observation;
 pub use observation::*;
+pub mod rule_delivery;
 mod session_start;
 pub(crate) mod trend;
 pub use session_start::*;
@@ -220,10 +221,18 @@ pub struct LedgerEvent {
     permission_mode: Option<PermissionMode>,
     #[serde(default)]
     measurement: MeasurementContext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rule_evidence: Option<rule_delivery::RuleEvidence>,
     observation: Observation,
 }
 
 impl LedgerEvent {
+    pub fn with_rule_evidence(mut self, evidence: rule_delivery::RuleEvidence) -> Result<Self> {
+        self.rule_evidence = Some(evidence);
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn with_measurement(mut self, measurement: MeasurementContext) -> Result<Self> {
         self.measurement = measurement;
         self.validate()?;
@@ -325,6 +334,7 @@ impl LedgerEvent {
             fallback_day,
             permission_mode: context.permission_mode,
             measurement: MeasurementContext::default(),
+            rule_evidence: None,
             observation,
         };
         event.validate()?;
@@ -333,6 +343,9 @@ impl LedgerEvent {
 
     fn validate(&self) -> Result<()> {
         self.measurement.validate(self)?;
+        if let Some(evidence) = &self.rule_evidence {
+            evidence.validate(self)?;
+        }
         ensure!(
             self.observed_at_ms >= 0 && self.surface != ClientSurface::Unknown,
             "台帳eventの時刻またはsurfaceが不正"

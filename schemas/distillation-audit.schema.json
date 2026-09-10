@@ -103,7 +103,7 @@
       "required": ["code", "passed", "violations", "detail"],
       "properties": {
         "code": {
-          "enum": ["no_actionable_entries", "no_unresolved_entries", "no_non_none_risk_entries", "no_pending_markdown_exports", "storage_contract_valid", "remote_backup_current_or_local_only"]
+          "enum": ["no_actionable_entries", "no_unresolved_entries", "no_non_none_risk_entries", "no_pending_markdown_exports", "storage_contract_valid", "remote_backup_current_or_local_only", "artifact_metadata_stable"]
         },
         "passed": {"type": "boolean"},
         "violations": {"type": "integer", "minimum": 0},
@@ -119,7 +119,7 @@
         "checks": {
           "type": "array",
           "minItems": 6,
-          "maxItems": 6,
+          "maxItems": 7,
           "items": {"$ref": "#/$defs/check"}
         }
       }
@@ -127,14 +127,25 @@
     "storage_report": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "digest", "notes", "artifacts", "artifact_refs", "legacy_files"],
+      "required": ["schema", "digest", "notes", "artifacts", "artifact_refs", "legacy_files", "legacy_inventory"],
       "properties": {
-        "schema": {"const": "kb-app.repository-snapshot/v1"},
-        "digest": {"$ref": "#/$defs/hash"},
+        "schema": {"enum": ["kb-app.repository-snapshot/v1", "kb-app.repository-snapshot/v2"]},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "notes": {"type": "integer", "minimum": 0},
         "artifacts": {"type": "integer", "minimum": 0},
         "artifact_refs": {"type": "integer", "minimum": 0},
-        "legacy_files": {"type": "integer", "minimum": 0}
+        "legacy_files": {"type": "integer", "minimum": 0},
+        "legacy_inventory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unpromoted_artifacts", "active_legacy_files", "retained_legacy_files", "unclassified_legacy_files"],
+          "properties": {
+            "unpromoted_artifacts": {"type": "integer", "minimum": 0},
+            "active_legacy_files": {"type": "integer", "minimum": 0},
+            "retained_legacy_files": {"type": "integer", "minimum": 0},
+            "unclassified_legacy_files": {"type": "integer", "minimum": 0}
+          }
+        }
       }
     },
     "storage_contract": {

@@ -24,6 +24,11 @@ launch_services_error_kind() {
     printf '%s\n' "server-unavailable"
   elif [[ "$output" == *"-10827"* || "$output" == *"kLSNoExecutableErr"* ]]; then
     printf '%s\n' "executable-unavailable"
+  elif [[ "$output" == *"-600"* || "$output" == *"procNotFound"* ]]; then
+    # 同じ実行ファイルで動く別モードのprocess(MCP server / hook)がLaunchServicesに
+    # 「起動中のkb-app」として登録されていると、openはそこへ転送しようとして-600になる
+    # (2026-09-10 の反映で実測。Claude配下の `kb-app --mcp` がcgsConnection無しで登録されていた)。
+    printf '%s\n' "instance-conflict"
   else
     printf '%s\n' "other"
   fi
@@ -38,6 +43,11 @@ report_launch_services_failure() {
       ;;
     executable-unavailable)
       echo "$action: LaunchServicesがbundleの実行ファイルを解決できません。" >&2
+      ;;
+    instance-conflict)
+      echo "$action: LaunchServicesが別モードのprocess(MCP server / hook)を起動中のkb-appとして扱っています。" >&2
+      echo "  \`lsappinfo list | grep -A4 kb-app\` で登録を確認し、AIクライアントのMCPを再接続してから再実行するか、" >&2
+      echo "  \`open -n\` で新しいインスタンスとして起動してください。" >&2
       ;;
     *)
       echo "$action: LaunchServices受入に失敗しました。" >&2
@@ -147,7 +157,10 @@ launch_and_accept() {
     return 1
   fi
 
-  if ! output="$(open -gj "$app" 2>&1)"; then
+  # -n: 登録済みインスタンスへ転送せず、必ず新しいprocessを起動する。GUIはstop_guiで
+  # 止めてあるので二重起動にはならず、同じ実行ファイルのMCP serverがLaunchServicesに
+  # 登録されていても-600(procNotFound)で受入が落ちない。
+  if ! output="$(open -n -gj "$app" 2>&1)"; then
     report_launch_services_failure "GUI起動失敗" "$output"
     return 1
   fi
@@ -221,7 +234,8 @@ rollback() {
     if [[ -n "$output" ]]; then
       printf '%s\n' "$output" >&2
     fi
-    open -g "$installed" >/dev/null 2>&1 || true
+    # rollback後の再起動も新しいインスタンスとして起動する(理由は launch_and_accept と同じ)。
+    open -n -g "$installed" >/dev/null 2>&1 || true
   fi
 
   if (( rollback_failed == 1 )); then

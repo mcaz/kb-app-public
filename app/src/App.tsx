@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 
 import { Toaster } from "@/components/atoms/ui/sonner";
 import { TooltipProvider } from "@/components/atoms/ui/tooltip";
@@ -19,23 +20,27 @@ import { useTheme } from "@/hooks/useTheme";
 import { useTrayLabels } from "@/hooks/useTrayLabels";
 import { useWorkspaceTabShortcuts } from "@/hooks/useWorkspaceTabShortcuts";
 import { GraphPage } from "@/pages/GraphPage";
+import { TagsPage } from "@/pages/TagsPage";
 import { FilesPage } from "@/pages/FilesPage";
 import { HomePage } from "@/pages/HomePage";
 import { NotesPage } from "@/pages/NotesPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
 import { ProposalsPage } from "@/pages/ProposalsPage";
-import { SettingsDialog } from "@/pages/SettingsDialog";
+import { SettingsDialog, type SettingsSection } from "@/pages/SettingsDialog";
 import {
   queryKeys,
   useHomeState,
   useMaintenanceRefresh,
   useNoteCategories,
   useSetupState,
+  useAppUpdateStatus,
 } from "@/lib/queries";
 import { useSession } from "@/lib/stores/session";
+import { api } from "@/lib/api";
+import { appUpdateBootReadyAllowed } from "@/lib/queries/appUpdatePolicy";
 
 export function App() {
-  const { t } = useTranslation("common");
+  const { t } = useTranslation(["common", "appUpdate"]);
   const errorText = useErrorText();
   const {
     data: setup,
@@ -60,10 +65,23 @@ export function App() {
   );
   const queryClient = useQueryClient();
   const handledMaintenanceAt = useRef(0);
+  // 起動時の復元結果だけを読み、進捗pollは設定画面の表示中に限る。
+  const updateQuery = useAppUpdateStatus(false);
+  const restoredUpdateShown = useRef(false);
+  const bootReadySent = useRef(false);
+  const initialScreenReady = appUpdateBootReadyAllowed({
+    setup,
+    setupFailed,
+    homeLoaded: home !== undefined,
+    homeFailed: homeQuery.isError,
+    categoriesLoaded: categoryData !== undefined,
+    categoriesFailed: categoryError !== null,
+  });
   const view = useSession((s) => s.view);
   const selectedId = useSession((s) => s.selectedId);
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("kb");
   const [searchMode, setSearchMode] = useState<"recent" | "all">("recent");
   const [searchOpening, setSearchOpening] = useState(0);
   const openSearch = useCallback(() => {
@@ -83,6 +101,17 @@ export function App() {
     setSearchOpen(false);
     setSettingsOpen(true);
   }, []);
+  const openGettingStarted = useCallback(() => {
+    setSettingsSection("getting_started");
+    setSearchOpen(false);
+    setSettingsOpen(true);
+  }, []);
+  const finishOnboarding = useCallback(() => {
+    useSession.getState().go("home");
+    setSettingsSection("connect");
+    setSearchOpen(false);
+    setSettingsOpen(true);
+  }, []);
 
   // 選んだテーマ(システム/ライト/ダーク)を <html data-theme> へ反映する
   const theme = useTheme();
@@ -95,6 +124,36 @@ export function App() {
   useSettingsShortcut(openSettings, !isPending && !setup?.needs_onboarding);
   useNavigationHistoryShortcut(!isPending && !setup?.needs_onboarding);
   useWorkspaceTabShortcuts(ready && !searchOpen && !settingsOpen);
+
+  useEffect(() => {
+    if (
+      updateQuery.isError ||
+      updateQuery.data?.failure !== "restart_failed" ||
+      restoredUpdateShown.current
+    )
+      return;
+    restoredUpdateShown.current = true;
+    toast(t("appUpdate:failures.restart_failed"), {
+      action: {
+        label: t("appUpdate:openSettings"),
+        onClick: () => {
+          setSettingsSection("general");
+          setSearchOpen(false);
+          setSettingsOpen(true);
+        },
+      },
+    });
+  }, [updateQuery.data?.failure, updateQuery.isError, t]);
+
+  // 初期画面の取得完了だけをnative監視へ通知する。KB保存・検索の受入証拠ではない。
+  useEffect(() => {
+    if (!initialScreenReady || bootReadySent.current) return;
+    bootReadySent.current = true;
+    void api.appUpdateBootReady().catch(() => {
+      // 未受領時のrollbackはnative監視に任せ、画面側で成功に補正しない。
+      console.warn(t("appUpdate:bootReadyFailed"));
+    });
+  }, [initialScreenReady, t]);
 
   // 外部更新・派生情報の保守が終わった後だけ、影響するDB queryを再取得する。
   useEffect(() => {
@@ -182,7 +241,7 @@ export function App() {
       </main>
     );
   }
-  if (setup?.needs_onboarding) return <OnboardingPage />;
+  if (setup?.needs_onboarding) return <OnboardingPage onReady={finishOnboarding} />;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -213,6 +272,7 @@ export function App() {
           <HomePage
             home={home}
             onOpenAllNotes={openAllNotes}
+            onOpenGettingStarted={openGettingStarted}
             refresh={{
               updatedAt: homeQuery.dataUpdatedAt,
               isFetching: homeQuery.isFetching,
@@ -224,6 +284,7 @@ export function App() {
         )}
         {view === "notes" && <NotesPage onOpenSearch={openSearch} />}
         {view === "files" && <FilesPage />}
+        {view === "tags" && <TagsPage />}
         {view === "graph" && <GraphPage />}
         {view === "proposals" && <ProposalsPage />}
       </AppShell>
@@ -234,7 +295,13 @@ export function App() {
         open={searchOpen}
         onOpenChange={setSearchOpen}
       />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        section={settingsSection}
+        onSectionChange={setSettingsSection}
+        onOpenSearch={openSearch}
+      />
       <Toaster theme={theme} />
     </TooltipProvider>
   );

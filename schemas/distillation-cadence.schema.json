@@ -53,7 +53,7 @@
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "enum": ["no_actionable_entries", "no_unresolved_entries", "no_non_none_risk_entries", "no_pending_markdown_exports", "storage_contract_valid", "remote_backup_current_or_local_only"]
+            "enum": ["no_actionable_entries", "no_unresolved_entries", "no_non_none_risk_entries", "no_pending_markdown_exports", "storage_contract_valid", "remote_backup_current_or_local_only", "artifact_metadata_stable"]
           }
         }
       }
@@ -72,13 +72,25 @@
     "status": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema", "checked_at", "state_exists", "current_checkpoint_id", "accepted_checkpoint_id", "lanes", "last_failure"],
+      "required": ["schema", "checked_at", "state_exists", "current_checkpoint_id", "accepted_checkpoint_id", "current_artifact_stamp", "accepted_artifact_stamp", "lanes", "last_failure"],
       "properties": {
         "schema": {"const": "kb-app.distillation-cadence-status/v1"},
         "checked_at": {"type": "string", "format": "date-time"},
         "state_exists": {"type": "boolean"},
         "current_checkpoint_id": {"$ref": "#/$defs/hash"},
         "accepted_checkpoint_id": {
+          "anyOf": [
+            {"$ref": "#/$defs/hash"},
+            {"type": "null"}
+          ]
+        },
+        "current_artifact_stamp": {
+          "anyOf": [
+            {"$ref": "#/$defs/hash"},
+            {"type": "null"}
+          ]
+        },
+        "accepted_artifact_stamp": {
           "anyOf": [
             {"$ref": "#/$defs/hash"},
             {"type": "null"}

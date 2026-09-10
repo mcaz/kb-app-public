@@ -315,11 +315,27 @@ pub(super) fn complete(
             }
             canonical.front.relations.sort();
             canonical.front.relations.dedup();
-            write_prepared(vault, &tx, &id, &canonical, &leader.token, &decision.reason)?;
+            write_prepared(
+                vault,
+                &tx,
+                &id,
+                &canonical,
+                &leader.token,
+                &decision.reason,
+                client,
+            )?;
             after.insert(id, canonical.to_file_string()?);
         }
         for (id, note) in &prepared {
-            write_prepared(vault, &tx, id, note, &leader.token, &decision.reason)?;
+            write_prepared(
+                vault,
+                &tx,
+                id,
+                note,
+                &leader.token,
+                &decision.reason,
+                client,
+            )?;
             after.insert(id.clone(), note.to_file_string()?);
         }
         crate::index::validate_authority_index(&tx)?;
@@ -622,6 +638,8 @@ mod tests {
                     relations: vec![],
                     allow_new_tags: true,
                     client: "codex-cli/test",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap()
@@ -1023,8 +1041,11 @@ mod tests {
             &conn,
             &changed.note,
             &note,
-            "fixture update",
-            "test",
+            crate::note_store::WriteAttribution::new(
+                "fixture update",
+                "test",
+                &crate::provenance::test_context(),
+            ),
         )
         .unwrap();
         let error = complete(

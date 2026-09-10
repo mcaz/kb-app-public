@@ -24,17 +24,19 @@ pub enum DerivedArtifact {
     FtsTri,
     Links,
     FtsAnchor,
+    FtsEvents,
     NoteRelations,
     NoteVecs,
     CadenceCache,
 }
 
 impl DerivedArtifact {
-    pub const ALL: [DerivedArtifact; 7] = [
+    pub const ALL: [DerivedArtifact; 8] = [
         DerivedArtifact::FtsMain,
         DerivedArtifact::FtsTri,
         DerivedArtifact::Links,
         DerivedArtifact::FtsAnchor,
+        DerivedArtifact::FtsEvents,
         DerivedArtifact::NoteRelations,
         DerivedArtifact::NoteVecs,
         DerivedArtifact::CadenceCache,
@@ -46,6 +48,7 @@ impl DerivedArtifact {
             Self::FtsTri => "fts_tri",
             Self::Links => "links",
             Self::FtsAnchor => "fts_anchor",
+            Self::FtsEvents => "fts_events",
             Self::NoteRelations => "note_relations",
             Self::NoteVecs => "note_vecs",
             Self::CadenceCache => "cadence_cache",
@@ -58,6 +61,7 @@ impl DerivedArtifact {
             Self::FtsTri => &FTS_TRI,
             Self::Links => &LINKS,
             Self::FtsAnchor => &FTS_ANCHOR,
+            Self::FtsEvents => &FTS_EVENTS,
             Self::NoteRelations => &NOTE_RELATIONS,
             Self::NoteVecs => &NOTE_VECS,
             Self::CadenceCache => &crate::cadence_cache::SPEC,
@@ -186,7 +190,7 @@ pub(crate) struct ArtifactSpec {
     dead_code,
     reason = "allowlistの正本。テスト(registry_cannot_own_durable_state_tables)が参照する"
 )]
-pub(crate) const DURABLE_STATE_TABLES: [&str; 8] = [
+pub(crate) const DURABLE_STATE_TABLES: [&str; 14] = [
     "meta",
     "notes",
     "note_exports",
@@ -195,6 +199,12 @@ pub(crate) const DURABLE_STATE_TABLES: [&str; 8] = [
     "action_capability_uses",
     "distillation_jobs",
     "distillation_job_runs",
+    "tag_vocabulary_sources",
+    "tag_vocabulary_source_exports",
+    "tag_vocabulary_runs",
+    "tag_vocabulary_run_notes",
+    "tag_vocabulary_rollbacks",
+    "note_events",
 ];
 
 // ---------------------------------------------------------------- registry
@@ -259,6 +269,25 @@ static FTS_ANCHOR: ArtifactSpec = ArtifactSpec {
     health: fts_anchor_health,
     rebuild: fts_anchor_rebuild,
     apply_change: fts_anchor_apply,
+};
+
+/// 来歴イベントの申告文(改版要約・理由・見出し・種別)の索引。正本は durable な
+/// `note_events` で、ここは検索のためだけの派生。**ノート書込では維持されない** —
+/// `apply_note_change` はイベントを見られないので、増分は `apply_event` が担う。
+static FTS_EVENTS: ArtifactSpec = ArtifactSpec {
+    lane: Lane::Machine,
+    // 補助信号。欠けても主検索は成立するので、劣化として見せるだけにする。
+    criticality: Criticality::RetrievalOptional,
+    objects: &[SqliteObjectSpec {
+        name: "fts_events",
+        kind: ObjectKind::VirtualTable,
+        create_sql: "CREATE VIRTUAL TABLE fts_events USING fts5(
+            event_id UNINDEXED, note_id UNINDEXED, text, tokenize='unicode61'
+        );",
+    }],
+    health: fts_events_health,
+    rebuild: fts_events_rebuild,
+    apply_change: fts_events_apply,
 };
 
 static NOTE_RELATIONS: ArtifactSpec = ArtifactSpec {
@@ -350,6 +379,10 @@ fn links_health(_vault: &Vault, conn: &Connection) -> Result<ArtifactHealth> {
 
 fn fts_anchor_health(_vault: &Vault, conn: &Connection) -> Result<ArtifactHealth> {
     objects_health(conn, FTS_ANCHOR.objects)
+}
+
+fn fts_events_health(_vault: &Vault, conn: &Connection) -> Result<ArtifactHealth> {
+    objects_health(conn, FTS_EVENTS.objects)
 }
 
 fn note_vecs_health(_vault: &Vault, conn: &Connection) -> Result<ArtifactHealth> {
@@ -576,6 +609,23 @@ fn fts_anchor_rebuild(_vault: &Vault, conn: &Connection) -> Result<RebuildOutcom
     Ok(RebuildOutcome::Ready)
 }
 
+/// 正本は`note_events`。削除済みノートのイベントも索引に残す — 台帳は追記専用で、
+/// 「何が失われたか」を後から引けることがこの索引の用途だから。
+fn fts_events_rebuild(_vault: &Vault, conn: &Connection) -> Result<RebuildOutcome> {
+    conn.execute("DELETE FROM fts_events", [])?;
+    let payloads: Vec<String> = {
+        let mut statement = conn.prepare("SELECT payload FROM note_events ORDER BY event_id")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+    for payload in payloads {
+        let event: crate::provenance::NoteEvent =
+            serde_json::from_str(&payload).context("来歴索引の復元元イベントをparseできない")?;
+        insert_event_row(conn, &event)?;
+    }
+    Ok(RebuildOutcome::Ready)
+}
+
 /// typed relationの正本はnote frontmatter(notes.document)。全noteをparseして
 /// 台帳を作り直す。documentが空のuid付きnoteは復元不能としてrebuild失敗にする
 /// (governanceの穴を黙って空edgeで隠さない)。
@@ -718,6 +768,39 @@ fn fts_anchor_apply(
         }
     }
     Ok(())
+}
+
+/// ノート書込では何もしない。イベントは`note_store`が同じtransactionで
+/// `apply_event`へ渡す(`NoteChange`はイベントを運べない)。
+fn fts_events_apply(
+    _vault: &Vault,
+    _conn: &Connection,
+    _change: NoteChange<'_>,
+    _cache: &ChangeCache,
+) -> Result<()> {
+    Ok(())
+}
+
+fn insert_event_row(conn: &Connection, event: &crate::provenance::NoteEvent) -> Result<()> {
+    conn.execute(
+        "DELETE FROM fts_events WHERE event_id=?1",
+        [&event.event_id],
+    )?;
+    conn.execute(
+        "INSERT INTO fts_events(event_id, note_id, text) VALUES(?1, ?2, ?3)",
+        rusqlite::params![
+            event.event_id,
+            event.note_id,
+            wakati(&crate::provenance::event_search_text(event))
+        ],
+    )?;
+    Ok(())
+}
+
+/// 来歴イベント1件を索引へ足す。`insert_event`と同じtransactionから呼ぶ。
+pub(crate) fn apply_event(conn: &Connection, event: &crate::provenance::NoteEvent) -> Result<()> {
+    insert_event_row(conn, event)
+        .with_context(|| format!("派生索引 fts_events を更新できない: {}", event.event_id))
 }
 
 fn note_relations_apply(
@@ -1192,6 +1275,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1221,6 +1306,8 @@ mod tests {
                     }],
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1259,8 +1346,11 @@ mod tests {
             &outcome.conn,
             &source,
             &note,
-            "update",
-            "update note",
+            crate::note_store::WriteAttribution::new(
+                "update",
+                "update note",
+                &crate::provenance::test_context(),
+            ),
         )
         .unwrap();
     }
@@ -1301,14 +1391,25 @@ mod tests {
             &outcome.conn,
             &source,
             &note,
-            "update",
-            "update note",
+            crate::note_store::WriteAttribution::new(
+                "update",
+                "update note",
+                &crate::provenance::test_context(),
+            ),
         )
         .unwrap_err();
         assert!(format!("{error:#}").contains("fail-closed"), "{error:#}");
-        let error =
-            crate::note_store::delete(&vault, &outcome.conn, &source, "delete", "delete note")
-                .unwrap_err();
+        let error = crate::note_store::delete(
+            &vault,
+            &outcome.conn,
+            &source,
+            crate::note_store::WriteAttribution::new(
+                "delete",
+                "delete note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap_err();
         assert!(format!("{error:#}").contains("fail-closed"), "{error:#}");
     }
 
@@ -1458,6 +1559,8 @@ mod tests {
                     relations: None,
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -1471,7 +1574,17 @@ mod tests {
                 "test/client",
             )
             .unwrap();
-        crate::note_store::delete(&vault, &conn, &doomed, "delete", "delete note").unwrap();
+        crate::note_store::delete(
+            &vault,
+            &conn,
+            &doomed,
+            crate::note_store::WriteAttribution::new(
+                "delete",
+                "delete note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         let _ = source;
 
         let dumps = |conn: &Connection| {
@@ -1480,6 +1593,7 @@ mod tests {
                 table_rows(conn, "fts_tri", "id, text"),
                 table_rows(conn, "links", "src, dst"),
                 table_rows(conn, "fts_anchor", "src, dst, text"),
+                table_rows(conn, "fts_events", "event_id, note_id, text"),
                 table_rows(conn, "note_relations", "src_uid, kind, target_uid"),
                 table_rows(conn, "note_vecs", "id, stamp"),
             ]
@@ -1516,8 +1630,18 @@ mod tests {
 
         let mut note = crate::note_store::read(&conn, &id).unwrap();
         note.body = "書けないはず".into();
-        let error =
-            crate::note_store::put(&vault, &conn, &id, &note, "update", "update note").unwrap_err();
+        let error = crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "update",
+                "update note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap_err();
         assert!(format!("{error:#}").contains("fail-closed"), "{error:#}");
         // readは影響を受けない
         assert_eq!(crate::note_store::read(&conn, &id).unwrap().body, "本文\n");
@@ -1555,8 +1679,18 @@ mod tests {
         .unwrap();
         let mut note = crate::note_store::read(&raw, &id).unwrap();
         note.body = "生接続では書けないはず".into();
-        let error =
-            crate::note_store::put(&vault, &raw, &id, &note, "update", "update note").unwrap_err();
+        let error = crate::note_store::put(
+            &vault,
+            &raw,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "update",
+                "update note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap_err();
         assert!(format!("{error:#}").contains("fail-closed"), "{error:#}");
         drop(raw);
 
@@ -1573,7 +1707,18 @@ mod tests {
 
         // open済み接続のwriteは通る(full再検証はopen時に済んでいる)
         note.body = "open済み接続では書ける".into();
-        crate::note_store::put(&vault, &outcome.conn, &id, &note, "update", "update note").unwrap();
+        crate::note_store::put(
+            &vault,
+            &outcome.conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "update",
+                "update note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         assert_eq!(
             crate::note_store::read(&outcome.conn, &id).unwrap().body,
             "open済み接続では書ける\n"
@@ -1632,6 +1777,8 @@ mod tests {
             relations: None,
             allow_new_tags: false,
             client: "test/client",
+            actor: None,
+            revision: None,
         };
 
         // title-only変更 → pending
@@ -1665,10 +1812,32 @@ mod tests {
         // 起こさない従来動作の維持)。1回目のputでbody表現(末尾改行)を正規化して
         // から測る — 正規化差は旧実装でも「本文変更」扱いだった。
         let note = crate::note_store::read(&conn, &id).unwrap();
-        crate::note_store::put(&vault, &conn, &id, &note, "touch", "touch note").unwrap();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "touch",
+                "touch note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         seed(&conn);
         let note = crate::note_store::read(&conn, &id).unwrap();
-        crate::note_store::put(&vault, &conn, &id, &note, "touch", "touch note").unwrap();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "touch",
+                "touch note",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         assert_eq!(
             vec_count(&conn),
             1,

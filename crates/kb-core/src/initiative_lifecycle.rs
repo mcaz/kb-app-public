@@ -304,31 +304,47 @@ pub fn execute(
         });
     }
 
+    // closureもアプリ主導の書込。モデルは確定できないのでUnknownのままにする。
+    let actor =
+        crate::provenance::WriteActor::app_api(crate::provenance::client_product(client), None);
     for (index, change) in prepared.iter().enumerate() {
         let op_id = format!(
             "{}:initiative-close:{index}",
             execution_id.trim_start_matches("sha256:")
         );
+        let revision = crate::provenance::RevisionInput {
+            kind: Some(crate::provenance::RevisionKind::Amend),
+            summary: Some(change.reason.clone()),
+            ..crate::provenance::RevisionInput::default()
+        };
+        let context = crate::provenance::WriteContext {
+            actor: &actor,
+            revision: Some(&revision),
+            operation: crate::provenance::Operation::Closure,
+        };
         crate::note_store::queue_put(
             vault,
             &transaction,
             &change.note,
             &change.after_note,
             &op_id,
-            &format!(
-                "**Initiative closed**: [{}](/{note}.md)をexecution `{execution_id}`でhistorical化。理由: {}",
-                change
-                    .after_note
-                    .front
-                    .title
-                    .as_deref()
-                    .unwrap_or(&change.note),
-                change.reason,
-                note = change.note,
-            ),
-            &format!(
-                "initiative: close {} ({execution_id}, via {client})",
-                change.note
+            crate::note_store::WriteAttribution::new(
+                &format!(
+                    "**Initiative closed**: [{}](/{note}.md)をexecution `{execution_id}`でhistorical化。理由: {}",
+                    change
+                        .after_note
+                        .front
+                        .title
+                        .as_deref()
+                        .unwrap_or(&change.note),
+                    change.reason,
+                    note = change.note,
+                ),
+                &format!(
+                    "initiative: close {} ({execution_id}, via {client})",
+                    change.note
+                ),
+                &context,
             ),
         )?;
     }
@@ -408,6 +424,18 @@ pub fn rollback(
     }
 
     let rollback_id = crate::distillation::sha256(format!("{execution_id}:rollback").as_bytes());
+    let actor =
+        crate::provenance::WriteActor::app_api(crate::provenance::client_product(client), None);
+    let revision = crate::provenance::RevisionInput {
+        kind: Some(crate::provenance::RevisionKind::Reverse),
+        summary: Some(format!("initiative closure {execution_id} のrollback")),
+        ..crate::provenance::RevisionInput::default()
+    };
+    let context = crate::provenance::WriteContext {
+        actor: &actor,
+        revision: Some(&revision),
+        operation: crate::provenance::Operation::Closure,
+    };
     for (index, (note, document)) in stored.before_documents.iter().enumerate() {
         let restored = Note::parse(document).with_context(|| {
             format!("initiative closure rollback documentをparseできない: {note}")
@@ -422,11 +450,14 @@ pub fn rollback(
             note,
             &restored,
             &op_id,
-            &format!(
-                "**Initiative closure rollback**: [{}](/{note}.md)を`{execution_id}`以前のactive状態へ復元。",
-                restored.front.title.as_deref().unwrap_or(note),
+            crate::note_store::WriteAttribution::new(
+                &format!(
+                    "**Initiative closure rollback**: [{}](/{note}.md)を`{execution_id}`以前のactive状態へ復元。",
+                    restored.front.title.as_deref().unwrap_or(note),
+                ),
+                &format!("initiative: rollback {note} ({rollback_id}, via {client})"),
+                &context,
             ),
-            &format!("initiative: rollback {note} ({rollback_id}, via {client})"),
         )?;
     }
     crate::index::validate_authority_index(&transaction)?;
@@ -694,6 +725,8 @@ mod tests {
                             relations: Vec::new(),
                             allow_new_tags: true,
                             client: "test/client",
+                            actor: None,
+                            revision: None,
                         },
                     )
                     .unwrap(),
@@ -818,6 +851,8 @@ mod tests {
                     relations: None,
                     allow_new_tags: false,
                     client: "test/other",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();
@@ -910,6 +945,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: true,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap();

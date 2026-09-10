@@ -40,7 +40,7 @@ pub fn settings_set_harvest_status_line(enabled: bool) -> AppResult<kb_core::set
     kb_core::settings::set_harvest_status_line(enabled).map_err(Into::into)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn settings_ai_guard_status(state: State<'_, AppState>) -> AppResult<AiGuardStatus> {
     let status = kb_core::ai_guard::status()?;
@@ -54,18 +54,18 @@ pub fn settings_ai_guard_status(state: State<'_, AppState>) -> AppResult<AiGuard
 
 /// macOS の管理者領域へ、Codex と Claude Code が上書きできないポリシーを置く。
 /// 既存の Codex requirements は管理者の正本なので、kb-app 所有でなければ止める。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn settings_install_ai_guard(state: State<'_, AppState>) -> AppResult<AiGuardStatus> {
     let binding = selected_client_binding(&state)?;
     // 管理者認証の取消しで接続先だけを変えない。保護の導入成功後に固定する。
-    let status = kb_core::ai_guard::install().map_err(guard_install_error)?;
+    kb_core::ai_guard::install().map_err(guard_install_error)?;
     bind_coding_clients(&binding, client_binding::bind)?;
-    Ok(status)
+    settings_ai_guard_status(state)
 }
 
 /// Codex だけを Full Access に切り替える。Codex の KB 仲介は同時に fail-closed になる。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn settings_enable_ai_guard_development_mode(
     state: State<'_, AppState>,

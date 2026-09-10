@@ -38,7 +38,7 @@ impl From<kb_core::connect::RestoreProgress> for VaultRestoreProgress {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn setup_state() -> AppResult<SetupState> {
     let reg = Registry::load().map_err(AppError::configuration)?;
@@ -61,7 +61,7 @@ pub fn setup_state() -> AppResult<SetupState> {
 }
 
 /// 最初の vault を自動作成(既定名「わたしのノート」実体 my-notes)。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn onboard(app: AppHandle, state: State<'_, AppState>) -> AppResult<SetupState> {
     let path = dirs::home_dir()
@@ -81,7 +81,7 @@ pub fn onboard(app: AppHandle, state: State<'_, AppState>) -> AppResult<SetupSta
 
 /// 2台目以降: private GitHub repository にある既存 Vault を検査・復元して登録する。
 /// 復元先は未使用 path を選び、既存フォルダへ overlay しない。
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn onboard_existing(
     app: AppHandle,

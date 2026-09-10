@@ -6,5 +6,7 @@ export const homeRefreshVariants = tv({
     timestamp: "tabular-nums",
     error: "text-danger mb-3 text-sm",
     icon: "size-3.5",
+    guideEntry:
+      "border-line text-muted mb-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-xs",
   },
 });

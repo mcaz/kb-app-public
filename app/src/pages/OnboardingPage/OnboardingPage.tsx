@@ -13,11 +13,11 @@ import { useVaultRestoreProgress } from "@/hooks/useVaultRestoreProgress";
 import { useGitHubAuthState, useOnboard, useOnboardExisting } from "@/lib/queries";
 
 /** 最初の vault を作る(FR-A1)。 */
-export function OnboardingPage() {
+export function OnboardingPage({ onReady }: { onReady: () => void }) {
   const { t } = useTranslation("onboarding");
   const errorText = useErrorText();
-  const onboard = useOnboard();
-  const existing = useOnboardExisting();
+  const onboard = useOnboard(onReady);
+  const existing = useOnboardExisting(onReady);
   const [showExisting, setShowExisting] = useState(false);
   const { data: githubAuth } = useGitHubAuthState(showExisting);
   const restoreProgress = useVaultRestoreProgress();

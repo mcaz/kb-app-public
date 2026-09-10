@@ -99,7 +99,11 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     安定scopeを持つ。同じnamespace+scopeのactive canonicalは1件だけにし、根拠・更新・矛盾・後継は
     `note_uid`を端点にするtyped relationで表す。`proposal`は下書きや人間承認待ちを意味せず、
     AIが正本候補を区別する内部分類である。検索は完全タイトル一致を最優先とし、明示された現行・
-    履歴・記録・理由intentだけauthorityの既定順を上書きする。標準Markdown linkのanchor textは
+    履歴・記録・理由intentをauthorityのstatus・role・namespaceへ対応付ける。完了確認・過去の結果を尋ねるqueryは、
+    具体的な対象との一致と本文に残る結果の根拠を併せて評価し、一般方針より対象の結果記録を優先する。
+    完了・成功だけでなく未完了・失敗・未確認も結果として扱い、historical statusだけで一律に昇格しない。
+    完了条件・分類方法の質問や現行方針への明示的な質問を結果確認と混同せず、検索順からauthorityを
+    変更しない。この順位方針は候補抽出と経路融合後で一致させる。標準Markdown linkのanchor textは
     全query term一致時だけリンク先を昇格する弱い派生索引にする。retrievalのseed展開では
     `derived_from`・`supports`・`updates`・`contradicts`・`supersedes`、通常link、`mentions`の順で
     候補化する。同じscope・role・status、または同じrole・status内で同一正規化本文か文字trigram
@@ -113,6 +117,10 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     worksetを縮めても、受入gateは現在の全plan、未解決・risk、Markdown outbox、Storage Contract、
     local Git backupへ毎回かける。checkpointとgate PASSは実行権限にせず、executorのsnapshot再照合を
     省略しない。
+    Artifact監査では旧実体の物理総数を未昇格件数と混同せず、現役・昇格後の保持・未分類へ分ける。
+    保持は構造化promotion証拠と現在のmanifest/ref/alias・旧path/hash/sizeで照合し、旧散文や同hashだけで
+    推定しない。台帳・参照・別名のみの変更もafter_writeをdueにし、監査成功かつ監査前後の台帳識別値が
+    一致したときだけ、本文checkpointと別のArtifact受入baselineを更新する。
 13. **完了initiativeは本文蒸留と分離したatomic lifecycle waveで閉じる**。AI管理のactive canonical
     initiativeだけを対象に、read-only planでnote ID・note UID・input hash・全DB snapshot・理由を固定する。
     applyはauthority statusのactive→historical以外を不変にし、全件成功または0件とする。rollbackは
@@ -154,13 +162,14 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     [contract.md](contract.md) に定義し、コアの検証で機構強制する。KB 内のノート
     (タグ運用等)は可変の運用合意 — 両者を混同しない(契約を KB に置くと KB の裁量で
     壊せてしまい、UI と AI の前提が崩れる)
-  - **タグの統治(2026-08-10 本人決定)**: タグの種類・役割はアプリが決めず、
-    **AI とユーザーの会話で合意して育てる**(アプリが状態タグ等を作るとタグ体系の強要になる)。
-    合意済みのタグ・役割は「タグ運用」ノートに記録され、AI はユーザー決定を変更しない。
-    **それ以外のタグは AI の裁量で付与・統合・改名・整理する**(update 経由・まとまった
-    整理は会話で報告)。実装は server instructions の規律として配布
+  - **タグの統治(2026-08-10制定、2026-09-08本人指定で改定)**: タグの種類・役割はアプリに固定しない。
+    数万ノートの運用を想定し、**付与・付け替えと語彙の追加・統合・削除はAIが判断する**。
+    タグごとの本人確認は必須にせず、本人の明示的な訂正に従う。既存語を優先し、同義語や
+    一時的な細分類の増殖を抑え、語彙と運用を「タグ運用」ノートへ反映する。
+    まとまった整理は理由と結果を会話で報告する。意味に基づく必要性の判断はAIが担い、
+    コアの個数・語形・語彙検証とは区別する
   - **分類の方針(2026-08-09 決定)**: カテゴリ体系をユーザーに設計・学習させない。
-    大分類=vault / 中分類=タグ(AI・お手入れが提案、ユーザーは承諾のみ。本文外なので
+    大分類=vault / 中分類=タグ(AIが整理し、本人は必要に応じて訂正する。本文外なので
     手書きメモにも原則9 と両立)/ 微細構造=つながり+検索。**フォルダ階層は UI 概念に
     しない**(ディスク実体はエンジニアが git で見える)。PARA 等の分類方法論はコアに
     焼き込まず、将来のテンプレート/プラグイン(FR-A8)として提供余地を残す
@@ -175,10 +184,14 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   `note_uid`は作成後に変更できず、同じnamespace+scopeのactive canonical重複、参照切れrelation、
   typed relationで参照中の削除をcoreで拒否する。複数ノートを一括遷移するatomic supersedeと
   path移動は次のsemantic executor段で実装し、それまでは半端なsuperseded状態を作らない
-- **FR-C5 MCP サーバー**: search / get / recent / plan_distillation / plan_targeted_distillation / audit_distillation /
+- **FR-C5 MCP サーバー**: search / get / recent / history / tag_vocabulary / set_tag_vocabulary_source /
+  plan_tag_vocabulary_change / apply_tag_vocabulary_change / list_tag_vocabulary_changes / get_tag_vocabulary_change /
+  plan_tag_vocabulary_rollback / rollback_tag_vocabulary_change / get_tag_vocabulary_stats /
+  plan_distillation / plan_targeted_distillation / audit_distillation /
   plan_initiative_closure / apply_initiative_closure / rollback_initiative_closure /
   plan_legacy_artifact_promotions / apply_legacy_artifact_promotion /
-  rollback_legacy_artifact_promotion / propose に加え、**update / prepare_remove / commit_remove
+  rollback_legacy_artifact_promotion / plan_provenance_backfill / apply_provenance_backfill /
+  propose に加え、**update / prepare_remove / commit_remove
   (origin: agent のノート限定 — 原則9 改定)**と **attach(content-only・既存ノートへの
   新規添付・16MiB上限)**を公開。通常ノートにconfirm / draft状態は持たない。
   2026-09-06本人依頼の提案チケットはwrite面の`create_proposal` / `revise_proposal` /
@@ -207,7 +220,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   invalid_argumentとして拒否する。MCP schemaはminLengthを配り、annotationsは同期を含む
   書込の性質を示す。hostのツール承認と起票判断の発火・実行は別で、ここからは強制しない
   - 通常接続は`kb-app-read` / `kb-app-write` / `kb-app-maintenance`の3登録へ分ける。
-    `read`はsearch / get / recentと提案レビュー専用get_proposalを常時発見しやすい小面として保ち、writeとmaintenanceは
+    `read`はsearch / get / recent / history / tag_vocabulary、語彙変更履歴のlist/get・運用集計と
+    提案レビュー専用get_proposalを常時発見しやすい小面として保ち、writeとmaintenanceは
     host側のtool search・遅延ロード対象にできる形にする。各processは一覧外toolの直接callも
     Vault操作前に拒否し、自動retrievalの子processは`read`固定にする。単一`all`面はCLIと評価fixtureの
     後方互換に限定する。hostがどの面を遅延ロードするかはhost設定でありserverからは強制しない
@@ -224,7 +238,43 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     出力文字数・byte数・本文数と省略本文数を統計に載せ、劣化と省略は本文より先に示す。
     Codexの予算拡大は実稼働hostの版を検証する後続段階に分け、PATH上のCLI版から推測しない。
   - `propose` / `update`のMCP schemaは既存タグだけを受け、`allow_new_tags`を公開しない。未知引数として
-    渡されても書込前に拒否し、新語追加はtrusted UI / CLIの別承認経路に限定する
+    渡されても書込前に拒否する。`tag_vocabulary`で正本の指定状態・候補・指定UIDと語彙を確認し、
+    `get`で運用を全文取得する。AIが必要と判断した語彙変更はmaintenance面の
+    `plan_tag_vocabulary_change`で計画し、write面の`apply_tag_vocabulary_change`で一括適用する。
+    新語だけの追加後は登録を再確認して通常ノートで使う。語彙の取得失敗と空表・未作成を区別する。
+    既存語の優先と本人の明示的な訂正に従い、語彙変更のたびに本人確認を要求しない。
+    正本はwrite面の`set_tag_vocabulary_source`でworkspace_idとnote_uidへ明示指定する。
+    変更は現在revisionの一致が必要で、指定と出力待ちをatomicに保存する。題名検索は候補発見だけに
+    使い、未指定の候補が1件でも自動選択しない。候補なしだけ既存bootstrapを維持し、固定後の欠損・
+    通常参照不可を別候補や現用タグに読み替えない。改名・再起動・fresh clone後も指定を保ち、
+    指定先の削除・参照不可化を通常更新・専用更新・importで拒否する。未出力の旧指定も保護する。
+    指定をGitで追跡する復元用JSONと論理snapshotへ含める。指定ありはsnapshot v2、未指定はv1互換。
+    取得・出力失敗を表示し、修復のための本文取得・タグ省略更新は止めない
+  - 語彙一括変更は追加・説明変更、未使用語の削除、統合/改名を構造化した操作と一行理由で指定する。
+    planは準備済みDBの読取snapshotから全対象を列挙し、件数・最大20例・blocker集計・receiptを返す。
+    原文全件を応答へ含めず、DB初期化・修復・同期を行わない。applyは正本UID・指定revision・
+    正本原文hash・全snapshotをwriter lock内で再照合し、全ノート・索引・蒸留job・outbox・前後履歴を
+    1 transactionで確定する。古い計画、二重実行、先行する未出力更新、保護された対象、
+    最終タグ制約違反があれば全体を止める。通常本文更新・正本切替にも使用語削除guardを適用し、
+    importは全ノート同期後の最終状態で検証する。本人の個別承認は求めず、必要性の意味判断はAIが行う。
+    保存後の出力失敗でも`stored:true`を維持し、`pending_exports`と警告を返す。
+    件数が取得不能なら`null`と警告を返す。出力は一括変更単位でまとめ、照合して再開する。
+    read面の`list_tag_vocabulary_changes`と`get_tag_vocabulary_change`は読取り専用で同期せず、
+    履歴要約と対象metadataを既定20・最大100件でページ化する。原文を返さず現在非参照の対象も除外する。
+    履歴2表はschema12から端末ローカルdurable stateとして保持し、schema13で復元台帳を追加する。
+    `plan_tag_vocabulary_rollback`はmaintenance面で元実行IDと理由から現在の全snapshotと履歴へ固定し、
+    write面の`rollback_tag_vocabulary_change`は同じreceiptを再照合して全対象のbefore原文を復元する。
+    元実行のafter原文・UID・タグ索引・参照属性が不一致、正本UID/revision変更、保護対象、出力待ち、
+    対象外の削除語利用、復元後のタグ契約違反、二重復元は全件未反映で拒否する。
+    復元前後の原文合計256 MiB・10万対象・最大20例の上限を持ち、本人への個別承認を追加しない。
+    復元者・理由・時刻・件数の台帳とノート・索引・蒸留job・outboxを同時保存し、元実行履歴は保持する。
+    required eventの`tag_vocabulary_rolled_back`で結果を届け、応答喪失時は元実行IDの履歴に付く
+    `rollback`で確認する。出力失敗も保存済みとし、一括applyと同じ経路で再開する。
+    read面の`get_tag_vocabulary_stats`は保存済み適用・復元件数、正本を含む延べノート変更数、
+    最初・最後の時刻、最近10実行と現在のノート出力待ちをread-onlyで返す。全履歴原文や理由・操作JSONを
+    parseせず、新しい大量ログは加えない。対象は端末ローカルの全期間で、計画・拒否・時間・意味品質は未計測。
+    成功率や誤判断率を推定しない。変更・復元・履歴の専用GUI、復元自体の再rollback、別端末・fresh cloneへの復元履歴移送は
+    後続範囲。詳細は[ADR-0022](adr/0022-atomic-tag-vocabulary.md)
   - `propose`はnamespace / role / authority status / scopeを必須入力にし、`update`はlegacy移行または
     authority変更時だけ同じenvelopeを受ける。`get` / search / recentは`note_uid`とauthorityを返す。
     typed relationはpathでなく26文字ULIDの`note_uid`を端点にする
@@ -276,6 +326,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   - **full 転送は同一 origin の Git LFS**(`git-lfs` は公式releaseのchecksum固定sidecarとして
     同梱。配布CIはambient版なしの実処理とpackage内容を検査し、ユーザーに追加設定を求めない)。
     manifest の取得と blob の取得を分離し、取得失敗は端末ごとの「この端末にない」として出す
+    macOSではGit本体とHTTPS helperも公式sourceから同梱する。配布内の欠損はコアが拒否し、
+    LFSからの再帰Git呼出しにも同じ配置を使う。配布候補の生成・署名・公証検査は
+    [macos-release.md](macos-release.md)、同梱sourceの固定は[bundled-git.md](bundled-git.md)を参照。
   - **旧方式 `<id>.files/`(同名サイドカー)は legacy transport**。ノート=1ファイルの
     OKF 互換を壊さない利点(`index.md` 予約名衝突の A 案・ID が汚れる B 案を棄却した理由)は
     そのままだが、**新規の保存先にはしない**(2026-08-13 に書き込み経路を削除済み。
@@ -335,6 +388,9 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 
 ### 管理アプリ(Tauri)
 
+- **操作の文言（2026-09-08 本人指定）**: アイコンだけで機能が明らかな操作は、基本的に
+  表示文言を置かず、必要な説明はツールチップで示す。実装では読み上げ名を保ち、アイコンだけで
+  意味が伝わらない操作には文言を残す。
 - 表示中のホーム・提案・ノート・検索・ファイル等は15秒ごとに自動更新し、アプリへ
   戻ったときも再取得する。前面表示中はノートの変更番号を1秒ごとに確認し、変更を検知したら
   表示中の情報を読み直す。先行取得に重なった要求は、その完了後に1回実行する。
@@ -375,6 +431,15 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
     履歴なし・読取失敗は別の状態で表示する。AI連携のON/OFFに依存せず、履歴取得は
     read-onlyでDBの作成や記録を行わない。ノート変更ごとの即時記録は後続の対象とする。
     保存範囲と日付の定義は[ADR-0020](adr/0020-note-count-history.md)。
+- **タグ一覧（2026-09-08 本人指定）**: サイドバーから開く閲覧専用の一覧に、タグ名・AIが語彙の正本で
+  定めた役割・ノート数・設定先ノートを見るアイコンボタンを置く。ノート数とボタンは別セルにし、
+  件数の桁数によってボタンの大きさや位置が変わらない固定サイズの操作欄にする。
+  名前と役割で絞り込み、未使用の登録語も表示する。
+  件数は通常参照可能かつ非退役のノートを数え、設定先ノート一覧と同じ母集団にする。
+  正本未指定・欠損・参照不能や未登録の現用語、役割未設定を区別し、説明を推測しない。
+  ノートは100件ずつ取得し、ファイルと同寸法のModalで左の一覧と右の本文プレビューを読む。
+  小幅画面では一覧とプレビューを切り替える。取得中・正常な0件・追加取得失敗・更新失敗を分け、
+  再試行とキーボード操作に対応する。タグや役割を編集・削除する操作は置かない。
 - **FR-A3 受信箱**: 廃止。下書き・承認キューを持たず、ノートのauthorityはAIが機械管理する。
   ユーザーへはメンテナンス結果と劣化を通知し、内部role/statusの操作を要求しない
 - **FR-A4 ノートビュー+エディタ**: 一覧・本文閲覧・メタ・リンク表示に加え、**作成・編集**
@@ -453,6 +518,14 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
   書き直し、pathがずれた登録を「有効」と表示しない。対応OSはmacOSがLaunchAgent、Linuxが
   autostart desktop entry、WindowsがHKCUのRunキー。登録できないOSではswitchを操作不能にし、
   できない事実を画面に出す。詳細は [ADR-0017](adr/0017-background-residency.md)
+
+- **FR-A11 対応AIの共通運用診断**: 「繋ぐ」でCodex・Claude Code・Claude Desktopの
+  read/write/maintenance登録と選択中KBの固定を検査・修復し、再接続と再検査へ進める。
+  個人用の指示ファイルの手編集を必須にしない。登録の一致・管理保護・過去のhook出力・
+  host受信・操作応答は別々に表示し、未確認を対応済みへ読み替えない。共通契約と案内のhash、
+  workspace ID、語彙正本UID/指定revision/document hashでPC・AI間の版を比較できる。
+  破損設定、管理ポリシーの競合、別scopeの上書きを自動変更せず、無関係な設定を保持する。
+  対応経路と受入の境界は [shared-client-rules.md](shared-client-rules.md) にまとめる。
 
 ### 将来(ステージ外)
 
@@ -602,8 +675,8 @@ scribe・Esment。一次情報での実測は KB ノート「kb-app 競合地図
 - 複数クライアントの同時アクセス → **方針は PoC で実証(2026-08-09)**: WAL+全接続
   busy_timeout+`BEGIN IMMEDIATE`+fail-open(劣化フラグ)で成立
   ([poc-report.md](poc-report.md))。propose の競合など上位レイヤの設計は本実装で
-- タグ自動提案の挙動(自動適用して後から直せる形か、受信箱の承諾を通す形か。
-  通知疲れと統治感のバランス)
+- ~~タグ自動提案の挙動~~ → **AIが判断して適用する(2026-09-08本人指定)**:
+  語彙の追加・統合・削除も個別承認を必須にせず、既存語優先・増殖抑制と本人の明示訂正に従う
 - vault コミットの著者情報(現状はグローバル git 設定/GECOS 由来を継承 — 随時 push で
   private バックアップ先へ私用メール・ホスト名が乗る。旧 KB で実害記録のある事故型。
   app 固定 actor に寄せるか、デバイス識別として活かして GitHub 側の秘匿設定で守るか)

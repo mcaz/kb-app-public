@@ -9,6 +9,30 @@
     "backupPending": "{{count}} left",
     "backupOk": "✓"
   },
+  "activity": {
+    "head": "Activity",
+    "empty": "No activity recorded yet",
+    "tile": {
+      "last7Days": "Writes in the last 7 days",
+      "distinctActors": "Distinct writers",
+      "unknownModel": "Share with unknown model"
+    },
+    "filter": {
+      "client": "Writer",
+      "clientAll": "All writers",
+      "model": "Model",
+      "modelAll": "All models",
+      "kind": "Kind",
+      "kindAll": "All kinds",
+      "period": "Period",
+      "period7": "Last 7 days",
+      "period30": "Last 30 days",
+      "periodAll": "All time"
+    },
+    "row": {
+      "sections": "{{count}} heading(s)"
+    }
+  },
   "observation": {
     "head": "AI activity records",
     "retry": "Retry",

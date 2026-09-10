@@ -6,14 +6,22 @@ import { demoObservationTrend } from "./observationTrend";
 import { demoNoteCountTrend } from "./noteCountTrend";
 import { demoProposalNote, demoProposals } from "./proposals";
 import { demoDistillation } from "./distillation";
+import {
+  demoClientDiagnostics,
+  demoClientRegistrations,
+  demoRegisterClient,
+} from "./clientConnections";
 
 import type {
+  ActivityFeedView,
+  ActivityFilter,
   Added,
   AiGuardStatus,
   AutostartState,
   Availability,
   CareProposal,
   ConnectState,
+  RegistrationClient,
   Favorite,
   FileCard,
   FilesPage,
@@ -23,6 +31,7 @@ import type {
   Hit,
   HomeState,
   MaintenanceReport,
+  NoteEventView,
   NoteFiles,
   NoteListPage,
   NoteBrowsePage,
@@ -32,6 +41,7 @@ import type {
   NoteView,
   ObservationTrendFilter,
   PreviewFile,
+  ProvenanceView,
   PurgePlan,
   Purged,
   SearchOutcome,
@@ -73,6 +83,9 @@ const notes: NoteView[] = [
     similar: [["notes/沖縄旅行の持ち物リスト", "沖縄旅行の持ち物リスト", 0.42]],
     degraded: [],
     vault_root: "(demo)",
+    provenance_line:
+      "来歴: 作成 2026-08-02 claude-code/claude-fable-5-1(自己申告) · 更新1回 · " +
+      "最終 codex-cli/gpt-5.6-sol(設定値) 2026-08-10",
   },
   {
     id: "notes/確定申告の準備",
@@ -91,6 +104,7 @@ const notes: NoteView[] = [
     similar: [["notes/引っ越し手続きメモ", "引っ越し手続きメモ", 0.38]],
     degraded: [],
     vault_root: "(demo)",
+    provenance_line: null,
   },
   {
     id: "notes/沖縄旅行の持ち物リスト",
@@ -109,6 +123,7 @@ const notes: NoteView[] = [
     similar: [],
     degraded: [],
     vault_root: "(demo)",
+    provenance_line: null,
   },
   {
     id: "research/ai/検索の設計メモ",
@@ -127,6 +142,7 @@ const notes: NoteView[] = [
     similar: [],
     degraded: [],
     vault_root: "(demo)",
+    provenance_line: null,
   },
   {
     id: "research/読書メモ/情報アーキテクチャ",
@@ -145,6 +161,7 @@ const notes: NoteView[] = [
     similar: [],
     degraded: [],
     vault_root: "(demo)",
+    provenance_line: null,
   },
   {
     id: "decisions/ノート一覧の表示方針",
@@ -163,6 +180,7 @@ const notes: NoteView[] = [
     similar: [],
     degraded: [],
     vault_root: "(demo)",
+    provenance_line: null,
   },
 ];
 
@@ -305,6 +323,169 @@ const files: Record<string, FileRow[]> = {
   ],
 };
 
+/** 来歴(契約20)の見本。記録があるのは「引っ越し手続きメモ」だけにし、空状態も確認できるようにする。 */
+const provenanceById: Record<string, ProvenanceView> = {
+  "notes/引っ越し手続きメモ": {
+    line:
+      "来歴: 作成 2026-08-02 claude-code/claude-fable-5-1(自己申告) · 更新1回 · " +
+      "最終 codex-cli/gpt-5.6-sol(設定値) 2026-08-10",
+    created_by: "claude-code/claude-fable-5-1(自己申告)",
+    created_at: "2026-08-02T09:15:00Z",
+    last_by: "codex-cli/gpt-5.6-sol(設定値)",
+    last_at: "2026-08-10T05:00:00Z",
+    event_count: 2,
+    distinct_actors: 2,
+    // 見本の本文に見出し(## )が無いので、実装と同じく見出し単位の帰属は空になる。
+    section_authors: [],
+  },
+};
+
+const emptyProvenance: ProvenanceView = {
+  line: "来歴: 記録なし",
+  created_by: null,
+  created_at: null,
+  last_by: null,
+  last_at: null,
+  event_count: 0,
+  distinct_actors: 0,
+  section_authors: [],
+};
+
+const historyById: Record<string, NoteEventView[]> = {
+  "notes/引っ越し手続きメモ": [
+    {
+      event_id: "demo-event-2",
+      at: "2026-08-10T05:00:00Z",
+      operation: "update",
+      kind: "amend",
+      actor_label: "codex-cli/gpt-5.6-sol medium(設定値)",
+      model_basis: "config",
+      summary: "電気・ガス・水道の解約期限を追記",
+      reason: "会話で新しい期限を確認したため",
+      origin_claim: null,
+      sections: ["(前文)"],
+      changes: [{ field: "tags", from: "[]", to: '["手続き"]' }],
+      body_diff:
+        "@@ -1,3 +1,4 @@\n 3月末までにやること:\n \n" +
+        "-- 電気・ガス・水道の解約\n+- 電気・ガス・水道の解約(2週間前まで)\n",
+      diff_truncated: false,
+    },
+    {
+      event_id: "demo-event-1",
+      at: "2026-08-02T09:15:00Z",
+      operation: "propose",
+      kind: "create",
+      actor_label: "claude-code/claude-fable-5-1 extended thinking(自己申告)",
+      model_basis: "self_reported",
+      summary: null,
+      reason: null,
+      origin_claim: null,
+      sections: ["(前文)"],
+      changes: [],
+      body_diff: null,
+      diff_truncated: false,
+    },
+  ],
+};
+
+/** ホームの活動ビューの見本。ノートを跨いで書き手・kindを散らし、フィルタの効果を確認できるようにする。 */
+interface DemoActivityEntry {
+  event_id: string;
+  note_id: string;
+  at: string;
+  client: string;
+  model: string | null;
+  /** モデルの動作設定(推論強度など)。表示名ではモデルの後ろに空白区切りで続く。 */
+  mode: string | null;
+  modelBasis: string;
+  operation: string;
+  kind: string;
+  summary: string | null;
+  section_count: number;
+}
+
+const activityLog: DemoActivityEntry[] = [
+  {
+    event_id: "demo-event-2",
+    note_id: "notes/引っ越し手続きメモ",
+    at: "2026-08-10T05:00:00Z",
+    client: "codex-cli",
+    model: "gpt-5.6-sol",
+    mode: "medium",
+    modelBasis: "config",
+    operation: "update",
+    kind: "amend",
+    summary: "電気・ガス・水道の解約期限を追記",
+    section_count: 1,
+  },
+  {
+    event_id: "demo-event-1",
+    note_id: "notes/引っ越し手続きメモ",
+    at: "2026-08-02T09:15:00Z",
+    client: "claude-code",
+    model: "claude-fable-5-1",
+    mode: "extended thinking",
+    modelBasis: "self_reported",
+    operation: "propose",
+    kind: "create",
+    summary: null,
+    section_count: 1,
+  },
+  {
+    event_id: "demo-event-3",
+    note_id: "notes/確定申告の準備",
+    at: "2026-07-02T05:00:00Z",
+    client: "claude-code",
+    model: null,
+    mode: null,
+    modelBasis: "unknown",
+    operation: "update",
+    kind: "amend",
+    summary: "医療費の領収書の集め方を追記",
+    section_count: 1,
+  },
+  {
+    event_id: "demo-event-4",
+    note_id: "notes/沖縄旅行の持ち物リスト",
+    at: "2026-08-10T06:00:00Z",
+    client: "claude-desktop",
+    model: null,
+    mode: null,
+    modelBasis: "unknown",
+    operation: "propose",
+    kind: "create",
+    summary: null,
+    section_count: 1,
+  },
+  {
+    event_id: "demo-event-5",
+    note_id: "decisions/ノート一覧の表示方針",
+    at: "2026-08-16T02:00:00Z",
+    client: "kb-app-distillation",
+    model: null,
+    mode: null,
+    modelBasis: "unknown",
+    operation: "distill",
+    kind: "normalize",
+    summary: "表示方針を統合",
+    section_count: 1,
+  },
+];
+
+const MODEL_BASIS_LABEL: Record<string, string> = {
+  handshake: "自己申告",
+  self_reported: "自己申告",
+  app_api: "アプリ確定",
+  config: "設定値",
+  unknown: "不明",
+};
+
+// kb-core の WriteActor::label と同じ形: `<client>/<model> <mode>(<basis>)`。
+const activityActorLabel = (entry: DemoActivityEntry) =>
+  entry.model
+    ? `${entry.client}/${entry.model}${entry.mode ? ` ${entry.mode}` : ""}(${MODEL_BASIS_LABEL[entry.modelBasis]})`
+    : `${entry.client}/モデル不明`;
+
 const care: CareProposal[] = [
   {
     key: "broken:notes/引っ越し手続きメモ:notes/新居の契約",
@@ -374,6 +555,8 @@ function aiGuard(): AiGuardStatus {
 }
 
 let guardOverride: AiGuardStatus | null = null;
+// 初回画面のデモでも、作成成功後の再取得で初回画面へ戻さない。
+let onboarded = false;
 
 export const demoApi = {
   ...demoProposals,
@@ -384,7 +567,7 @@ export const demoApi = {
     demoDistillation.distillationRequestNow(scope, settings),
   setupState: (): Promise<SetupState> =>
     delay({
-      needs_onboarding: params().get("screen") === "onboarding",
+      needs_onboarding: !onboarded && params().get("screen") === "onboarding",
       vault_name: "わたしのノート",
       vault_path: "(demo)",
     }),
@@ -429,8 +612,10 @@ export const demoApi = {
     };
     return delay(guardOverride);
   },
-  onboard: (): Promise<SetupState> =>
-    delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" }),
+  onboard: (): Promise<SetupState> => {
+    onboarded = true;
+    return delay({ needs_onboarding: false, vault_name: "わたしのノート", vault_path: "(demo)" });
+  },
   homeState: (): Promise<HomeState> =>
     delay({
       note_count: notes.length,
@@ -461,11 +646,24 @@ export const demoApi = {
   tagOverview: (): Promise<TagOverview> =>
     delay({
       tags: [
-        { tag: "手続き", count: 2, description: "役所・契約など、期限がある手続きの記録" },
-        { tag: "税金", count: 1, description: "確定申告まわり" },
-        { tag: "旅行", count: 1, description: null },
+        {
+          tag: "手続き",
+          count: 2,
+          description: "役所・契約など、期限がある手続きの記録",
+          registered: true,
+        },
+        { tag: "税金", count: 1, description: "確定申告まわり", registered: true },
+        { tag: "旅行", count: 1, description: null, registered: false },
+        {
+          tag: "reference",
+          count: 0,
+          description: "後から参照する資料と調査結果",
+          registered: true,
+        },
       ],
       glossary_note: "notes/タグ運用",
+      source_status: "pinned",
+      skipped_count: 0,
       degraded: [],
     }),
   noteGet: (id: string): Promise<NoteView> => {
@@ -563,7 +761,54 @@ export const demoApi = {
       degraded: [],
     });
   },
+  noteProvenance: (id: string): Promise<ProvenanceView> =>
+    delay(provenanceById[id] ?? emptyProvenance),
+  noteHistory: (id: string, limit: number, withDiff: boolean): Promise<NoteEventView[]> =>
+    delay(
+      (historyById[id] ?? [])
+        .slice(0, limit)
+        .map((event) => (withDiff ? event : { ...event, body_diff: null })),
+    ),
+  activityFeed: (limit: number, filter: ActivityFilter): Promise<ActivityFeedView> => {
+    const rows = activityLog
+      .filter((entry) => !filter.client || entry.client === filter.client)
+      .filter((entry) => !filter.model || entry.model === filter.model)
+      .filter((entry) => !filter.kind || entry.kind === filter.kind)
+      .filter((entry) => !filter.since || entry.at >= filter.since)
+      .slice(0, limit)
+      .map((entry) => ({
+        event_id: entry.event_id,
+        note_id: entry.note_id,
+        title: notes.find((n) => n.id === entry.note_id)?.title ?? entry.note_id,
+        at: entry.at,
+        actor_label: activityActorLabel(entry),
+        operation: entry.operation,
+        kind: entry.kind,
+        summary: entry.summary,
+        section_count: entry.section_count,
+      }));
+    const unknownCount = activityLog.filter((entry) => entry.modelBasis === "unknown").length;
+    return delay({
+      rows,
+      summary: {
+        // 見本データは全件が「直近7日」に見えるよう作ってある(絶対日付ではなく相対の見本のため)。
+        last_7_days: activityLog.length,
+        distinct_actors: new Set(activityLog.map((entry) => `${entry.client}/${entry.model ?? ""}`))
+          .size,
+        unknown_model_ratio: activityLog.length ? unknownCount / activityLog.length : 0,
+      },
+      clients: [...new Set(activityLog.map((entry) => entry.client))].sort((a, b) =>
+        a.localeCompare(b, "ja"),
+      ),
+      models: [...new Set(activityLog.flatMap((entry) => (entry.model ? [entry.model] : [])))].sort(
+        (a, b) => a.localeCompare(b, "ja"),
+      ),
+    });
+  },
   connectState: (): Promise<ConnectState> => delay(connect),
+  connectClientRegistrations: () => delay(demoClientRegistrations()),
+  connectClientDiagnostics: () => delay(demoClientDiagnostics()),
+  connectRegisterClient: (client: RegistrationClient) => delay(demoRegisterClient(client)),
   githubAuthState: (): Promise<GitHubAuthState> => delay(githubAuth),
   githubSignIn: (): Promise<GitHubAuthState> => {
     githubAuth = { configured: true, signed_in: true, account_login: "octocat" };

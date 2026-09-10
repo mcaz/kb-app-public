@@ -5,10 +5,16 @@ import { KbError } from "./error";
 import type { AppError } from "@/lib/bindings";
 
 import type {
+  ActivityFeedView,
+  ActivityFilter,
   AiGuardStatus,
   AutostartState,
   Availability,
   ConnectState,
+  ClientDiagnosticsReport,
+  ClientRegistrations,
+  RegistrationClient,
+  RegistrationRepair,
   Degradation,
   Favorite,
   FilesPage,
@@ -21,6 +27,7 @@ import type {
   NoteCountTrend,
   MaintenanceReport,
   NoteCategories,
+  NoteEventView,
   NoteFiles,
   NoteListPage,
   NoteBrowsePage,
@@ -28,6 +35,7 @@ import type {
   SortKey,
   NoteView,
   PreviewFile,
+  ProvenanceView,
   PurgePlan,
   Purged,
   SearchOutcome,
@@ -50,6 +58,7 @@ import type {
   RuntimeRecoveryRequest,
   RuntimeRecoveryReceipt,
   AppBootMode,
+  UpdateStatus,
 } from "./types";
 
 export * from "./types";
@@ -76,7 +85,27 @@ async function demo() {
   return (await import("@/lib/demo")).demoApi;
 }
 
+/** ブラウザ表示で更新成功や配布物の存在を作らない。 */
+const unavailableUpdate = (): UpdateStatus => ({
+  current_version: "0.0.1",
+  phase: "unavailable",
+  available_version: null,
+  downloaded_bytes: 0,
+  total_bytes: null,
+  failure: "unsupported_platform",
+});
+
 export const api = {
+  appUpdateStatus: async (): Promise<UpdateStatus> =>
+    IN_TAURI ? unwrap(commands.appUpdateStatus()) : unavailableUpdate(),
+  appUpdateCheck: async (): Promise<UpdateStatus> =>
+    IN_TAURI ? unwrap(commands.appUpdateCheck()) : unavailableUpdate(),
+  appUpdateDownload: async (): Promise<UpdateStatus> =>
+    IN_TAURI ? unwrap(commands.appUpdateDownload()) : unavailableUpdate(),
+  appUpdateInstall: async (): Promise<UpdateStatus> =>
+    IN_TAURI ? unwrap(commands.appUpdateInstall()) : unavailableUpdate(),
+  appUpdateBootReady: async (): Promise<null> =>
+    IN_TAURI ? unwrap(commands.appUpdateBootReady()) : null,
   appBootMode: async (): Promise<AppBootMode> => (IN_TAURI ? commands.appBootMode() : "normal"),
   recoveryPlan: async (): Promise<RuntimeRecoveryPlan> => {
     if (!IN_TAURI) throw new KbError({ code: "unexpected", message: "Desktop recovery only" });
@@ -250,6 +279,16 @@ export const api = {
       : (await demo()).noteBrowse(tags, period, sort, after, limit),
   graphData: async (): Promise<GraphData> =>
     IN_TAURI ? unwrap(commands.graphData()) : (await demo()).graphData(),
+  noteProvenance: async (id: string): Promise<ProvenanceView> =>
+    IN_TAURI ? unwrap(commands.noteProvenance(id)) : (await demo()).noteProvenance(id),
+  noteHistory: async (id: string, limit: number, withDiff: boolean): Promise<NoteEventView[]> =>
+    IN_TAURI
+      ? unwrap(commands.noteHistory(id, limit, withDiff))
+      : (await demo()).noteHistory(id, limit, withDiff),
+  activityFeed: async (limit: number, filter: ActivityFilter): Promise<ActivityFeedView> =>
+    IN_TAURI
+      ? unwrap(commands.activityFeed(limit, filter))
+      : (await demo()).activityFeed(limit, filter),
   connectState: async (): Promise<ConnectState> =>
     IN_TAURI ? unwrap(commands.connectState()) : (await demo()).connectState(),
   githubAuthState: async (): Promise<GitHubAuthState> =>
@@ -325,6 +364,18 @@ export const api = {
 
   connectDesktop: async (): Promise<null> =>
     IN_TAURI ? unwrap(commands.connectDesktop()) : (await demo()).connectDesktop(),
+  connectClientRegistrations: async (): Promise<ClientRegistrations> =>
+    IN_TAURI
+      ? unwrap(commands.connectClientRegistrations())
+      : (await demo()).connectClientRegistrations(),
+  connectRegisterClient: async (client: RegistrationClient): Promise<RegistrationRepair> =>
+    IN_TAURI
+      ? unwrap(commands.connectRegisterClient(client))
+      : (await demo()).connectRegisterClient(client),
+  connectClientDiagnostics: async (): Promise<ClientDiagnosticsReport> =>
+    IN_TAURI
+      ? unwrap(commands.connectClientDiagnostics())
+      : (await demo()).connectClientDiagnostics(),
   embedEnable: async (): Promise<null> =>
     IN_TAURI ? unwrap(commands.embedEnable()) : (await demo()).embedEnable(),
   backupSetRemote: async (url: string): Promise<null> =>

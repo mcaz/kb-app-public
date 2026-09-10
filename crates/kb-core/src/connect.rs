@@ -145,7 +145,7 @@ pub fn backup_status(vault: &Vault) -> Result<BackupStatus> {
 /// GitHub の remote 操作には OAuth token を process 環境だけで渡す。
 /// git は非対話モード強制(資格情報プロンプトで GUI/MCP をハングさせない)。
 fn git(vault: &Vault, args: &[&str]) -> Result<std::process::Output> {
-    let mut command = crate::external_tools::git_command();
+    let mut command = crate::external_tools::git_command()?;
     command
         .args(args)
         .current_dir(&vault.root)
@@ -211,6 +211,8 @@ fn required_attributes(lfs: bool) -> Vec<String> {
         "index.md merge=ours".to_string(),
         "log.md merge=union".to_string(),
         ".kb-workspace merge=union".to_string(),
+        // 来歴shardは追記専用。端末ごとの追記が衝突しても片方を捨てない(契約20)。
+        ".kb-events/*.jsonl merge=union".to_string(),
     ];
     if lfs {
         want.push(format!(
@@ -357,7 +359,7 @@ fn ensure_origin_upload_allowed(vault: &Vault) -> Result<()> {
 fn inspect_remote(url: &str) -> Result<RemoteContents> {
     let temp = tempfile::tempdir().context("既存 Vault の検査場所を作れない")?;
     let clone_root = temp.path().join("vault");
-    let mut command = crate::external_tools::git_command();
+    let mut command = crate::external_tools::git_command()?;
     command
         .args([
             "clone",
@@ -446,7 +448,7 @@ pub fn clone_existing_vault_with_progress(
         .context("既存 Vault の一時復元先を作れない")?;
     let clone_root = temp.path().join("vault");
     progress(RestoreProgress::at(RestorePhase::Cloning));
-    let mut command = crate::external_tools::git_command();
+    let mut command = crate::external_tools::git_command()?;
     command
         .arg("clone")
         .arg("--no-tags")
@@ -1260,12 +1262,15 @@ mod tests {
         assert!(!without.contains("filter=lfs"));
         assert!(without.contains("index.md merge=ours"));
         assert!(without.contains(".kb-workspace merge=union"));
+        assert!(without.contains(".kb-events/*.jsonl merge=union"));
 
         let with = merged_attributes("", true);
         assert!(with.contains(".kb-artifacts/lfs/** filter=lfs diff=lfs merge=lfs -text"));
         assert!(with.contains("index.md merge=ours"));
         assert!(with.contains("log.md merge=union"));
         assert!(with.contains(".kb-workspace merge=union"));
+        // 来歴shardも追記専用なので、端末間の追記を片方だけ残す形にしない(契約20)。
+        assert!(with.contains(".kb-events/*.jsonl merge=union"));
     }
 
     /// 2026-08-14 の事故の再現。MCP が実行していた2日前のビルドが、自分の知らない

@@ -23,13 +23,18 @@ use super::{RecoveryJobState, RuntimeRecoveryPlan};
 // ロック・I/O異常で専用復旧画面を無期限に占有しない。
 const BACKUP_TIMEOUT: Duration = Duration::from_secs(60);
 const BACKUP_DIRECTORY: &str = "runtime-recovery-backups";
-const PRESERVED_TABLES: [&str; 6] = [
+const PRESERVED_TABLES: [&str; 11] = [
     "note_exports",
     "distillation_runs",
     "action_receipts",
     "action_capability_uses",
     "distillation_jobs",
     "distillation_job_runs",
+    "tag_vocabulary_sources",
+    "tag_vocabulary_source_exports",
+    "tag_vocabulary_runs",
+    "tag_vocabulary_run_notes",
+    "tag_vocabulary_rollbacks",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,8 +330,19 @@ fn validate_plan(plan: &RuntimeRecoveryPlan, request: &RuntimeRecoveryRequest) -
 }
 
 fn ledger_snapshot(conn: &Connection) -> Result<Vec<RuntimeRecoveryLedgerReceipt>> {
+    let vocabulary_present = super::vocabulary_tables_present(conn)?;
+    let tag_history_present = crate::tag_vocabulary_history::tables_present(conn)?;
+    let tag_rollback_present = crate::tag_vocabulary_history::rollback_table_present(conn)?;
     PRESERVED_TABLES
         .iter()
+        // 旧版に存在しなかった表を、保存済みの空台帳としてreceiptへ載せない。
+        .filter(|table| vocabulary_present || !crate::tag_vocabulary_source::TABLES.contains(table))
+        .filter(|table| {
+            tag_history_present || !crate::tag_vocabulary_history::TABLES.contains(table)
+        })
+        .filter(|table| {
+            tag_rollback_present || !crate::tag_vocabulary_history::ROLLBACK_TABLES.contains(table)
+        })
         .map(|table| {
             let mut digest = Sha256::new();
             super::hash_query(conn, &format!("SELECT * FROM {table}"), &mut digest)?;
@@ -876,6 +892,8 @@ mod tests {
             INSERT INTO action_receipts(receipt_id,workspace,request_hash,idempotency_key,request_json,decision_json,status,reserved_at)
                 VALUES('receipt','workspace','request','idempotent','{}','{}','pending',100);
             INSERT INTO action_capability_uses VALUES('capability','issuer','receipt');").unwrap();
+        let execution_id = crate::tag_vocabulary_history::record_for_test(&conn);
+        crate::tag_vocabulary_history::record_rollback_for_test(&conn, &execution_id);
         if !wal {
             conn.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
         }
@@ -950,7 +968,7 @@ mod tests {
                 row.get::<_, String>(0)
             })
             .unwrap(),
-            "10"
+            "14"
         );
         assert_eq!(
             conn.query_row(
@@ -986,6 +1004,149 @@ mod tests {
             fs::read_to_string(vault.root.join("notes/reviewed.md")).unwrap(),
             raw
         );
+    }
+
+    /// 2026-09-08: 固定先のノートが復元されなくても、指定と出力待ちを解除・出力しない。
+    #[test]
+    fn recovery_preserves_vocabulary_binding_and_outbox_with_missing_targets() {
+        let (_dir, vault, mut request) = setup(false);
+        let conn = Connection::open(vault.index_db_path()).unwrap();
+        let (document, _) = super::super::tests::seed_vocabulary(&conn, &vault);
+        let before = ledger_snapshot(&conn).unwrap();
+        assert!(
+            crate::tag_vocabulary_source::read_binding(&conn)
+                .unwrap()
+                .is_some()
+        );
+        request.expected_plan_digest = super::super::plan(&vault).unwrap().plan_digest.unwrap();
+        drop(conn);
+
+        let receipt = apply(&vault, &request).unwrap();
+        assert_eq!(receipt.preserved_ledgers, before);
+        let conn = crate::index::open_db(&vault).unwrap();
+        assert_eq!(ledger_snapshot(&conn).unwrap(), before);
+        assert_eq!(
+            conn.query_row("SELECT document FROM tag_vocabulary_sources", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap(),
+            document
+        );
+        let protected = crate::tag_vocabulary_source::protected_note_uids(&conn).unwrap();
+        assert_eq!(protected.len(), 2);
+        for uid in protected {
+            assert_eq!(
+                conn.query_row(
+                    "SELECT count(*) FROM notes WHERE note_uid=?1",
+                    [uid.as_str()],
+                    |row| { row.get::<_, i64>(0) }
+                )
+                .unwrap(),
+                0
+            );
+        }
+        assert_eq!(
+            crate::tag_vocabulary_source::pending_count(&conn).unwrap(),
+            1
+        );
+        assert!(
+            !vault
+                .root
+                .join(crate::tag_vocabulary_source::SOURCE_FILE)
+                .exists()
+        );
+        verify_backup_files(
+            &vault
+                .root
+                .join(".kb")
+                .join(BACKUP_DIRECTORY)
+                .join(&receipt.backup_id),
+            &request,
+            &before,
+        )
+        .unwrap();
+    }
+
+    /// 2026-09-08: v11/v12の空表作成は検証済み復旧の最終transactionだけで行う。
+    #[test]
+    fn legacy_absent_vocabulary_tables_migrate_only_after_verified_recovery() {
+        for schema in [7, 9] {
+            let (_dir, vault, mut request) = setup(false);
+            let conn = Connection::open(vault.index_db_path()).unwrap();
+            conn.execute_batch(
+                "DROP TABLE tag_vocabulary_sources; DROP TABLE tag_vocabulary_source_exports;
+                 DROP TABLE tag_vocabulary_rollbacks; DROP TABLE tag_vocabulary_run_notes; DROP TABLE tag_vocabulary_runs;",
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE meta SET value=?1 WHERE key='schema'",
+                [schema.to_string()],
+            )
+            .unwrap();
+            let before = ledger_snapshot(&conn).unwrap();
+            assert_eq!(before.len(), 6);
+            request.expected_plan_digest = super::super::plan(&vault).unwrap().plan_digest.unwrap();
+            drop(conn);
+            let before_database = original(&vault);
+            let error = apply_with_hook(&vault, &request, |point| {
+                ensure!(point != ApplyPoint::BeforeCommit, "commit前の故障注入");
+                Ok(())
+            })
+            .unwrap_err();
+            assert_eq!(
+                failure_kind(&error),
+                Some(RuntimeRecoveryFailureKind::VerificationFailed)
+            );
+            assert_eq!(fs::read(vault.index_db_path()).unwrap(), before_database.0);
+
+            let receipt = apply(&vault, &request).unwrap();
+            assert_eq!(receipt.preserved_ledgers, before);
+            let conn = crate::index::open_db(&vault).unwrap();
+            crate::tag_vocabulary_source::verify_schema(&conn).unwrap();
+            crate::tag_vocabulary_history::verify_integrity(&conn).unwrap();
+            assert!(
+                crate::tag_vocabulary_history::list(&conn, None, None)
+                    .unwrap()
+                    .items
+                    .is_empty()
+            );
+            assert!(
+                crate::tag_vocabulary_source::read_binding(&conn)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                crate::tag_vocabulary_source::pending_count(&conn).unwrap(),
+                0
+            );
+            let after: Vec<_> = ledger_snapshot(&conn)
+                .unwrap()
+                .into_iter()
+                .filter(|ledger| {
+                    !crate::tag_vocabulary_source::TABLES.contains(&ledger.table.as_str())
+                        && !crate::tag_vocabulary_history::TABLES.contains(&ledger.table.as_str())
+                        && !crate::tag_vocabulary_history::ROLLBACK_TABLES
+                            .contains(&ledger.table.as_str())
+                })
+                .collect();
+            assert_eq!(after, before);
+            assert!(
+                !vault
+                    .root
+                    .join(crate::tag_vocabulary_source::SOURCE_FILE)
+                    .exists()
+            );
+            verify_backup_files(
+                &vault
+                    .root
+                    .join(".kb")
+                    .join(BACKUP_DIRECTORY)
+                    .join(&receipt.backup_id),
+                &request,
+                &before,
+            )
+            .unwrap();
+        }
     }
 
     #[test]

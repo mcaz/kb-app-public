@@ -155,6 +155,7 @@ export function demoProposalNote(note: string): NoteView | undefined {
     body: `${body}\n`,
     status: "stable",
     origin: "agent",
+    provenance_line: null,
     tags: [...input.tags],
     note_uid: ticket.note_uid,
     authority: { namespace: "decisions", role: "proposal", status: "active", scope: input.scope },

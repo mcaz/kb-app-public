@@ -330,6 +330,8 @@ mod tests {
                     relations: Vec::new(),
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap()
@@ -430,6 +432,8 @@ mod tests {
                     relations,
                     allow_new_tags: false,
                     client: "test/client",
+                    actor: None,
+                    revision: None,
                 },
             )
             .unwrap()
@@ -702,7 +706,18 @@ mod tests {
         );
         let mut note = vault.read_note_from_db(&conn, &id).unwrap();
         note.body = "検索判断材料".repeat(200);
-        crate::note_store::put(&vault, &conn, &id, &note, "fixture", "fixture").unwrap();
+        crate::note_store::put(
+            &vault,
+            &conn,
+            &id,
+            &note,
+            crate::note_store::WriteAttribution::new(
+                "fixture",
+                "fixture",
+                &crate::provenance::test_context(),
+            ),
+        )
+        .unwrap();
         let guidance = collect(&vault, &conn, &id, Vec::new());
         assert!(guidance.query_truncated);
         assert!(guidance.neighbors.len() <= 5);
